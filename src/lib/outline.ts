@@ -1,3 +1,7 @@
+import { unified } from 'unified'
+import remarkParse from 'remark-parse'
+import remarkGfm from 'remark-gfm'
+
 export interface HeadingNode {
   level: number
   text: string
@@ -5,50 +9,70 @@ export interface HeadingNode {
   children: HeadingNode[]
 }
 
-export function extractHeadings(content: string): HeadingNode[] {
-  const lines = content.split('\n')
-  const flat: Omit<HeadingNode, 'children'>[] = []
-
-  let inFence = false
-  for (let i = 0; i < lines.length; i++) {
-    const raw = lines[i]
-    if (raw.trimStart().startsWith('```') || raw.trimStart().startsWith('~~~')) {
-      inFence = !inFence
-      continue
-    }
-    if (inFence) continue
-
-    const m = raw.match(/^(#{1,6})\s+(.+)$/)
-    if (m) {
-      flat.push({ level: m[1].length, text: m[2].trimEnd(), line: i + 1 })
-    }
+interface MarkdownNode {
+  type: string
+  depth?: number
+  value?: string
+  alt?: string
+  children?: MarkdownNode[]
+  position?: {
+    start: { line: number }
   }
-
-  return buildTree(flat, 0, flat.length, 1).nodes
 }
 
-function buildTree(
-  flat: Omit<HeadingNode, 'children'>[],
-  start: number,
-  end: number,
-  minLevel: number,
-): { nodes: HeadingNode[]; consumed: number } {
-  const nodes: HeadingNode[] = []
-  let i = start
+const parser = unified().use(remarkParse).use(remarkGfm)
 
-  while (i < end) {
-    const h = flat[i]
-    if (h.level < minLevel) break
+function extractText(nodes: MarkdownNode[] | undefined): string {
+  if (!nodes || nodes.length === 0) return ''
+  return nodes.map((node) => {
+    switch (node.type) {
+      case 'text':
+      case 'inlineCode':
+        return node.value ?? ''
+      case 'image':
+        return node.alt ?? ''
+      case 'break':
+        return ' '
+      default:
+        return extractText(node.children)
+    }
+  }).join('').replace(/\s+/g, ' ').trim()
+}
 
-    const node: HeadingNode = { ...h, children: [] }
-    i++
-
-    const { nodes: children, consumed } = buildTree(flat, i, end, h.level + 1)
-    node.children = children
-    i += consumed
-
-    nodes.push(node)
+function collectHeadings(node: MarkdownNode, out: Omit<HeadingNode, 'children'>[]) {
+  if (node.type === 'heading') {
+    out.push({
+      level: Math.min(Math.max(node.depth ?? 1, 1), 6),
+      text: extractText(node.children),
+      line: node.position?.start.line ?? 1,
+    })
   }
 
-  return { nodes, consumed: i - start }
+  for (const child of node.children ?? []) {
+    collectHeadings(child, out)
+  }
+}
+
+export function extractHeadings(content: string): HeadingNode[] {
+  const tree = parser.parse(content) as MarkdownNode
+  const flat: Omit<HeadingNode, 'children'>[] = []
+  collectHeadings(tree, flat)
+
+  const root: HeadingNode[] = []
+  const stack: HeadingNode[] = []
+
+  for (const heading of flat) {
+    const node: HeadingNode = { ...heading, children: [] }
+
+    while (stack.length > 0 && stack[stack.length - 1].level >= node.level) {
+      stack.pop()
+    }
+
+    if (stack.length === 0) root.push(node)
+    else stack[stack.length - 1].children.push(node)
+
+    stack.push(node)
+  }
+
+  return root
 }

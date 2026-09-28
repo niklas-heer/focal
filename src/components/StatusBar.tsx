@@ -25,7 +25,11 @@ export function StatusBar({
   onToggleSidebar,
   onFixLint,
 }: StatusBarProps) {
-  const saveLabel = saveStatus === 'saving' ? 'Saving…' : saveStatus === 'saved' ? 'Saved' : ''
+  const saveLabel = saveStatus === 'saving'
+    ? 'Saving…'
+    : saveStatus === 'saved'
+      ? 'Saved'
+      : 'Unsaved changes'
 
   return (
     <div className="status-bar">
@@ -49,11 +53,8 @@ export function StatusBar({
 
       {fileName && (
         <>
-          <span className="status-bar-sep">·</span>
-          <span className="status-bar-item">{fileName}</span>
-          <span className="status-bar-sep">·</span>
+          <span className="status-bar-item status-bar-file">{fileName}</span>
           <span className="status-bar-item">{line}:{col}</span>
-          <span className="status-bar-sep">·</span>
           <span className="status-bar-item">{wordCount} words</span>
         </>
       )}
@@ -81,15 +82,10 @@ export function StatusBar({
         title="Toggle focus mode (⌘⇧F)"
         style={{ marginLeft: 'auto' }}
       >
-        focus
+        Focus
       </button>
 
-      {saveLabel && (
-        <>
-          <span className="status-bar-sep">·</span>
-          <span className={`status-bar-item save-status ${saveStatus}`}>{saveLabel}</span>
-        </>
-      )}
+      <span className={`status-bar-item save-status ${saveStatus}`}>{saveLabel}</span>
     </div>
   )
 }

@@ -32,6 +32,30 @@ class BulletWidget extends WidgetType {
   ignoreEvent() { return false }
 }
 
+class HeadingWidget extends WidgetType {
+  constructor(private readonly level: number) { super() }
+  toDOM() {
+    const el = document.createElement('span')
+    el.className = `cm-md-heading-chip cm-md-heading-chip-${this.level}`
+    el.textContent = `H${this.level}`
+    return el
+  }
+  eq(other: HeadingWidget) { return other.level === this.level }
+  ignoreEvent() { return false }
+}
+
+class CodeBlockHeaderWidget extends WidgetType {
+  constructor(private readonly lang: string) { super() }
+  toDOM() {
+    const el = document.createElement('span')
+    el.className = 'cm-md-codeblock-chip'
+    el.textContent = this.lang || 'Code'
+    return el
+  }
+  eq(other: CodeBlockHeaderWidget) { return other.lang === this.lang }
+  ignoreEvent() { return false }
+}
+
 class CopyButtonWidget extends WidgetType {
   constructor(private readonly codeText: string, private readonly lang: string) { super() }
   toDOM() {
@@ -58,6 +82,17 @@ class CopyButtonWidget extends WidgetType {
   ignoreEvent() { return true }
 }
 
+class TablePipeWidget extends WidgetType {
+  toDOM() {
+    const el = document.createElement('span')
+    el.className = 'cm-md-table-pipe'
+    el.textContent = '|'
+    return el
+  }
+  eq() { return true }
+  ignoreEvent() { return false }
+}
+
 interface PendingDeco {
   from: number
   to: number
@@ -67,17 +102,21 @@ interface PendingDeco {
 function buildDecorations(view: EditorView): DecorationSet {
   const pending: PendingDeco[] = []
   const { selection } = view.state
-  const cursorLine = view.state.doc.lineAt(selection.main.head).number
 
-  const tree = syntaxTree(view.state)
   const doc = view.state.doc
+  const tree = syntaxTree(view.state)
 
-  const lineFrom = view.visibleRanges[0]?.from ?? 0
-  const lineTo = view.visibleRanges[view.visibleRanges.length - 1]?.to ?? doc.length
-
-  function cursorIn(from: number, to: number) {
+  function selectionTouches(from: number, to: number) {
     const { from: selFrom, to: selTo } = selection.main
     return (selFrom >= from && selFrom <= to) || (selTo >= from && selTo <= to) || (selFrom <= from && selTo >= to)
+  }
+
+  function cursorAt(pos: number) {
+    return selection.main.empty && selection.main.head === pos
+  }
+
+  function showMarker(from: number, to: number) {
+    return selectionTouches(from, to) || cursorAt(from) || cursorAt(to)
   }
 
   function add(from: number, to: number, deco: Decoration) {
@@ -99,43 +138,53 @@ function buildDecorations(view: EditorView): DecorationSet {
     const name = cursor.name
 
     if (name === 'StrongEmphasis') {
-      if (!cursorIn(from, to)) {
-        add(from, to, Decoration.mark({ class: 'cm-md-bold' }))
-        tree.iterate({ from, to, enter(c) { if (c.name === 'EmphasisMark') add(c.from, c.to, Decoration.mark({ class: 'cm-md-marker-hidden' })) } })
-      }
+      add(from, to, Decoration.mark({ class: 'cm-md-bold' }))
+      tree.iterate({
+        from,
+        to,
+        enter(c) {
+          if (c.name === 'EmphasisMark' && !showMarker(c.from, c.to)) {
+            add(c.from, c.to, Decoration.mark({ class: 'cm-md-marker-hidden' }))
+          }
+        },
+      })
       return
     }
 
     if (name === 'Emphasis') {
-      if (!cursorIn(from, to)) {
-        add(from, to, Decoration.mark({ class: 'cm-md-italic' }))
-        tree.iterate({ from, to, enter(c) { if (c.name === 'EmphasisMark') add(c.from, c.to, Decoration.mark({ class: 'cm-md-marker-hidden' })) } })
-      }
+      add(from, to, Decoration.mark({ class: 'cm-md-italic' }))
+      tree.iterate({
+        from,
+        to,
+        enter(c) {
+          if (c.name === 'EmphasisMark' && !showMarker(c.from, c.to)) {
+            add(c.from, c.to, Decoration.mark({ class: 'cm-md-marker-hidden' }))
+          }
+        },
+      })
       return
     }
 
     if (name === 'InlineCode') {
-      if (!cursorIn(from, to)) {
-        const ticks = doc.sliceString(from, to).match(/^`+/)?.[0].length ?? 1
-        add(from, from + ticks, Decoration.mark({ class: 'cm-md-marker-hidden' }))
-        add(from + ticks, to - ticks, Decoration.mark({ class: 'cm-md-code-inline' }))
-        add(to - ticks, to, Decoration.mark({ class: 'cm-md-marker-hidden' }))
-      }
+      const ticks = doc.sliceString(from, to).match(/^`+/)?.[0].length ?? 1
+      add(from + ticks, to - ticks, Decoration.mark({ class: 'cm-md-code-inline' }))
+      if (!showMarker(from, from + ticks)) add(from, from + ticks, Decoration.mark({ class: 'cm-md-marker-hidden' }))
+      if (!showMarker(to - ticks, to)) add(to - ticks, to, Decoration.mark({ class: 'cm-md-marker-hidden' }))
       return
     }
 
     if (name === 'Link' || name === 'Image') {
-      if (!cursorIn(from, to)) {
-        const text = doc.sliceString(from, to)
-        const m = text.match(/^(!?)\[([^\]]*)\]\(([^)]*)\)$/)
-        if (m) {
-          const isImage = m[1] === '!'
-          const labelStart = from + (isImage ? 2 : 1)
-          const labelEnd = labelStart + m[2].length
-          add(from, labelStart, Decoration.mark({ class: 'cm-md-marker-hidden' }))
-          add(labelStart, labelEnd, Decoration.mark({ class: 'cm-md-link-text' }))
-          add(labelEnd, to, Decoration.mark({ class: 'cm-md-marker-hidden' }))
-        }
+      const text = doc.sliceString(from, to)
+      const m = text.match(/^(!?)\[([^\]]*)\]\(([^)]*)\)$/)
+      if (m) {
+        const isImage = m[1] === '!'
+        const labelStart = from + (isImage ? 2 : 1)
+        const labelEnd = labelStart + m[2].length
+        const urlStart = labelEnd + 2
+        const prefixEnd = labelStart
+        add(labelStart, labelEnd, Decoration.mark({ class: 'cm-md-link-text' }))
+        if (!showMarker(from, prefixEnd)) add(from, prefixEnd, Decoration.mark({ class: 'cm-md-marker-hidden' }))
+        if (!selectionTouches(urlStart, to)) add(labelEnd, to, Decoration.mark({ class: 'cm-md-marker-hidden' }))
       }
       return
     }
@@ -149,77 +198,114 @@ function buildDecorations(view: EditorView): DecorationSet {
   }
 
   tree.iterate({
-    from: lineFrom,
-    to: lineTo,
+    from: 0,
+    to: doc.length,
     enter(node) {
       const { from, to, name } = node
 
-      const headingMatch = name.match(/^ATXHeading(\d)$/)
+      const headingMatch = name.match(/^(ATX|Setext)Heading(\d)$/)
       if (headingMatch) {
-        const level = parseInt(headingMatch[1])
-        const line = doc.lineAt(from)
-        const markerMatch = line.text.match(/^(#{1,6}) /)
-        if (markerMatch) {
-          const markerEnd = line.from + markerMatch[1].length + 1
-          add(line.from, markerEnd, Decoration.mark({
-            class: line.number === cursorLine ? 'cm-md-heading-marker-active' : 'cm-md-heading-marker'
-          }))
-          if (markerEnd < to) add(markerEnd, to, Decoration.mark({ class: `cm-md-h${level}` }))
+        const level = parseInt(headingMatch[2], 10)
+        const firstLine = doc.lineAt(from)
+
+        if (headingMatch[1] === 'ATX') {
+          const markerMatch = firstLine.text.match(/^\s{0,3}(#{1,6})\s+/)
+          if (markerMatch) {
+            const markerEnd = firstLine.from + markerMatch[0].length
+            if (!showMarker(firstLine.from, markerEnd)) {
+              add(firstLine.from, markerEnd, Decoration.replace({ widget: new HeadingWidget(level) }))
+            } else {
+              add(firstLine.from, markerEnd, Decoration.mark({ class: 'cm-md-heading-marker-active' }))
+            }
+            if (markerEnd < to) {
+              add(markerEnd, to, Decoration.mark({ class: `cm-md-h${level}` }))
+            }
+            processInlineDecorations(node.node)
+          }
+        } else {
+          const lastLine = doc.lineAt(Math.max(from, to - 1))
+          add(firstLine.from, firstLine.to, Decoration.mark({ class: `cm-md-h${level}` }))
+          add(lastLine.from, lastLine.to, Decoration.mark({ class: showMarker(lastLine.from, lastLine.to) ? 'cm-md-heading-marker-active' : 'cm-md-heading-marker' }))
           processInlineDecorations(node.node)
         }
         return false
       }
 
       if (name === 'StrongEmphasis') {
-        if (!cursorIn(from, to)) {
-          add(from, to, Decoration.mark({ class: 'cm-md-bold' }))
-          tree.iterate({ from, to, enter(c) { if (c.name === 'EmphasisMark') add(c.from, c.to, Decoration.mark({ class: 'cm-md-marker-hidden' })) } })
-        }
+        add(from, to, Decoration.mark({ class: 'cm-md-bold' }))
+        tree.iterate({
+          from,
+          to,
+          enter(c) {
+            if (c.name === 'EmphasisMark' && !showMarker(c.from, c.to)) {
+              add(c.from, c.to, Decoration.mark({ class: 'cm-md-marker-hidden' }))
+            }
+          },
+        })
         return false
       }
 
       if (name === 'Emphasis') {
-        if (!cursorIn(from, to)) {
-          add(from, to, Decoration.mark({ class: 'cm-md-italic' }))
-          tree.iterate({ from, to, enter(c) { if (c.name === 'EmphasisMark') add(c.from, c.to, Decoration.mark({ class: 'cm-md-marker-hidden' })) } })
-        }
+        add(from, to, Decoration.mark({ class: 'cm-md-italic' }))
+        tree.iterate({
+          from,
+          to,
+          enter(c) {
+            if (c.name === 'EmphasisMark' && !showMarker(c.from, c.to)) {
+              add(c.from, c.to, Decoration.mark({ class: 'cm-md-marker-hidden' }))
+            }
+          },
+        })
         return false
       }
 
       if (name === 'InlineCode') {
-        if (!cursorIn(from, to)) {
-          const ticks = doc.sliceString(from, to).match(/^`+/)?.[0].length ?? 1
-          add(from, from + ticks, Decoration.mark({ class: 'cm-md-marker-hidden' }))
-          add(from + ticks, to - ticks, Decoration.mark({ class: 'cm-md-code-inline' }))
-          add(to - ticks, to, Decoration.mark({ class: 'cm-md-marker-hidden' }))
-        }
+        const ticks = doc.sliceString(from, to).match(/^`+/)?.[0].length ?? 1
+        add(from + ticks, to - ticks, Decoration.mark({ class: 'cm-md-code-inline' }))
+        if (!showMarker(from, from + ticks)) add(from, from + ticks, Decoration.mark({ class: 'cm-md-marker-hidden' }))
+        if (!showMarker(to - ticks, to)) add(to - ticks, to, Decoration.mark({ class: 'cm-md-marker-hidden' }))
         return false
       }
 
       if (name === 'Link' || name === 'Image') {
-        if (!cursorIn(from, to)) {
-          const text = doc.sliceString(from, to)
-          const m = text.match(/^(!?)\[([^\]]*)\]\(([^)]*)\)$/)
-          if (m) {
-            const isImage = m[1] === '!'
-            const labelStart = from + (isImage ? 2 : 1)
-            const labelEnd = labelStart + m[2].length
-            add(from, labelStart, Decoration.mark({ class: 'cm-md-marker-hidden' }))
-            add(labelStart, labelEnd, Decoration.mark({ class: 'cm-md-link-text' }))
-            add(labelEnd, to, Decoration.mark({ class: 'cm-md-marker-hidden' }))
-          }
+        const text = doc.sliceString(from, to)
+        const m = text.match(/^(!?)\[([^\]]*)\]\(([^)]*)\)$/)
+        if (m) {
+          const isImage = m[1] === '!'
+          const labelStart = from + (isImage ? 2 : 1)
+          const labelEnd = labelStart + m[2].length
+          const urlStart = labelEnd + 2
+          const prefixEnd = labelStart
+          add(labelStart, labelEnd, Decoration.mark({ class: 'cm-md-link-text' }))
+          if (!showMarker(from, prefixEnd)) add(from, prefixEnd, Decoration.mark({ class: 'cm-md-marker-hidden' }))
+          if (!selectionTouches(urlStart, to)) add(labelEnd, to, Decoration.mark({ class: 'cm-md-marker-hidden' }))
         }
         return false
       }
 
       if (name === 'Blockquote') {
         add(from, to, Decoration.mark({ class: 'cm-md-blockquote' }))
+        tree.iterate({
+          from,
+          to,
+          enter(child) {
+            if (child.name === 'QuoteMark') {
+              const line = doc.lineAt(child.from)
+              const markerEnd = Math.min(child.to + 1, line.to)
+              if (!showMarker(child.from, markerEnd)) {
+                add(child.from, markerEnd, Decoration.mark({ class: 'cm-md-marker-hidden' }))
+              } else {
+                add(child.from, markerEnd, Decoration.mark({ class: 'cm-md-marker-active' }))
+              }
+            }
+          },
+        })
         return false
       }
 
       if (name === 'HorizontalRule') {
         const line = doc.lineAt(from)
-        if (!cursorIn(line.from, line.to)) {
+        if (!selectionTouches(line.from, line.to)) {
           add(from, to, Decoration.replace({ widget: new HrWidget() }))
         }
         return false
@@ -232,12 +318,11 @@ function buildDecorations(view: EditorView): DecorationSet {
           enter(child) {
             if (child.name === 'ListItem') {
               const itemLine = doc.lineAt(child.from)
-              const isCursorItem = itemLine.number === cursorLine
               const markerMatch = itemLine.text.match(/^(\s*)([-*+])\s/)
               if (markerMatch) {
                 const markerStart = child.from + markerMatch[1].length
                 const markerEnd = markerStart + markerMatch[2].length + 1
-                if (isCursorItem) {
+                if (showMarker(markerStart, markerEnd)) {
                   add(markerStart, markerEnd, Decoration.mark({ class: 'cm-md-marker-active' }))
                 } else {
                   add(markerStart, markerEnd, Decoration.replace({ widget: new BulletWidget(false, itemIndex) }))
@@ -258,12 +343,11 @@ function buildDecorations(view: EditorView): DecorationSet {
           enter(child) {
             if (child.name === 'ListItem') {
               const itemLine = doc.lineAt(child.from)
-              const isCursorItem = itemLine.number === cursorLine
               const markerMatch = itemLine.text.match(/^(\s*)(\d+[.)]\s)/)
               if (markerMatch) {
                 const markerStart = child.from + markerMatch[1].length
                 const markerEnd = markerStart + markerMatch[2].length
-                if (isCursorItem) {
+                if (showMarker(markerStart, markerEnd)) {
                   add(markerStart, markerEnd, Decoration.mark({ class: 'cm-md-marker-active' }))
                 } else {
                   add(markerStart, markerEnd, Decoration.replace({ widget: new BulletWidget(true, itemIndex) }))
@@ -280,20 +364,47 @@ function buildDecorations(view: EditorView): DecorationSet {
       if (name === 'FencedCode') {
         let langName = ''
         let codeText = ''
+        let openFenceFrom = from
         let openFenceTo = -1
+        let closeFenceFrom = -1
+        let closeFenceTo = -1
+        let infoFrom = -1
+        let infoTo = -1
+        const openLine = doc.lineAt(from)
+        const closeLine = doc.lineAt(Math.max(from, to - 1))
+        const showOpenFence = selectionTouches(openLine.from, openLine.to)
+        const showCloseFence = selectionTouches(closeLine.from, closeLine.to)
         tree.iterate({
           from, to,
           enter(child) {
             if (child.name === 'CodeInfo') {
               langName = doc.sliceString(child.from, child.to).trim()
+              infoFrom = child.from
+              infoTo = child.to
+              if (selectionTouches(child.from, child.to)) {
+                add(child.from, child.to, Decoration.mark({ class: 'cm-md-codeblock-info-active' }))
+              } else {
+                add(child.from, child.to, Decoration.mark({ class: 'cm-md-marker-hidden' }))
+              }
             }
             if (child.name === 'CodeMark') {
               const isOpen = child.from === from
-              if (isOpen) openFenceTo = child.to
-              add(child.from, child.to, Decoration.mark({
-                class: isOpen ? 'cm-md-codeblock-fence' : 'cm-md-codeblock-fence-end',
-                attributes: isOpen && langName ? { 'data-lang': langName } : {},
-              }))
+              if (isOpen) {
+                openFenceFrom = child.from
+                openFenceTo = child.to
+              } else {
+                closeFenceFrom = child.from
+                closeFenceTo = child.to
+              }
+              const fenceLine = doc.lineAt(child.from)
+              const showFence = isOpen ? showOpenFence : showCloseFence
+              if (showFence) {
+                add(child.from, child.to, Decoration.mark({
+                  class: isOpen ? 'cm-md-codeblock-fence-active' : 'cm-md-codeblock-fence-end-active',
+                }))
+              } else {
+                add(fenceLine.from, fenceLine.to, Decoration.mark({ class: 'cm-md-marker-hidden' }))
+              }
             }
             if (child.name === 'CodeText') {
               codeText = doc.sliceString(child.from, child.to)
@@ -307,12 +418,57 @@ function buildDecorations(view: EditorView): DecorationSet {
           },
         })
         if (openFenceTo >= 0) {
-          const fenceLine = doc.lineAt(from)
-          add(fenceLine.to, fenceLine.to, Decoration.widget({
-            widget: new CopyButtonWidget(codeText, langName),
-            side: 1,
-          }))
+          if (!showOpenFence) {
+            add(openLine.from, openLine.from, Decoration.widget({
+              widget: new CodeBlockHeaderWidget(langName),
+              side: -1,
+            }))
+            add(openLine.from, openLine.from, Decoration.line({ class: 'cm-md-codeblock-header-line' }))
+          } else {
+            add(openFenceFrom, openFenceTo, Decoration.mark({ class: 'cm-md-codeblock-fence-active' }))
+            if (infoFrom >= 0 && infoTo > infoFrom) {
+              add(infoFrom, infoTo, Decoration.mark({ class: 'cm-md-codeblock-info-active' }))
+            }
+          }
+          if (!showOpenFence && codeText) {
+            add(openLine.to, openLine.to, Decoration.widget({
+              widget: new CopyButtonWidget(codeText, langName),
+              side: 1,
+            }))
+          }
         }
+        if (closeFenceFrom >= 0 && showCloseFence) {
+          add(closeFenceFrom, closeFenceTo, Decoration.mark({ class: 'cm-md-codeblock-fence-end-active' }))
+        }
+        return false
+      }
+
+      if (name === 'Table') {
+        let rowIndex = 0
+        tree.iterate({
+          from, to,
+          enter(child) {
+            if (child.name === 'TableHeader' || child.name === 'TableRow') {
+              const rowClass = child.name === 'TableHeader'
+                ? 'cm-md-table-row cm-md-table-row-header'
+                : `cm-md-table-row${rowIndex % 2 === 0 ? ' cm-md-table-row-even' : ' cm-md-table-row-odd'}`
+              add(child.from, child.to, Decoration.mark({ class: rowClass }))
+              if (child.name === 'TableRow') rowIndex++
+            }
+
+            if (child.name === 'TableCell') {
+              add(child.from, child.to, Decoration.mark({ class: 'cm-md-table-cell' }))
+            }
+
+            if (child.name === 'TableDelimiter') {
+              if (showMarker(child.from, child.to)) {
+                add(child.from, child.to, Decoration.mark({ class: 'cm-md-table-delimiter-active' }))
+              } else {
+                add(child.from, child.to, Decoration.replace({ widget: new TablePipeWidget() }))
+              }
+            }
+          },
+        })
         return false
       }
     },
@@ -342,14 +498,30 @@ export const markdownDecorations: Extension = ViewPlugin.fromClass(
 
 export const focusModeCompartment = new Compartment()
 
+export function getFocusLineRange(view: EditorView, pos: number) {
+  const doc = view.state.doc
+  const currentLine = doc.lineAt(pos)
+  let startLine = currentLine.number
+  let endLine = currentLine.number
+
+  while (startLine > 1 && doc.line(startLine - 1).text.trim() !== '') {
+    startLine--
+  }
+  while (endLine < doc.lines && doc.line(endLine + 1).text.trim() !== '') {
+    endLine++
+  }
+
+  return { startLine, endLine }
+}
+
 function buildFocusDecorations(view: EditorView): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>()
   const cursorPos = view.state.selection.main.head
-  const cursorLine = view.state.doc.lineAt(cursorPos).number
+  const { startLine, endLine } = getFocusLineRange(view, cursorPos)
   const activeMark = Decoration.line({ class: 'cm-focus-active' })
-  for (let i = 1; i <= view.state.doc.lines; i++) {
+  for (let i = startLine; i <= endLine; i++) {
     const line = view.state.doc.line(i)
-    if (i === cursorLine) builder.add(line.from, line.from, activeMark)
+    builder.add(line.from, line.from, activeMark)
   }
   return builder.finish()
 }

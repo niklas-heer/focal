@@ -7,9 +7,13 @@ export interface FileNode {
   children?: FileNode[]
 }
 
+export interface ReadDirOptions {
+  showHidden?: boolean
+}
+
 export interface ElectronAPI {
   openFolder: () => Promise<string | null>
-  readDir: (path: string) => Promise<FileNode[]>
+  readDir: (path: string, options?: ReadDirOptions) => Promise<FileNode[]>
   readFile: (path: string) => Promise<string | null>
   writeFile: (path: string, content: string) => Promise<boolean>
   createFile: (dirPath: string, name: string) => Promise<string | null>
@@ -22,7 +26,7 @@ export interface ElectronAPI {
 
 contextBridge.exposeInMainWorld('electronAPI', {
   openFolder: () => ipcRenderer.invoke('open-folder'),
-  readDir: (path: string) => ipcRenderer.invoke('read-dir', path),
+  readDir: (path: string, options?: ReadDirOptions) => ipcRenderer.invoke('read-dir', path, options),
   readFile: (path: string) => ipcRenderer.invoke('read-file', path),
   writeFile: (path: string, content: string) => ipcRenderer.invoke('write-file', path, content),
   createFile: (dirPath: string, name: string) => ipcRenderer.invoke('create-file', dirPath, name),

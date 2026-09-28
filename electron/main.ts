@@ -63,18 +63,38 @@ interface FileNode {
   children?: FileNode[]
 }
 
-function readDirRecursive(dirPath: string, depth = 0): FileNode[] {
+interface ReadDirOptions {
+  showHidden?: boolean
+}
+
+const ignoredDirectories = new Set([
+  'node_modules',
+  '.git',
+  '.next',
+  '.turbo',
+  'dist',
+  'build',
+  'coverage',
+  'electron-dist',
+])
+
+function shouldHideEntry(name: string, options: ReadDirOptions) {
+  if (options.showHidden) return false
+  return name.startsWith('.') || ignoredDirectories.has(name)
+}
+
+function readDirRecursive(dirPath: string, options: ReadDirOptions = {}, depth = 0): FileNode[] {
   if (depth > 5) return []
   try {
     const entries = fs.readdirSync(dirPath, { withFileTypes: true })
     const nodes: FileNode[] = []
 
     for (const entry of entries) {
-      if (entry.name.startsWith('.')) continue
+      if (shouldHideEntry(entry.name, options)) continue
       const fullPath = path.join(dirPath, entry.name)
 
       if (entry.isDirectory()) {
-        const children = readDirRecursive(fullPath, depth + 1)
+        const children = readDirRecursive(fullPath, options, depth + 1)
         if (children.length > 0) {
           nodes.push({ name: entry.name, path: fullPath, type: 'directory', children })
         }
@@ -92,8 +112,8 @@ function readDirRecursive(dirPath: string, depth = 0): FileNode[] {
   }
 }
 
-ipcMain.handle('read-dir', (_event, dirPath: string) => {
-  return readDirRecursive(dirPath)
+ipcMain.handle('read-dir', (_event, dirPath: string, options?: ReadDirOptions) => {
+  return readDirRecursive(dirPath, options)
 })
 
 // IPC: Read file

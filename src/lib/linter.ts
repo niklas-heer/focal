@@ -43,47 +43,59 @@ export function buildMarkdownLinter(
   onResults: (diagnostics: Diagnostic[]) => void
 ) {
   return async function markdownLinter(view: EditorView): Promise<Diagnostic[]> {
-    const fn = await getLintSync()
-    const content = view.state.doc.toString()
-
-    let results: LintResults
-    try {
-      results = fn({ strings: { doc: content }, config: LINT_CONFIG })
-    } catch {
-      return []
-    }
-
-    const issues = results['doc'] ?? []
-    const diagnostics: Diagnostic[] = []
-
-    for (const issue of issues) {
-      if (IGNORED_RULES.has(issue.ruleNames[0])) continue
-
-      const lineNum = Math.min(issue.lineNumber, view.state.doc.lines)
-      const line = view.state.doc.line(lineNum)
-
-      let from = line.from
-      let to = line.to
-
-      if (issue.fixInfo?.editColumn != null) {
-        from = line.from + Math.max(0, issue.fixInfo.editColumn - 1)
-        to = issue.fixInfo.deleteCount != null
-          ? Math.min(from + issue.fixInfo.deleteCount, line.to)
-          : Math.min(from + 1, line.to)
-      }
-
-      diagnostics.push({
-        from,
-        to,
-        severity: 'warning',
-        message: `${issue.ruleNames[0]}: ${issue.ruleDescription}${issue.errorDetail ? ` — ${issue.errorDetail}` : ''}`,
-        source: 'markdownlint',
-      })
-    }
-
+    const diagnostics = await lintMarkdownContent(view.state.doc.toString())
     onResults(diagnostics)
     return diagnostics
   }
+}
+
+export async function lintMarkdownContent(content: string): Promise<Diagnostic[]> {
+  const fn = await getLintSync()
+
+  let results: LintResults
+  try {
+    results = fn({ strings: { doc: content }, config: LINT_CONFIG })
+  } catch {
+    return []
+  }
+
+  const issues = results['doc'] ?? []
+  const diagnostics: Diagnostic[] = []
+  const lines = content.split('\n')
+  const lineStarts: number[] = []
+  let offset = 0
+  for (const line of lines) {
+    lineStarts.push(offset)
+    offset += line.length + 1
+  }
+
+  for (const issue of issues) {
+    if (IGNORED_RULES.has(issue.ruleNames[0])) continue
+
+    const lineIndex = Math.max(0, Math.min(issue.lineNumber - 1, lines.length - 1))
+    const lineText = lines[lineIndex] ?? ''
+    const lineStart = lineStarts[lineIndex] ?? 0
+
+    let from = lineStart
+    let to = lineStart + lineText.length
+
+    if (issue.fixInfo?.editColumn != null) {
+      from = lineStart + Math.max(0, issue.fixInfo.editColumn - 1)
+      to = issue.fixInfo.deleteCount != null
+        ? Math.min(from + issue.fixInfo.deleteCount, lineStart + lineText.length)
+        : Math.min(from + 1, lineStart + lineText.length)
+    }
+
+    diagnostics.push({
+      from,
+      to,
+      severity: 'warning',
+      message: `${issue.ruleNames[0]}: ${issue.ruleDescription}${issue.errorDetail ? ` — ${issue.errorDetail}` : ''}`,
+      source: 'markdownlint',
+    })
+  }
+
+  return diagnostics
 }
 
 export function applyMarkdownFixes(content: string): string {

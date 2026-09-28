@@ -6,14 +6,30 @@ interface FileTreeProps {
   activeFile: string | null
   folderName: string
   folderPath: string
+  showHiddenFiles: boolean
   onFileSelect: (path: string) => void
   onRefresh: () => void
+  onToggleShowHidden: () => void
 }
 
 interface ContextMenu {
   x: number
   y: number
   node: FileNode
+}
+
+function countTreeItems(nodes: FileNode[]): { files: number; folders: number } {
+  return nodes.reduce((totals, node) => {
+    if (node.type === 'file') {
+      totals.files += 1
+    } else {
+      totals.folders += 1
+      const nested = countTreeItems(node.children ?? [])
+      totals.files += nested.files
+      totals.folders += nested.folders
+    }
+    return totals
+  }, { files: 0, folders: 0 })
 }
 
 function FileIcon({ type }: { type: 'file' | 'directory' }) {
@@ -118,7 +134,16 @@ function FileTreeNode({
   )
 }
 
-export function FileTree({ files, activeFile, folderName, onFileSelect, onRefresh }: FileTreeProps) {
+export function FileTree({
+  files,
+  activeFile,
+  folderName,
+  folderPath,
+  showHiddenFiles,
+  onFileSelect,
+  onRefresh,
+  onToggleShowHidden,
+}: FileTreeProps) {
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
@@ -198,13 +223,38 @@ export function FileTree({ files, activeFile, folderName, onFileSelect, onRefres
     setDragOverPath(null)
   }, [])
 
+  const totals = countTreeItems(files)
+
   return (
     <>
       <div className="sidebar-header">
-        <svg className="sidebar-folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="none">
-          <path d="M1 4.5C1 3.67 1.67 3 2.5 3H6l1.5 1.5H13.5C14.33 4.5 15 5.17 15 6v6.5C15 13.33 14.33 14 13.5 14h-11C1.67 14 1 13.33 1 12.5v-8z" fill="var(--tn-comment)"/>
-        </svg>
-        <span className="sidebar-folder-name">{folderName}</span>
+        <div className="sidebar-header-copy">
+          <div className="sidebar-folder-title">
+            <svg className="sidebar-folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <path d="M1 4.5C1 3.67 1.67 3 2.5 3H6l1.5 1.5H13.5C14.33 4.5 15 5.17 15 6v6.5C15 13.33 14.33 14 13.5 14h-11C1.67 14 1 13.33 1 12.5v-8z" fill="var(--tn-comment)"/>
+            </svg>
+            <span className="sidebar-folder-name">{folderName}</span>
+          </div>
+          <span className="sidebar-folder-meta">
+            {totals.files} {totals.files === 1 ? 'note' : 'notes'}
+            {totals.folders > 0 ? ` · ${totals.folders} folder${totals.folders === 1 ? '' : 's'}` : ''}
+          </span>
+        </div>
+        <div className="sidebar-header-actions">
+          <button
+            className={`sidebar-header-btn${showHiddenFiles ? ' active' : ''}`}
+            onClick={onToggleShowHidden}
+            title={showHiddenFiles ? 'Hide hidden and ignored folders' : 'Show hidden and ignored folders'}
+          >
+            Hidden
+          </button>
+          <button className="sidebar-header-btn" onClick={() => handleNewFile(folderPath)} title="New note in workspace root">
+            New
+          </button>
+          <button className="sidebar-header-btn" onClick={onRefresh} title="Refresh files">
+            Sync
+          </button>
+        </div>
       </div>
 
       <div className="file-tree" onDragLeave={handleDragLeave}>

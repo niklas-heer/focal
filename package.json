@@ -7,7 +7,8 @@
     "dev": "concurrently -k \"vite\" \"wait-on tcp:5173 && electron .\"",
     "build": "tsc -p tsconfig.electron.json && vite build",
     "preview": "vite preview",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test:scroll-render": "node scripts/smoke-scroll-render.js"
   },
   "keywords": [],
   "author": "",
@@ -17,6 +18,7 @@
     "concurrently": "^9.2.1",
     "electron": "^41.0.4",
     "electron-builder": "^26.8.1",
+    "playwright": "^1.58.2",
     "typescript": "^6.0.2",
     "vite": "^8.0.2",
     "wait-on": "^9.0.4"
@@ -37,8 +39,12 @@
     "@types/node": "^25.5.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "highlight.js": "^11.11.1",
     "markdownlint": "^0.40.0",
     "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "react-dom": "^19.2.4",
+    "remark-gfm": "^4.0.1",
+    "remark-parse": "^11.0.0",
+    "unified": "^11.0.5"
   }
 }

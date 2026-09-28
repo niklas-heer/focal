@@ -82,6 +82,12 @@ export function CommandPalette({ isOpen, onClose, commands }: CommandPaletteProp
             spellCheck={false}
           />
         </div>
+        <div className="palette-hint-row">
+          <span>Jump to actions instantly</span>
+          <span>↑↓ navigate</span>
+          <span>Enter run</span>
+          <span>Esc close</span>
+        </div>
         <div className="palette-results">
           {filtered.length === 0 ? (
             <div className="palette-empty">No commands found</div>

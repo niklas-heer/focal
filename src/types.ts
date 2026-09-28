@@ -1,3 +1,7 @@
+export interface ReadDirOptions {
+  showHidden?: boolean
+}
+
 export interface FileNode {
   name: string
   path: string
@@ -7,7 +11,7 @@ export interface FileNode {
 
 export interface ElectronAPI {
   openFolder: () => Promise<string | null>
-  readDir: (path: string) => Promise<FileNode[]>
+  readDir: (path: string, options?: ReadDirOptions) => Promise<FileNode[]>
   readFile: (path: string) => Promise<string | null>
   writeFile: (path: string, content: string) => Promise<boolean>
   createFile: (dirPath: string, name: string) => Promise<string | null>
