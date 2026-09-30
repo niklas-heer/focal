@@ -179,7 +179,7 @@ Milestone 0 compared TextKit 1 and TextKit 2 in a throwaway AppKit spike ([findi
 
 Kept deliberately small: prose font, text size, column width, focus unit, typewriter scrolling, and whether to check for updates automatically (Agreed, see [Updates](#updates)).
 
-Built in M3: a settings window (⌘,) with the focus unit and typewriter scrolling, saved to `~/Library/Application Support/Focal/settings.json`. Prose font, text size and column width need the fixed text size to become a setting first; the updates setting comes with M6.
+Built in M3: a settings window (⌘,) with the prose typeface (Quattro, Duo or Mono), text size (16, 18, 21 or 24 pt), column width (about 60, 70 or 85 characters), focus unit and typewriter scrolling, applied at once and saved to `~/Library/Application Support/Focal/settings.json`. The updates setting comes with M6.
 
 ## 7. Extras (Agreed scope, Proposed implementation)
 

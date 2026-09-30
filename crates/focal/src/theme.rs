@@ -1,5 +1,6 @@
 //! Focal's palettes, following the system's light or dark appearance.
 
+use crate::settings::{ColumnWidth, ProseFont, Settings, TextSize};
 use focal_core::analysis::Alert;
 use gpui_kit::{Hsla, WindowAppearance, rgb, rgba};
 
@@ -8,6 +9,42 @@ pub const MONO_FONT: &str = "iA Writer Mono S";
 /// Bold prose. The static Quattro S Bold files report weight 400 in their
 /// OS/2 table, so GPUI cannot select them by weight; Duo S Bold reports 700.
 pub const BOLD_PROSE_FONT: &str = "iA Writer Duo S";
+/// The text size, column width and prose typeface chosen in the settings.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Typography {
+    pub size: f32,
+    /// The text column's widest width, in points.
+    pub column: f32,
+    pub prose: &'static str,
+}
+
+impl Typography {
+    pub const fn new(settings: &Settings) -> Self {
+        let size = match settings.text_size {
+            TextSize::Small => 16.,
+            TextSize::Medium => 18.,
+            TextSize::Large => 21.,
+            TextSize::Huge => 24.,
+        };
+        // In ems of the text size: about 60, 70 or 85 characters.
+        let column = match settings.column_width {
+            ColumnWidth::Narrow => 34.,
+            ColumnWidth::Medium => 40.,
+            ColumnWidth::Wide => 48.,
+        };
+        let prose = match settings.prose_font {
+            ProseFont::Quattro => PROSE_FONT,
+            ProseFont::Duo => BOLD_PROSE_FONT,
+            ProseFont::Mono => MONO_FONT,
+        };
+        Self {
+            size,
+            column: column * size,
+            prose,
+        }
+    }
+}
+
 /// The opacity of text that focus mode dims.
 pub const DIMMED: f32 = 0.3;
 

@@ -756,3 +756,32 @@ fn focus_mode_dims_tables_outside_the_caret_paragraph(cx: &mut TestAppContext) {
     act(cx, window, |window, cx| window.press("cmd-d", cx));
     editor.read_with(cx, |editor, _| assert!(editor.table_dimmed(0)));
 }
+
+#[gpui_kit::test]
+fn a_larger_text_size_makes_lines_taller(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "text");
+    act(cx, window, |_, _| {});
+    let medium = editor.read_with(cx, |e, _| e.head_row_bounds().unwrap().size.height);
+    set_settings(cx, |s| s.text_size = crate::settings::TextSize::Huge);
+    act(cx, window, |_, _| {});
+    act(cx, window, |_, _| {});
+    let huge = editor.read_with(cx, |e, _| e.head_row_bounds().unwrap().size.height);
+    assert!(huge > medium + px(4.), "{medium:?} grew to {huge:?}");
+}
+
+#[gpui_kit::test]
+fn a_folder_whose_newest_file_is_not_utf8_opens_a_savable_untitled(cx: &mut TestAppContext) {
+    let root = crate::folder::tests::temp_folder("latin1");
+    std::fs::write(root.join("latin1.md"), b"caf\xe9").unwrap();
+    let (_, workspace) = open_folder(cx, &root);
+    assert_eq!(current_title(cx, &workspace), "Untitled.md");
+    workspace.read_with(cx, |w, cx| {
+        let editor = w.editor().read(cx);
+        assert_eq!(editor.path(), Some(root.join("Untitled.md").as_path()));
+        assert!(
+            editor.error().is_some_and(|e| e.contains("latin1.md")),
+            "{:?}",
+            editor.error()
+        );
+    });
+}

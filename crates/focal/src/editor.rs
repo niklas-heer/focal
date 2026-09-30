@@ -37,7 +37,7 @@ use crate::accessibility::{A11yDocument, A11ySource, RunIds};
 use crate::document::{self, Document, Stamp};
 use crate::settings::{FocusUnit, Settings};
 use crate::spell::SpellChecker;
-use crate::theme::{BOLD_PROSE_FONT, DIMMED, MONO_FONT, PROSE_FONT, Theme};
+use crate::theme::{BOLD_PROSE_FONT, DIMMED, MONO_FONT, PROSE_FONT, Theme, Typography};
 
 actions!(
     focal,
@@ -138,7 +138,7 @@ pub struct LearnSpelling {
     word: String,
 }
 
-const CONTEXT: &str = "FocalEditor";
+pub(crate) const CONTEXT: &str = "FocalEditor";
 /// Key bindings for the input of the table cell being edited.
 const CELL_CONTEXT: &str = "FocalCell > Input";
 /// Code blocks whose highlights are kept.
@@ -149,8 +149,6 @@ type BlockHighlights = Vec<Vec<(Range<usize>, HighlightStyle)>>;
 type HighlightCache = std::collections::HashMap<(&'static str, u64, bool), Rc<BlockHighlights>>;
 /// Distinct line texts whose spelling results are kept.
 const SPELL_CACHE_LIMIT: usize = 20_000;
-pub(crate) const TEXT_SIZE: f32 = 18.;
-const COLUMN_WIDTH: f32 = 720.;
 const AUTOSAVE_DELAY: Duration = Duration::from_millis(400);
 /// Editors and agents write in bursts; wait this long before reloading.
 const RELOAD_SETTLE: Duration = Duration::from_millis(50);
@@ -308,6 +306,7 @@ pub struct Editor {
     pub(crate) painted: Rc<RefCell<Vec<PaintedRow>>>,
     focus_mode: bool,
     focus_unit: FocusUnit,
+    pub(crate) typography: Typography,
     /// Keep the caret's line centered in focus mode.
     typewriter: bool,
     /// Frames left to keep centering the caret's line.
@@ -355,6 +354,7 @@ impl Editor {
         cx.observe_global::<Settings>(|this, cx| {
             let settings = cx.global::<Settings>();
             this.focus_unit = settings.focus_unit;
+            this.typography = Typography::new(settings);
             this.typewriter = settings.typewriter;
             this.refresh();
             this.remeasure();
@@ -378,6 +378,7 @@ impl Editor {
             painted: Rc::default(),
             focus_mode: false,
             focus_unit: settings.focus_unit,
+            typography: Typography::new(&settings),
             typewriter: settings.typewriter,
             center_frames: 0,
             padded_for: px(0.),
@@ -403,6 +404,17 @@ impl Editor {
 
     pub fn title(&self) -> String {
         self.document.title()
+    }
+
+    /// The error shown in the banner, if any.
+    #[cfg(test)]
+    pub(crate) fn error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
+    pub(crate) fn show_error(&mut self, message: String, cx: &mut Context<Self>) {
+        self.error = Some(message);
+        cx.notify();
     }
 
     pub(crate) fn path(&self) -> Option<&std::path::Path> {
@@ -1905,7 +1917,12 @@ impl Editor {
                     px(240.)
                 })
             })
-            .child(div().w_full().max_w(px(COLUMN_WIDTH)).child(content))
+            .child(
+                div()
+                    .w_full()
+                    .max_w(px(self.typography.column))
+                    .child(content),
+            )
             .into_any_element()
     }
 
@@ -1942,7 +1959,11 @@ impl Editor {
             _ if mono => (0.86, FontWeight::NORMAL, 0.),
             _ => (1.0, FontWeight::NORMAL, 0.),
         };
-        let family = if mono { MONO_FONT } else { PROSE_FONT };
+        let family = if mono {
+            MONO_FONT
+        } else {
+            self.typography.prose
+        };
         let mut base = if dimmed {
             theme.text.opacity(DIMMED)
         } else {
@@ -2011,7 +2032,7 @@ impl Editor {
             .relative()
             .pt(px(top))
             .font_family(family)
-            .text_size(px(TEXT_SIZE * scale))
+            .text_size(px(self.typography.size * scale))
             .line_height(relative(if matches!(info.kind, LineKind::Heading(_)) {
                 1.3
             } else {
@@ -2023,7 +2044,7 @@ impl Editor {
                 |d| {
                     d.rounded_tl(px(6.))
                         .rounded_tr(px(6.))
-                        .text_size(px(TEXT_SIZE * 0.7))
+                        .text_size(px(self.typography.size * 0.7))
                 },
             )
             .when(
@@ -2031,7 +2052,7 @@ impl Editor {
                 |d| {
                     d.rounded_bl(px(6.))
                         .rounded_br(px(6.))
-                        .text_size(px(TEXT_SIZE * 0.7))
+                        .text_size(px(self.typography.size * 0.7))
                 },
             )
             .child(
@@ -2062,7 +2083,7 @@ impl Editor {
                         .absolute()
                         .left_0()
                         .right_0()
-                        .top(px(TEXT_SIZE * 0.8))
+                        .top(px(self.typography.size * 0.8))
                         .h(px(1.))
                         .bg(theme.rule),
                 )
@@ -2103,7 +2124,7 @@ impl Editor {
                 .update(cx, |editor, cx| editor.toggle_task_on_line(line, cx))
                 .ok();
         };
-        let line_height = px(TEXT_SIZE
+        let line_height = px(self.typography.size
             * scale
             * if matches!(info.kind, LineKind::Heading(_)) {
                 1.3
@@ -2596,7 +2617,7 @@ impl Render for Editor {
             .size_full()
             .bg(theme.background)
             .text_color(theme.text)
-            .font_family(PROSE_FONT)
+            .font_family(self.typography.prose)
             .cursor(CursorStyle::IBeam)
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))

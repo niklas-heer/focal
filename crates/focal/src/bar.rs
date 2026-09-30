@@ -2,14 +2,15 @@
 //! count. Its buttons dispatch the same actions as the keyboard and menus.
 
 use gpui_kit::component::native_menu::NativeMenu;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     Action, App, ClickEvent, FontWeight, InteractiveElement as _, IntoElement, ParentElement as _,
     StatefulInteractiveElement as _, Styled as _, TestSupportExt as _, Window, div, px,
 };
 
 use crate::editor::{
-    BarState, Bold, InlineCode, InsertCodeBlock, InsertLink, InsertMath, InsertTable, Italic,
-    SetHeading, Strikethrough, ToggleBullets, ToggleFocusMode, ToggleNumbers, ToggleQuote,
+    BarState, Bold, CONTEXT, InlineCode, InsertCodeBlock, InsertLink, InsertMath, InsertTable,
+    Italic, SetHeading, Strikethrough, ToggleBullets, ToggleFocusMode, ToggleNumbers, ToggleQuote,
     ToggleTask,
 };
 use crate::theme::{MONO_FONT, Theme};
@@ -18,11 +19,14 @@ use crate::theme::{MONO_FONT, Theme};
 pub const BAR_HEIGHT: f32 = 44.;
 pub const SHOW_ZONE: f32 = 40.;
 
+/// A bar button with a tooltip that names it and, for an action with a
+/// shortcut, shows the keys.
 fn button(
     id: &'static str,
     label: impl IntoElement,
     tooltip: &'static str,
     theme: &Theme,
+    action: Option<Box<dyn Action>>,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let hover = theme.code_background;
@@ -30,6 +34,14 @@ fn button(
         .id(id)
         .test_support()
         .aria_label(tooltip)
+        .tooltip(move |window, cx| {
+            let tip = Tooltip::new(tooltip);
+            match &action {
+                Some(action) => tip.action(action.as_ref(), Some(CONTEXT)),
+                None => tip,
+            }
+            .build(window, cx)
+        })
         .px(px(7.))
         .py(px(3.))
         .rounded(px(5.))
@@ -46,9 +58,17 @@ fn action_button(
     theme: &Theme,
     action: impl Action + Clone,
 ) -> impl IntoElement {
-    button(id, label, tooltip, theme, move |_, window, cx| {
-        window.dispatch_action(action.boxed_clone(), cx);
-    })
+    let shortcut = action.boxed_clone();
+    button(
+        id,
+        label,
+        tooltip,
+        theme,
+        Some(shortcut),
+        move |_, window, cx| {
+            window.dispatch_action(action.boxed_clone(), cx);
+        },
+    )
 }
 
 fn heading_menu(event: &ClickEvent, window: &mut Window, cx: &mut App) {
@@ -72,6 +92,7 @@ fn buttons(heading: String, theme: &Theme) -> impl IntoElement {
             heading,
             "Heading level",
             theme,
+            None,
             heading_menu,
         ))
         .child(action_button(

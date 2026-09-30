@@ -161,6 +161,7 @@ fn detach(source: &Source) -> Result<()> {
 fn run_app(source: Source) {
     gpui_kit::application().run(move |cx: &mut App| {
         gpui_kit::init(cx);
+        force_appearance();
         load_fonts(cx);
         editor::bind_keys(cx);
         workspace::bind_keys(cx);
@@ -224,6 +225,24 @@ fn run_app(source: Source) {
     });
 }
 
+/// `FOCAL_APPEARANCE=light` or `dark` overrides the system appearance for
+/// Focal alone, to check both palettes without switching the whole Mac.
+fn force_appearance() {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSAppearance, NSApplication};
+    use objc2_foundation::NSString;
+    let name = match std::env::var("FOCAL_APPEARANCE").as_deref() {
+        Ok("light") => "NSAppearanceNameAqua",
+        Ok("dark") => "NSAppearanceNameDarkAqua",
+        _ => return,
+    };
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let appearance = NSAppearance::appearanceNamed(&NSString::from_str(name));
+    NSApplication::sharedApplication(mtm).setAppearance(appearance.as_deref());
+}
+
 fn load_fonts(cx: &App) {
     let fonts: Vec<Cow<'static, [u8]>> = vec![
         Cow::Borrowed(include_bytes!(
@@ -231,6 +250,12 @@ fn load_fonts(cx: &App) {
         )),
         Cow::Borrowed(include_bytes!(
             "../../../assets/fonts/iAWriterQuattroS-Italic.ttf"
+        )),
+        Cow::Borrowed(include_bytes!(
+            "../../../assets/fonts/iAWriterDuoS-Regular.ttf"
+        )),
+        Cow::Borrowed(include_bytes!(
+            "../../../assets/fonts/iAWriterDuoS-Italic.ttf"
         )),
         Cow::Borrowed(include_bytes!(
             "../../../assets/fonts/iAWriterDuoS-Bold.ttf"

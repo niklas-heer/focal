@@ -13,9 +13,9 @@ use gpui_kit::{
     TextRun, Window, canvas, div, font, point, px, relative,
 };
 
-use crate::editor::{Editor, PaintedRow, Row, TEXT_SIZE, text_runs};
+use crate::editor::{Editor, PaintedRow, Row, text_runs};
 use crate::grid::{TableOp, TableOpKind};
-use crate::theme::{DIMMED, PROSE_FONT, Theme};
+use crate::theme::{DIMMED, Theme};
 
 /// Hover group of a table, for its add-row and add-column buttons.
 const TABLE_GROUP: &str = "focal-table";
@@ -364,7 +364,7 @@ impl Editor {
         theme: &Theme,
         window: &Window,
     ) -> Vec<f32> {
-        let font_size = px(TEXT_SIZE * CELL_SCALE);
+        let font_size = px(self.typography.size * CELL_SCALE);
         let analysis = &self.snapshot.analysis;
         let table = &analysis.tables[table_ix];
         let editing = self
@@ -385,7 +385,7 @@ impl Editor {
                             let text = &self.text()[cell.clone()];
                             let run = TextRun {
                                 len: text.len(),
-                                font: font(PROSE_FONT),
+                                font: font(self.typography.prose),
                                 color: theme.text,
                                 background_color: None,
                                 underline: None,
@@ -401,7 +401,13 @@ impl Editor {
                                 FontWeight::NORMAL
                             };
                             let runs = text_runs(
-                                &view.runs, PROSE_FONT, weight, theme.text, theme, None, false,
+                                &view.runs,
+                                self.typography.prose,
+                                weight,
+                                theme.text,
+                                theme,
+                                None,
+                                false,
                             );
                             (view.text.clone().into(), runs)
                         };
@@ -480,7 +486,7 @@ impl Editor {
         let last_column = columns.saturating_sub(1);
         let grid = div()
             .flex_none()
-            .text_size(px(TEXT_SIZE * CELL_SCALE))
+            .text_size(px(self.typography.size * CELL_SCALE))
             .line_height(relative(CELL_LINE_HEIGHT))
             .border_1()
             .border_color(theme.rule)
@@ -529,7 +535,7 @@ impl Editor {
             &analysis.info(line).prefix,
             line,
             theme,
-            px(TEXT_SIZE * 1.6),
+            px(self.typography.size * 1.6),
             move |line, _, cx| {
                 entity
                     .update(cx, |editor, cx| editor.toggle_task_on_line(line, cx))
@@ -565,7 +571,13 @@ impl Editor {
                 FontWeight::NORMAL
             };
             StyledText::new(view.text.clone()).with_runs(text_runs(
-                &view.runs, PROSE_FONT, weight, theme.text, theme, None, false,
+                &view.runs,
+                self.typography.prose,
+                weight,
+                theme.text,
+                theme,
+                None,
+                false,
             ))
         });
         div()
@@ -616,7 +628,7 @@ impl Editor {
                 Some(input) => d.child(
                     div()
                         .key_context("FocalCell")
-                        .h(px(TEXT_SIZE * CELL_SCALE * CELL_LINE_HEIGHT))
+                        .h(px(self.typography.size * CELL_SCALE * CELL_LINE_HEIGHT))
                         .overflow_hidden()
                         .child(
                             // Match the rendered cell so the row keeps its size
@@ -624,11 +636,11 @@ impl Editor {
                             Input::new(&input)
                                 .appearance(false)
                                 .p(px(0.))
-                                .h(px(TEXT_SIZE * CELL_SCALE * CELL_LINE_HEIGHT))
-                                .text_size(px(TEXT_SIZE * CELL_SCALE))
+                                .h(px(self.typography.size * CELL_SCALE * CELL_LINE_HEIGHT))
+                                .text_size(px(self.typography.size * CELL_SCALE))
                                 .line_height(relative(CELL_LINE_HEIGHT))
-                                .font_family(PROSE_FONT)
-                                .mt(px(-TEXT_SIZE * CELL_SCALE * INPUT_LIFT))
+                                .font_family(self.typography.prose)
+                                .mt(px(-self.typography.size * CELL_SCALE * INPUT_LIFT))
                                 .when(alignment == Some(ColumnAlignment::Center), |d| {
                                     d.text_center()
                                 })

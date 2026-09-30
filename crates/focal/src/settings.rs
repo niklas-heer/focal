@@ -7,15 +7,16 @@ use gpui_kit::component::radio::{Radio, RadioGroup};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::theme::Theme;
 use gpui_kit::{
-    AnyWindowHandle, App, AppContext as _, BorrowAppContext as _, Bounds, Context, Global,
-    IntoElement, KeyBinding, ParentElement as _, Render, Styled as _, TitlebarOptions, Window,
-    WindowBounds, WindowOptions, actions, div, px, size,
+    AnyWindowHandle, App, AppContext as _, BorrowAppContext as _, Bounds, Context, FocusHandle,
+    Global, InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Render,
+    SharedString, Styled as _, TitlebarOptions, Window, WindowBounds, WindowOptions, actions, div,
+    px, size,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::theme::{PROSE_FONT, Theme as Colors};
 
-actions!(focal, [OpenSettings]);
+actions!(focal, [OpenSettings, CloseSettings]);
 
 /// What focus mode keeps bright.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,12 +27,45 @@ pub enum FocusUnit {
     Paragraph,
 }
 
+/// The typeface for prose; code is always in iA Writer Mono.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProseFont {
+    #[default]
+    Quattro,
+    Duo,
+    Mono,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TextSize {
+    Small,
+    #[default]
+    Medium,
+    Large,
+    Huge,
+}
+
+/// The text column's width, about 60, 70 or 85 characters.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ColumnWidth {
+    Narrow,
+    #[default]
+    Medium,
+    Wide,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub focus_unit: FocusUnit,
     /// Keep the caret's line vertically centered in focus mode.
     pub typewriter: bool,
+    pub prose_font: ProseFont,
+    pub text_size: TextSize,
+    pub column_width: ColumnWidth,
 }
 
 impl Default for Settings {
@@ -39,6 +73,9 @@ impl Default for Settings {
         Self {
             focus_unit: FocusUnit::Paragraph,
             typewriter: true,
+            prose_font: ProseFont::default(),
+            text_size: TextSize::default(),
+            column_width: ColumnWidth::default(),
         }
     }
 }
@@ -82,8 +119,22 @@ impl Settings {
 pub fn init(cx: &mut App) {
     cx.set_global(Settings::path().map_or_else(Settings::default, |p| Settings::load_from(&p)));
     cx.set_global(SettingsWindow(None));
-    cx.bind_keys([KeyBinding::new("cmd-,", OpenSettings, None)]);
+    cx.bind_keys([
+        KeyBinding::new("cmd-,", OpenSettings, None),
+        KeyBinding::new("cmd-w", CloseSettings, Some("FocalSettings")),
+        KeyBinding::new("escape", CloseSettings, Some("FocalSettings")),
+    ]);
     cx.on_action(|_: &OpenSettings, cx| open_window(cx));
+}
+
+/// Keeps GPUI Kit's controls and tooltips in the system appearance, like
+/// Focal's own colors, for the life of the window's view.
+pub fn follow_appearance<V: 'static>(window: &mut Window, cx: &mut Context<V>) {
+    Theme::sync_system_appearance(Some(window), cx);
+    cx.observe_window_appearance(window, |_, window, cx| {
+        Theme::sync_system_appearance(Some(window), cx);
+    })
+    .detach();
 }
 
 /// Changes the settings, saves them and redraws every window.
@@ -106,7 +157,7 @@ fn open_window(cx: &mut App) {
     {
         return;
     }
-    let bounds = Bounds::centered(None, size(px(420.), px(260.)), cx);
+    let bounds = Bounds::centered(None, size(px(460.), px(430.)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions {
@@ -125,19 +176,37 @@ fn open_window(cx: &mut App) {
     }
 }
 
-struct SettingsView;
+struct SettingsView {
+    focus: FocusHandle,
+}
 
 impl SettingsView {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         cx.observe_global::<Settings>(|_, cx| cx.notify()).detach();
-        // GPUI Kit's controls follow the system appearance, like Focal.
-        Theme::sync_system_appearance(Some(window), cx);
-        cx.observe_window_appearance(window, |_, window, cx| {
-            Theme::sync_system_appearance(Some(window), cx);
-        })
-        .detach();
-        Self
+        follow_appearance(window, cx);
+        let focus = cx.focus_handle();
+        window.focus(&focus, cx);
+        Self { focus }
     }
+}
+
+/// A row of radio buttons choosing one of `options`, saved through `set`.
+fn choice<T: Copy + PartialEq + 'static>(
+    id: &'static str,
+    options: &'static [(T, &'static str)],
+    current: T,
+    set: fn(&mut Settings, T),
+) -> RadioGroup {
+    RadioGroup::horizontal(id)
+        .children(options.iter().map(|&(_, label)| {
+            Radio::new(SharedString::from(format!("{id}-{label}"))).label(label)
+        }))
+        .selected_index(options.iter().position(|&(value, _)| value == current))
+        .on_click(move |index, _, cx| {
+            if let Some(&(value, _)) = options.get(*index) {
+                update(cx, |settings| set(settings, value));
+            }
+        })
 }
 
 impl Render for SettingsView {
@@ -146,38 +215,68 @@ impl Render for SettingsView {
         let settings = cx.global::<Settings>().clone();
         let heading = |text: &'static str| {
             div()
-                .text_size(px(12.))
+                .pt(px(6.))
+                .text_size(px(11.))
                 .text_color(theme.marker)
                 .child(text)
         };
         div()
+            .key_context("FocalSettings")
+            .track_focus(&self.focus)
+            .on_action(|_: &CloseSettings, window, _| window.remove_window())
             .size_full()
             .p(px(24.))
             .flex()
             .flex_col()
-            .gap(px(12.))
+            .gap(px(10.))
             .bg(theme.background)
             .text_color(theme.text)
             .font_family(PROSE_FONT)
             .text_size(px(14.))
+            .child(heading("TYPEFACE"))
+            .child(choice(
+                "prose-font",
+                &[
+                    (ProseFont::Quattro, "Quattro"),
+                    (ProseFont::Duo, "Duo"),
+                    (ProseFont::Mono, "Mono"),
+                ],
+                settings.prose_font,
+                |s, v| s.prose_font = v,
+            ))
+            .child(heading("TEXT SIZE"))
+            .child(choice(
+                "text-size",
+                &[
+                    (TextSize::Small, "Small"),
+                    (TextSize::Medium, "Medium"),
+                    (TextSize::Large, "Large"),
+                    (TextSize::Huge, "Huge"),
+                ],
+                settings.text_size,
+                |s, v| s.text_size = v,
+            ))
+            .child(heading("COLUMN WIDTH"))
+            .child(choice(
+                "column-width",
+                &[
+                    (ColumnWidth::Narrow, "Narrow"),
+                    (ColumnWidth::Medium, "Medium"),
+                    (ColumnWidth::Wide, "Wide"),
+                ],
+                settings.column_width,
+                |s, v| s.column_width = v,
+            ))
             .child(heading("FOCUS MODE KEEPS BRIGHT"))
-            .child(
-                RadioGroup::vertical("focus-unit")
-                    .child(Radio::new("sentence").label("The sentence"))
-                    .child(Radio::new("paragraph").label("The paragraph"))
-                    .selected_index(Some(match settings.focus_unit {
-                        FocusUnit::Sentence => 0,
-                        FocusUnit::Paragraph => 1,
-                    }))
-                    .on_click(|index, _, cx| {
-                        let unit = if *index == 0 {
-                            FocusUnit::Sentence
-                        } else {
-                            FocusUnit::Paragraph
-                        };
-                        update(cx, |settings| settings.focus_unit = unit);
-                    }),
-            )
+            .child(choice(
+                "focus-unit",
+                &[
+                    (FocusUnit::Sentence, "The sentence"),
+                    (FocusUnit::Paragraph, "The paragraph"),
+                ],
+                settings.focus_unit,
+                |s, v| s.focus_unit = v,
+            ))
             .child(heading("TYPEWRITER SCROLLING"))
             .child(
                 Switch::new("typewriter")
@@ -208,6 +307,9 @@ mod tests {
         let settings = Settings {
             focus_unit: FocusUnit::Sentence,
             typewriter: false,
+            prose_font: ProseFont::Duo,
+            text_size: TextSize::Large,
+            column_width: ColumnWidth::Wide,
         };
         settings.save_to(&path).unwrap();
         assert_eq!(Settings::load_from(&path), settings);

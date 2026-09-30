@@ -67,6 +67,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Self {
         let editor = cx.new(|cx| Editor::new(document, text, window, cx));
+        crate::settings::follow_appearance(window, cx);
         Self {
             editor,
             bar: Bar::Hidden,
@@ -81,14 +82,24 @@ impl Workspace {
     /// file, or a new `Untitled.md` in it.
     pub fn new_folder(root: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let files = folder::scan(&root, folder::SCAN_LIMIT);
-        let path = folder::newest(&root, &files)
-            .map_or_else(|| root.join("Untitled.md"), |file| root.join(file));
-        let (document, text) = Document::open(path).unwrap_or_else(|error| {
-            eprintln!("focal: {error:#}");
-            (Document::untitled(), String::new())
-        });
+        let untitled = root.join("Untitled.md");
+        let newest = folder::newest(&root, &files).map(|file| root.join(file));
+        // A file Focal cannot read (not UTF-8) gives way to a new one, with
+        // the reason shown.
+        let (opened, failure) = match newest.map(Document::open) {
+            Some(Ok(opened)) => (Some(opened), None),
+            Some(Err(error)) => (None, Some(format!("{error:#}"))),
+            None => (None, None),
+        };
+        let (document, text) = opened
+            .or_else(|| Document::open(untitled).ok())
+            .unwrap_or_else(|| (Document::untitled(), String::new()));
         window.set_window_title(&document.title());
         let mut this = Self::new(document, text, window, cx);
+        if let Some(failure) = failure {
+            this.editor
+                .update(cx, |editor, cx| editor.show_error(failure, cx));
+        }
         let watch = match folder::watch(&root) {
             Ok((watcher, events)) => Some((watcher, Self::rescan_on(events, root.clone(), cx))),
             Err(error) => {

@@ -21,7 +21,7 @@ Focal is a native macOS Markdown editor: iA Writer's minimal look with Bear-styl
   - `crates/focal-core`: the UI-free editor model. Markdown analysis with `pulldown-cmark`, line display maps, the buffer with undo, Markdown-aware edits, accessibility text chunks. Put logic here and unit-test it.
   - `crates/focal`: the GPUI app through `gpui-kit` (pinned exactly; it pins `gpui-pre`). The window's root is a `Workspace` (`workspace.rs`) holding the `Editor` (`editor.rs`: text, caret, rendering), the bottom bar (`bar.rs`), folder mode (`folder.rs`, sidebar) and the quick switcher (`switcher.rs`). Tables are drawn in `table_view.rs` and edited through `grid.rs`; settings (`settings.rs`), menus (`menus.rs`), spell checking (`spell.rs`) and accessibility (`accessibility.rs`) have their own modules. The bar, menus and keys dispatch the same editor actions.
 - Commands: `mise run build`, `mise run run -- FILE`, `mise run test`, `mise run check` (fmt, Clippy with `-D warnings`, tests), `mise run stress`, `mise run clean`.
-- `FOCAL_TRACE=1` prints timings and the caret per change. `FOCAL_FOREGROUND=1` keeps `focal` in the terminal like `--wait`.
+- `FOCAL_TRACE=1` prints timings and the caret per change. `FOCAL_FOREGROUND=1` keeps `focal` in the terminal like `--wait`. `FOCAL_APPEARANCE=light` or `dark` overrides the system appearance for Focal alone, to check both palettes.
 - GPUI pitfalls found so far are listed in [docs/gpui-spike.md](docs/gpui-spike.md); absolutely positioned elements need explicit `top_0()`/`left_0()`.
 - Debug builds are large (several GB); run `mise run clean` when done.
 - CI runs on macOS, because the app links AppKit.
