@@ -80,6 +80,7 @@ actions!(
         CloseWindow,
         Quit,
         ShowCharacterPalette,
+        CellExit,
     ]
 );
 
@@ -105,6 +106,8 @@ pub struct LearnSpelling {
 }
 
 const CONTEXT: &str = "FocalEditor";
+/// Key bindings for the input of the table cell being edited.
+const CELL_CONTEXT: &str = "FocalCell > Input";
 /// Code blocks whose highlights are kept.
 const HIGHLIGHT_CACHE_LIMIT: usize = 2_000;
 /// Highlight styles per line of a code block.
@@ -113,7 +116,7 @@ type BlockHighlights = Vec<Vec<(Range<usize>, HighlightStyle)>>;
 type HighlightCache = std::collections::HashMap<(&'static str, u64, bool), Rc<BlockHighlights>>;
 /// Distinct line texts whose spelling results are kept.
 const SPELL_CACHE_LIMIT: usize = 20_000;
-const TEXT_SIZE: f32 = 18.;
+pub(crate) const TEXT_SIZE: f32 = 18.;
 const COLUMN_WIDTH: f32 = 720.;
 const AUTOSAVE_DELAY: Duration = Duration::from_millis(400);
 /// Editors and agents write in bursts; wait this long before reloading.
@@ -166,6 +169,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-w", CloseWindow, context),
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, context),
+        KeyBinding::new("escape", CellExit, Some(CELL_CONTEXT)),
     ]);
 }
 
@@ -178,9 +182,9 @@ pub(crate) enum Row {
 
 /// Everything derived from the text and caret, rebuilt after each change.
 #[derive(Default)]
-struct Snapshot {
+pub(crate) struct Snapshot {
     version: Option<u64>,
-    analysis: Rc<Analysis>,
+    pub(crate) analysis: Rc<Analysis>,
     views: Rc<[Rc<LineView>]>,
     rows: Rc<[Row]>,
     /// The source text of this version, for the accessibility tree.
@@ -197,11 +201,11 @@ struct Snapshot {
 
 /// Where a row was drawn in the last frame, for hit testing and caret moves.
 #[derive(Clone)]
-struct PaintedRow {
-    row: Row,
-    layout: Option<TextLayout>,
-    view: Option<Rc<LineView>>,
-    bounds: Bounds<Pixels>,
+pub(crate) struct PaintedRow {
+    pub(crate) row: Row,
+    pub(crate) layout: Option<TextLayout>,
+    pub(crate) view: Option<Rc<LineView>>,
+    pub(crate) bounds: Bounds<Pixels>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -218,17 +222,17 @@ enum Hit {
 
 #[allow(clippy::struct_excessive_bools)]
 pub struct Editor {
-    focus_handle: FocusHandle,
+    pub(crate) focus_handle: FocusHandle,
     buffer: Buffer,
     document: Document,
-    snapshot: Snapshot,
-    selection: Range<usize>,
+    pub(crate) snapshot: Snapshot,
+    pub(crate) selection: Range<usize>,
     reversed: bool,
     marked: Option<Range<usize>>,
     goal_x: Option<Pixels>,
     selecting: Option<(Granularity, Range<usize>)>,
     list: ListState,
-    painted: Rc<RefCell<Vec<PaintedRow>>>,
+    pub(crate) painted: Rc<RefCell<Vec<PaintedRow>>>,
     focus_mode: bool,
     conflict: bool,
     error: Option<String>,
@@ -242,6 +246,9 @@ pub struct Editor {
     save_task: Option<Task<()>>,
     /// Watches the file for changes on disk; dropping it stops watching.
     watch: Option<(notify::RecommendedWatcher, Task<()>)>,
+    /// The table cell being edited, if any.
+    pub(crate) grid: Option<crate::grid::GridSession>,
+    pub(crate) next_grid_session: u64,
 }
 
 impl Editor {
@@ -280,6 +287,8 @@ impl Editor {
             highlights: RefCell::default(),
             save_task: None,
             watch: None,
+            grid: None,
+            next_grid_session: 0,
         };
         editor.refresh();
         editor.watch_document(cx);
@@ -346,29 +355,21 @@ impl Editor {
             .map(|line| Rc::new(line_view(&analysis, text, line, Some(&caret))))
             .collect();
 
-        let active_table = analysis.table_at(self.head()).or_else(|| {
-            analysis.tables.iter().position(|t| {
-                t.range.start < self.selection.end && self.selection.start < t.range.end
-            })
-        });
         let mut rows = Vec::with_capacity(views.len());
         let mut line_rows = Vec::with_capacity(views.len());
         let mut line = 0;
         while line < views.len() {
-            match analysis.info(line).kind {
-                LineKind::Table(table) if Some(table) != active_table => {
-                    let lines = analysis.tables[table].lines.clone();
-                    for _ in lines.clone() {
-                        line_rows.push(rows.len());
-                    }
-                    rows.push(Row::Table(table));
-                    line = lines.end;
-                }
-                _ => {
+            if let LineKind::Table(table) = analysis.info(line).kind {
+                let lines = analysis.tables[table].lines.clone();
+                for _ in lines.clone() {
                     line_rows.push(rows.len());
-                    rows.push(Row::Line(line));
-                    line += 1;
                 }
+                rows.push(Row::Table(table));
+                line = lines.end;
+            } else {
+                line_rows.push(rows.len());
+                rows.push(Row::Line(line));
+                line += 1;
             }
         }
 
@@ -437,7 +438,7 @@ impl Editor {
 
     // ---- Selection and edits -------------------------------------------
 
-    fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+    pub(crate) fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         self.move_biased(offset, Bias::Right, cx);
     }
 
@@ -477,6 +478,22 @@ impl Editor {
         kind: EditKind,
         cx: &mut Context<Self>,
     ) {
+        if !matches!(kind, EditKind::Grid(_)) {
+            self.grid = None;
+        }
+        self.edit_keeping_grid(range, new, selection, kind, cx);
+    }
+
+    /// Edits without ending a table cell edit. While a cell is being edited,
+    /// the view does not scroll to the text caret.
+    pub(crate) fn edit_keeping_grid(
+        &mut self,
+        range: Range<usize>,
+        new: &str,
+        selection: Range<usize>,
+        kind: EditKind,
+        cx: &mut Context<Self>,
+    ) {
         let before = self.selection.clone();
         self.buffer
             .edit(range, new, before, selection.clone(), kind);
@@ -484,7 +501,9 @@ impl Editor {
         self.reversed = false;
         self.goal_x = None;
         self.refresh();
-        self.list.scroll_to_reveal_item(self.head_row());
+        if self.grid.is_none() {
+            self.list.scroll_to_reveal_item(self.head_row());
+        }
         self.schedule_save(cx);
         cx.notify();
     }
@@ -513,6 +532,18 @@ impl Editor {
 
     /// Applies a change and keeps the selection on the same text.
     fn apply_keeping_selection(&mut self, change: &editing::Change, cx: &mut Context<Self>) {
+        let selection = self.shifted_selection(change);
+        self.edit(
+            change.range.clone(),
+            &change.text,
+            selection,
+            EditKind::Other,
+            cx,
+        );
+    }
+
+    /// The selection moved along with the text around `change`.
+    pub(crate) fn shifted_selection(&self, change: &editing::Change) -> Range<usize> {
         let range = &change.range;
         let shift = |at: usize| {
             if at >= range.end {
@@ -523,8 +554,7 @@ impl Editor {
                 at
             }
         };
-        let selection = shift(self.selection.start)..shift(self.selection.end);
-        self.edit(range.clone(), &change.text, selection, EditKind::Other, cx);
+        shift(self.selection.start)..shift(self.selection.end)
     }
 
     fn line_range_at(&self, offset: usize) -> Range<usize> {
@@ -788,6 +818,7 @@ impl Editor {
     }
 
     fn restore(&mut self, selection: Range<usize>, cx: &mut Context<Self>) {
+        self.grid = None;
         let len = self.text().len();
         self.selection = selection.start.min(len)..selection.end.min(len);
         self.reversed = false;
@@ -931,6 +962,7 @@ impl Editor {
     }
 
     fn load_theirs(&mut self, text: &str, stamp: Option<Stamp>, cx: &mut Context<Self>) {
+        self.grid = None;
         let len = text.len();
         let selection = self.selection.start.min(len)..self.selection.end.min(len);
         self.buffer.replace_all(text, selection.clone());
@@ -1101,18 +1133,12 @@ impl Editor {
         };
         let offset = match hit {
             Hit::Table(table) => {
-                let start = self.snapshot.analysis.tables[table]
-                    .rows
-                    .first()
-                    .and_then(|row| row.first())
-                    .map_or(self.snapshot.analysis.tables[table].range.start, |cell| {
-                        cell.start
-                    });
-                self.move_to(start, cx);
+                self.edit_cell(table, 0, 0, window, cx);
                 return;
             }
             Hit::Text { offset } => offset,
         };
+        self.grid = None;
         if event.modifiers.platform
             && let Some(link) = self.snapshot.analysis.link_at(offset)
         {
@@ -1461,7 +1487,7 @@ impl Editor {
         let last = ix + 1 == self.snapshot.rows.len();
         let content = match row {
             Row::Line(line) => self.render_line(line, &theme, window, cx),
-            Row::Table(table) => self.render_table(table, &theme),
+            Row::Table(table) => self.render_table(table, &theme, cx),
         };
         div()
             .w_full()
@@ -1668,81 +1694,6 @@ impl Editor {
         )
     }
 
-    fn render_table(&self, table_ix: usize, theme: &Theme) -> gpui_kit::AnyElement {
-        let analysis = &self.snapshot.analysis;
-        let table = &analysis.tables[table_ix];
-        let text = self.text();
-        let columns = table.rows.iter().map(Vec::len).max().unwrap_or(0);
-        let painted = self.painted.clone();
-        let rows = table.rows.iter().enumerate().map(|(r, row)| {
-            let cells = (0..columns).map(move |c| {
-                let alignment = table.alignments.get(c).copied();
-                let content = row.get(c).map(|cell| {
-                    let line = analysis.lines.line_of(cell.start);
-                    let view = range_view(analysis, text, line, cell.clone(), None);
-                    let weight = if r == 0 {
-                        FontWeight::BOLD
-                    } else {
-                        FontWeight::NORMAL
-                    };
-                    StyledText::new(view.text.clone()).with_runs(text_runs(
-                        &view.runs, PROSE_FONT, weight, theme.text, theme, None, false,
-                    ))
-                });
-                div()
-                    .flex_1()
-                    .min_w(px(60.))
-                    .px(px(10.))
-                    .py(px(5.))
-                    .when(c > 0, |d| d.border_l_1())
-                    .border_color(theme.rule)
-                    .when(
-                        alignment == Some(focal_core::analysis::ColumnAlignment::Center),
-                        |d| d.text_center(),
-                    )
-                    .when(
-                        alignment == Some(focal_core::analysis::ColumnAlignment::Right),
-                        |d| d.text_right(),
-                    )
-                    .children(content)
-            });
-            div()
-                .flex()
-                .when(r > 0, |d| d.border_t_1())
-                .when(r == 0, |d| d.bg(theme.code_background))
-                .border_color(theme.rule)
-                .children(cells)
-        });
-        div()
-            .my(px(6.))
-            .text_size(px(TEXT_SIZE * 0.92))
-            .line_height(relative(1.45))
-            .border_1()
-            .border_color(theme.rule)
-            .rounded(px(6.))
-            .overflow_hidden()
-            .children(rows)
-            .child(
-                canvas(
-                    |_, _, _| {},
-                    move |bounds, (), _, _| {
-                        painted.borrow_mut().push(PaintedRow {
-                            row: Row::Table(table_ix),
-                            layout: None,
-                            view: None,
-                            bounds,
-                        });
-                    },
-                )
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full(),
-            )
-            .relative()
-            .into_any_element()
-    }
-
     fn render_banner(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<gpui_kit::AnyElement> {
         if self.conflict {
             let keep = cx.listener(|this, _, _, cx| this.keep_mine(cx));
@@ -1878,7 +1829,7 @@ fn paint_selection(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn text_runs(
+pub(crate) fn text_runs(
     runs: &[Run],
     family: &str,
     weight: FontWeight,
@@ -2225,6 +2176,7 @@ impl Render for Editor {
             .on_action(cx.listener(Self::replace_word))
             .on_action(cx.listener(Self::ignore_spelling))
             .on_action(cx.listener(Self::learn_spelling))
+            .on_action(cx.listener(Self::cell_exit))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_down(MouseButton::Right, cx.listener(Self::on_right_mouse_down))
             .on_mouse_move(cx.listener(Self::on_mouse_move))

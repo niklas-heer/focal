@@ -150,3 +150,53 @@ fn undo_restores_text_after_list_editing(cx: &mut TestAppContext) {
     });
     editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "- a"));
 }
+
+fn click_cell(window: &mut Window, cx: &mut App, table: usize, row: usize, column: usize) {
+    window
+        .within(("table", table))
+        .within(("row", row))
+        .click(("cell", column), cx);
+}
+
+#[gpui_kit::test]
+fn typing_in_a_cell_rewrites_the_table_aligned(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "| a | b |\n|---|---|\n| 1 | 2 |\n");
+    act(cx, window, |window, cx| {
+        click_cell(window, cx, 0, 1, 1);
+        window.press("cmd-a", cx);
+        window.input("wide value", cx);
+    });
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.text(),
+            "| a   | b          |\n| --- | ---------- |\n| 1   | wide value |\n"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn one_undo_restores_the_table_after_a_cell_edit(cx: &mut TestAppContext) {
+    let text = "| a | b |\n|---|---|\n| 1 | 2 |\n";
+    let (window, editor) = open_editor(cx, text);
+    act(cx, window, |window, cx| {
+        click_cell(window, cx, 0, 1, 0);
+        window.input("0", cx);
+        window.press("escape", cx);
+        window.press("cmd-z", cx);
+    });
+    editor.read_with(cx, |editor, _| assert_eq!(editor.text(), text));
+}
+
+#[gpui_kit::test]
+fn tables_never_show_their_source(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "above\n\n| a |\n|---|\n| 1 |\n");
+    act(cx, window, |window, cx| {
+        window.press("down", cx);
+        window.press("down", cx);
+        assert!(
+            window.try_find(("table", 0usize)).is_some(),
+            "the grid is still drawn"
+        );
+    });
+    let _ = editor;
+}

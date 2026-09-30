@@ -4,9 +4,11 @@
 mod accessibility;
 mod document;
 mod editor;
+mod grid;
 mod highlight;
 mod prefix;
 mod spell;
+mod table_view;
 mod theme;
 #[cfg(test)]
 mod ui_tests;
