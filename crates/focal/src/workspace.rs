@@ -269,6 +269,15 @@ impl Workspace {
         &self.editor
     }
 
+    /// Whether this window shows `path`, as its file or its folder.
+    pub fn shows(&self, path: &std::path::Path, cx: &gpui_kit::App) -> bool {
+        self.editor.read(cx).path() == Some(path)
+            || self
+                .folder
+                .as_ref()
+                .is_some_and(|folder| folder.root == path)
+    }
+
     /// Gives the editor keyboard focus.
     pub fn focus_editor(this: &Entity<Self>, window: &mut Window, cx: &mut gpui_kit::App) {
         let handle = this.read(cx).editor.read(cx).focus_handle(cx);

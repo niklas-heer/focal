@@ -785,3 +785,38 @@ fn a_folder_whose_newest_file_is_not_utf8_opens_a_savable_untitled(cx: &mut Test
         );
     });
 }
+
+#[gpui_kit::test]
+fn requests_open_a_window_per_file_and_reuse_open_ones(cx: &mut TestAppContext) {
+    use crate::instance::Request;
+    let root = notes_folder("windows", "new text");
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        editor::bind_keys(cx);
+        cx.set_global(Settings::default());
+        crate::windows::init(cx);
+    });
+    let open = |cx: &mut TestAppContext, path: std::path::PathBuf| {
+        cx.update(|cx| {
+            let request = Request {
+                path: Some(path),
+                ..Request::default()
+            };
+            crate::windows::open(request, None, cx);
+        });
+    };
+    open(cx, root.join("new.md"));
+    open(cx, root.join("old.md"));
+    open(cx, root.join("new.md"));
+    assert_eq!(
+        cx.update(|cx| cx.windows().len()),
+        2,
+        "an open file is not opened twice"
+    );
+    open(cx, root.clone());
+    assert_eq!(
+        cx.update(|cx| cx.windows().len()),
+        3,
+        "a folder opens its own window"
+    );
+}

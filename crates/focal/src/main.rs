@@ -8,6 +8,7 @@ mod editor;
 mod folder;
 mod grid;
 mod highlight;
+mod instance;
 mod menus;
 mod prefix;
 mod settings;
@@ -17,23 +18,22 @@ mod table_view;
 mod theme;
 #[cfg(test)]
 mod ui_tests;
+mod windows;
 mod workspace;
 
 use std::borrow::Cow;
 use std::ffi::OsString;
-use std::io::{IsTerminal as _, Read as _};
+use std::io::{ErrorKind, IsTerminal as _, Read as _};
 use std::os::unix::process::CommandExt as _;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail};
-use gpui_kit::{
-    App, AppContext as _, Bounds, TitlebarOptions, WindowBounds, WindowOptions, point, px, size,
-};
+use gpui_kit::App;
 
-use crate::document::Document;
 use crate::editor::Quit;
-use crate::workspace::Workspace;
+use crate::instance::Request;
 
 const USAGE: &str = "\
 Usage: focal [--wait] [FILE | FOLDER]
@@ -47,20 +47,25 @@ Options:
   -h, --help     Show this help
   -V, --version  Show the version";
 
-/// Set on the detached child so it does not detach again.
+/// Makes `focal` run the app in the foreground with its request, instead of
+/// handing it to a running instance (development and `mise run run`).
 const FOREGROUND_ENV: &str = "FOCAL_FOREGROUND";
 
 struct Args {
     path: Option<PathBuf>,
     wait: bool,
-    /// A temporary file holding piped input, handed to the detached child.
-    untitled_from: Option<PathBuf>,
+    /// Internal: run as the instance other `focal` calls forward to.
+    serve: bool,
 }
 
-enum Source {
-    File(PathBuf),
-    Folder(PathBuf),
-    Untitled(String),
+/// How this process runs the app.
+enum Launch {
+    /// Started by `focal`, which forwards its request once the socket is up.
+    Serve,
+    /// Started by Finder or the Dock; files arrive as open events.
+    Finder,
+    /// In the foreground with one request (`FOCAL_FOREGROUND`).
+    Open(Request),
 }
 
 fn main() {
@@ -74,42 +79,51 @@ fn run() -> Result<()> {
     let Some(args) = parse_args(std::env::args_os().skip(1))? else {
         return Ok(());
     };
-    let source = if let Some(temp) = &args.untitled_from {
-        let text = document::read(temp)?;
-        std::fs::remove_file(temp).ok();
-        Source::Untitled(text)
-    } else if let Some(path) = &args.path {
-        let path = std::path::absolute(path).context("resolving the path")?;
-        if path.is_dir() {
-            Source::Folder(path)
-        } else {
-            Source::File(path)
-        }
-    } else if std::io::stdin().is_terminal() {
-        Source::Untitled(String::new())
-    } else {
+    if args.serve {
+        run_app(Launch::Serve);
+        return Ok(());
+    }
+    // Finder and the Dock start the app with no arguments, from launchd.
+    if args.path.is_none() && !args.wait && std::os::unix::process::parent_id() == 1 {
+        run_app(Launch::Finder);
+        return Ok(());
+    }
+    let request = request(&args)?;
+    if std::env::var_os(FOREGROUND_ENV).is_some() {
+        run_app(Launch::Open(request));
+        return Ok(());
+    }
+    send(&request)
+}
+
+fn request(args: &Args) -> Result<Request> {
+    let path = match &args.path {
+        Some(path) => Some(std::path::absolute(path).context("resolving the path")?),
+        None => None,
+    };
+    let untitled = if path.is_none() && !std::io::stdin().is_terminal() {
         let mut text = String::new();
         std::io::stdin()
             .read_to_string(&mut text)
             .context("reading standard input as UTF-8")?;
-        Source::Untitled(text)
+        Some(text)
+    } else {
+        None
     };
-
-    if args.wait || std::env::var_os(FOREGROUND_ENV).is_some() {
-        run_app(source);
-        return Ok(());
-    }
-    detach(&source)
+    Ok(Request {
+        path,
+        untitled,
+        wait: args.wait,
+    })
 }
 
 fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Option<Args>> {
     let mut parsed = Args {
         path: None,
         wait: false,
-        untitled_from: None,
+        serve: false,
     };
-    let mut args = args.peekable();
-    while let Some(arg) = args.next() {
+    for arg in args {
         match arg.to_str() {
             Some("-h" | "--help") => {
                 println!("{USAGE}");
@@ -120,10 +134,7 @@ fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Option<Args>> {
                 return Ok(None);
             }
             Some("-w" | "--wait") => parsed.wait = true,
-            Some("--untitled-from") => {
-                parsed.untitled_from =
-                    Some(args.next().context("--untitled-from needs a path")?.into());
-            }
+            Some("--serve") => parsed.serve = true,
             Some(flag) if flag.starts_with('-') && flag != "-" => {
                 bail!("unknown option {flag}\n\n{USAGE}")
             }
@@ -134,32 +145,52 @@ fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Option<Args>> {
     Ok(Some(parsed))
 }
 
-/// Relaunches `focal` in the background so the terminal is free again.
-fn detach(source: &Source) -> Result<()> {
-    let mut command = Command::new(std::env::current_exe().context("locating focal")?);
-    match source {
-        Source::File(path) | Source::Folder(path) => {
-            command.arg(path);
-        }
-        Source::Untitled(text) => {
-            let temp = std::env::temp_dir().join(format!("focal-stdin-{}.md", std::process::id()));
-            std::fs::write(&temp, text).context("buffering standard input")?;
-            command.arg("--untitled-from").arg(temp);
+/// Hands the request to the running Focal, starting one if none runs.
+fn send(request: &Request) -> Result<()> {
+    let socket = instance::socket_path();
+    let absent = |error: &std::io::Error| {
+        matches!(
+            error.kind(),
+            ErrorKind::NotFound | ErrorKind::ConnectionRefused | ErrorKind::UnexpectedEof
+        )
+    };
+    match instance::forward(&socket, request) {
+        Ok(()) => return Ok(()),
+        Err(error) if absent(&error) => {}
+        Err(error) => bail!("{error}"),
+    }
+    start_instance()?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        std::thread::sleep(Duration::from_millis(40));
+        match instance::forward(&socket, request) {
+            Ok(()) => return Ok(()),
+            Err(error) if absent(&error) && Instant::now() < deadline => {}
+            Err(error) => bail!("could not reach the Focal window: {error}"),
         }
     }
-    command
-        .env(FOREGROUND_ENV, "1")
+}
+
+/// Starts the instance in the background, so the terminal is free again.
+fn start_instance() -> Result<()> {
+    Command::new(std::env::current_exe().context("locating focal")?)
+        .arg("--serve")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .process_group(0)
         .spawn()
-        .context("starting the Focal window")?;
+        .context("starting Focal")?;
     Ok(())
 }
 
-fn run_app(source: Source) {
-    gpui_kit::application().run(move |cx: &mut App| {
+fn run_app(launch: Launch) {
+    let app = gpui_kit::application();
+    let (urls_tx, urls_rx) = async_channel::unbounded::<Vec<String>>();
+    app.on_open_urls(move |urls| {
+        let _ = urls_tx.try_send(urls);
+    });
+    app.run(move |cx: &mut App| {
         gpui_kit::init(cx);
         force_appearance();
         load_fonts(cx);
@@ -167,62 +198,82 @@ fn run_app(source: Source) {
         workspace::bind_keys(cx);
         switcher::bind_keys(cx);
         settings::init(cx);
+        windows::init(cx);
         cx.on_action(|_: &Quit, cx| cx.quit());
         menus::set_menus(cx);
-        cx.on_window_closed(|cx, _| {
-            if cx.windows().is_empty() {
-                cx.quit();
+        serve(cx);
+        cx.spawn(async move |cx| {
+            while let Ok(urls) = urls_rx.recv().await {
+                let paths = urls.iter().filter_map(|url| instance::file_url_path(url));
+                let requests: Vec<Request> = paths
+                    .map(|path| Request {
+                        path: Some(path),
+                        ..Request::default()
+                    })
+                    .collect();
+                cx.update(|cx| {
+                    for request in requests {
+                        windows::open(request, None, cx);
+                    }
+                });
             }
         })
         .detach();
+        match launch {
+            Launch::Open(request) => windows::open(request, None, cx),
+            Launch::Serve | Launch::Finder => {
+                // Started by `focal`, a request follows at once; started from
+                // Finder, opened files follow. Without either, quit or open
+                // an empty document.
+                let finder = matches!(launch, Launch::Finder);
+                let wait = Duration::from_millis(if finder { 600 } else { 10_000 });
+                cx.spawn(async move |cx| {
+                    cx.background_executor().timer(wait).await;
+                    cx.update(|cx| {
+                        if cx.windows().is_empty() {
+                            if finder {
+                                windows::open(Request::default(), None, cx);
+                            } else {
+                                cx.quit();
+                            }
+                        }
+                    });
+                })
+                .detach();
+            }
+        }
+    });
+}
 
-        let (title, folder, opened) = match source {
-            Source::Folder(root) => {
-                let title = root.file_name().map_or_else(
-                    || root.display().to_string(),
-                    |n| n.to_string_lossy().into_owned(),
-                );
-                (title, Some(root), None)
-            }
-            Source::File(path) => match Document::open(path) {
-                Ok(opened) => (opened.0.title(), None, Some(opened)),
-                Err(error) => {
-                    eprintln!("focal: {error:#}");
-                    cx.quit();
-                    return;
-                }
-            },
-            Source::Untitled(text) => {
-                let document = Document::untitled();
-                (document.title(), None, Some((document, text)))
-            }
-        };
-        let bounds = Bounds::centered(None, size(px(860.), px(920.)), cx);
-        let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            titlebar: Some(TitlebarOptions {
-                title: Some(title.into()),
-                appears_transparent: true,
-                traffic_light_position: Some(point(px(14.), px(12.))),
-            }),
-            ..WindowOptions::default()
-        };
-        let window = gpui_kit::open_window(options, cx, |window, cx| {
-            let workspace = cx.new(|cx| match (folder, opened) {
-                (Some(root), _) => Workspace::new_folder(root, window, cx),
-                (None, Some((document, text))) => Workspace::new(document, text, window, cx),
-                (None, None) => Workspace::new(Document::untitled(), String::new(), window, cx),
-            });
-            Workspace::focus_editor(&workspace, window, cx);
-            workspace
-        });
-        if let Err(error) = window {
-            eprintln!("focal: could not open a window: {error:#}");
-            cx.quit();
+/// Accepts requests from other `focal` calls for as long as the app runs.
+fn serve(cx: &mut App) {
+    let socket = instance::socket_path();
+    let listener = match instance::listen(&socket) {
+        Ok(listener) => listener,
+        Err(error) => {
+            eprintln!("focal: not accepting other focal calls: {error}");
             return;
         }
-        cx.activate(true);
+    };
+    let (requests_tx, requests_rx) = async_channel::unbounded();
+    std::thread::spawn(move || {
+        while let Ok(pair) = instance::accept(&listener) {
+            if requests_tx.send_blocking(pair).is_err() {
+                break;
+            }
+        }
     });
+    cx.spawn(async move |cx| {
+        while let Ok((request, responder)) = requests_rx.recv().await {
+            cx.update(|cx| windows::open(request, Some(responder), cx));
+        }
+    })
+    .detach();
+    cx.on_app_quit(move |_| {
+        let _ = std::fs::remove_file(&socket);
+        async {}
+    })
+    .detach();
 }
 
 /// `FOCAL_APPEARANCE=light` or `dark` overrides the system appearance for
