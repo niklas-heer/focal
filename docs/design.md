@@ -58,6 +58,14 @@ Principles, in priority order:
 
 Today `focal` is the app itself: it relaunches in the background unless `--wait` is given. Proposed for distribution (M6): `Focal.app` contains the binary; a second `focal` call forwards the request to the running instance over a local socket instead of starting another process. The Homebrew cask in `niklas-heer/homebrew-tap` links it onto `PATH`, as with Keywink.
 
+**Agreed (2026-09-30):** the app can install the command itself, for installs that do not come through Homebrew. A menu item ("Install Command Line Tool…") puts `focal` on `PATH`, so a file opens quickly from the terminal. Proposed details: a symbolic link from `/usr/local/bin/focal` to the binary inside `Focal.app`, asking for an administrator password only when that folder is not writable, and an "Uninstall" counterpart.
+
+### Updates
+
+**Agreed (2026-09-30):** Focal updates itself. A setting turns automatic update checks on or off. When a newer version exists, Focal asks whether to download it ("A new version of Focal is available. Do you want to download it?") and never installs without that consent.
+
+Proposed details: Sparkle 2, as in Keywink and Spokn, with an appcast published per GitHub release and signed with the existing Sparkle key; Sparkle's standard prompt provides the question, release notes and "Skip This Version". Focal loads `Sparkle.framework` from the app bundle through `objc2`. Homebrew installs mark the cask `auto_updates true`, so Homebrew does not fight Sparkle.
+
 ### Documents
 
 - One document per window, managed by Focal itself. There is no `NSDocument`, so macOS versions ("Revert to…"), native window tabs and the recent-documents menu are not provided unless built later.
@@ -167,7 +175,7 @@ Milestone 0 compared TextKit 1 and TextKit 2 in a throwaway AppKit spike ([findi
 
 ### Settings (Proposed)
 
-Kept deliberately small: prose font, text size, column width, focus unit and typewriter scrolling.
+Kept deliberately small: prose font, text size, column width, focus unit, typewriter scrolling, and whether to check for updates automatically (Agreed, see [Updates](#updates)).
 
 ## 7. Extras (Agreed scope, Proposed implementation)
 
@@ -192,7 +200,7 @@ Kept deliberately small: prose font, text size, column width, focus unit and typ
 | **M3 — Chrome** | Bottom bar, focus mode with typewriter scrolling, folder mode with sidebar and quick switcher. |
 | **M4 — Extras** | Alerts, front matter, footnotes, highlight, images, math and wiki links. |
 | **M5 — Mermaid** | Lazy renderer, cache and island. |
-| **M6 — Distribution** | `Focal.app` bundle, single-instance forwarding for the `focal` command, signing, notarization, Homebrew cask, release process. |
+| **M6 — Distribution** | `Focal.app` bundle, single-instance forwarding for the `focal` command, "Install Command Line Tool…", automatic updates with a setting and a download prompt, signing, notarization, Homebrew cask, release process. |
 
 Each milestone gets its own implementation plan before work starts.
 
