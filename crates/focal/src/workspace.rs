@@ -312,7 +312,8 @@ impl Render for Workspace {
         let theme = Theme::for_appearance(window.appearance());
         let editor = self.editor.read(cx);
         let focus_mode = editor.focus_mode();
-        let bar = (!focus_mode).then(|| (self.bar, editor.bar_state()));
+        // The word count reads the whole text; only count while the bar shows.
+        let bar = (!focus_mode && self.bar != Bar::Hidden).then(|| (self.bar, editor.bar_state()));
         let sidebar = if focus_mode {
             None
         } else {
