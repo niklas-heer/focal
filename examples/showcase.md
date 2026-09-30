@@ -18,6 +18,24 @@ Focal hides Markdown syntax until the caret reaches it. This is **bold**, this i
 - [ ] An open task
 - [x] A finished task
 
+## Lists in depth
+
+1. First
+   - nested bullet
+     - deeper, with a long line that wraps so the continuation should start under this text rather than under the bullet
+2. Second
+9. Nine
+10. Ten
+
+- [ ] Open task
+  - [x] Nested done task
+
+> - A list inside a quote
+> - Second item
+
+- A quote inside a list:
+  > Quoted under the item
+
 ## Quotes and alerts
 
 > A quiet quote, the way iA Writer draws it.

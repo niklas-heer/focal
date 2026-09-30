@@ -94,9 +94,9 @@ Today `focal` is the app itself: it relaunches in the background unless `--wait`
 
 Measured on an Apple M4 (release): full parse 2.0 ms and restyle of every line 2.0 ms on the 5,000-line fixture, inside the 8 ms budget. Incremental parsing is not needed yet; the accessibility tree (about 12 ms per frame on that fixture while an assistive app is connected) needs caching first.
 
-### Line layout (Proposed)
+### Line layout (Agreed)
 
-The spike draws each line as one GPUI `StyledText`, which has no paragraph styles: wrapped list items do not hang under their text, bullets and task boxes are glyphs, and run backgrounds cannot be padded. M1 replaces it with a line element built from fragments, following Zed's editor (`LineFragment::Text` and `LineFragment::Element`): shaped text runs plus real elements (bullet, numbered marker, task checkbox, quote bar, heading margin marker) laid out inline, with soft wrapping computed separately so continuation lines can start at the content's indent. Zed's Markdown renderer lays out list items the same way, as a marker column beside the content, and renders task boxes as real checkboxes that toggle the source.
+The spike draws each line as one GPUI `StyledText`, which has no paragraph styles: wrapped list items do not hang under their text, bullets and task boxes are glyphs, and run backgrounds cannot be padded. M1 draws each line's prefix (its quote and list levels, from `focal-core`'s `LinePrefix`) as real elements in columns beside the content: a bar per quote level, and per list level a marker column holding a bullet, the item's number or a clickable checkbox. The content's text wraps inside its own column, so continuation lines hang under the text. Zed's Markdown renderer lays out list items the same way. Inline elements inside a line, which Zed's editor supports (`LineFragment::Element`), are not needed yet.
 
 ### Showing and hiding syntax (Proposed)
 
@@ -184,7 +184,7 @@ Kept deliberately small: prose font, text size, column width, focus unit and typ
 | Milestone | Outcome |
 | --- | --- |
 | **M0 — Engine spikes** | Done: TextKit 1 vs 2, the GPUI spike and the spell-checking and VoiceOver gate. GPUI chosen. |
-| **M1 — Core editor** | Line layout from fragments with hanging indents; real bullets, numbers and task checkboxes; nested lists, quotes and alerts drawn correctly; list editing (Return, Tab, Backspace at a marker); caret never enters hidden island source; file watching through FSEvents; accessibility tree caching; code highlighting; GPUI integration tests. Usable daily for prose and notes. |
+| **M1 — Core editor** | Done: line prefixes (quote bars, bullets, numbers, clickable checkboxes) drawn beside the text with hanging indents; the caret never stops inside a prefix; list editing (Return, Tab, Shift-Tab, Backspace at a marker); live reload through FSEvents; cached accessibility tree; code highlighting with tree-sitter; GPUI integration tests. |
 | **M2 — Tables** | Grid island, cell editing and navigation, row and column operations, aligned serialization, undo. |
 | **M3 — Chrome** | Bottom bar, focus mode with typewriter scrolling, folder mode with sidebar and quick switcher. |
 | **M4 — Extras** | Alerts, front matter, footnotes, highlight, images, math and wiki links. |
