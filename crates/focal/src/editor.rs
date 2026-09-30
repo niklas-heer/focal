@@ -18,7 +18,10 @@ use gpui_kit::accesskit::{ActionData, TextSelection};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::native_menu::NativeMenu;
 use gpui_kit::prelude::FluentBuilder as _;
-use gpui_kit::{AccessibleAction, Role, StatefulInteractiveElement as _, TestSupportExt as _};
+use gpui_kit::{
+    AccessibleAction, HighlightStyle, Role, StatefulInteractiveElement as _, TestSupportExt as _,
+    WindowAppearance,
+};
 use gpui_kit::{
     App, Bounds, ClipboardItem, Context, CursorStyle, ElementInputHandler, EntityInputHandler,
     FocusHandle, Focusable, FontStyle, FontWeight, Hsla, InteractiveElement as _, IntoElement,
@@ -102,6 +105,12 @@ pub struct LearnSpelling {
 }
 
 const CONTEXT: &str = "FocalEditor";
+/// Code blocks whose highlights are kept.
+const HIGHLIGHT_CACHE_LIMIT: usize = 2_000;
+/// Highlight styles per line of a code block.
+type BlockHighlights = Vec<Vec<(Range<usize>, HighlightStyle)>>;
+/// Block highlights by language, content hash and dark appearance.
+type HighlightCache = std::collections::HashMap<(&'static str, u64, bool), Rc<BlockHighlights>>;
 /// Distinct line texts whose spelling results are kept.
 const SPELL_CACHE_LIMIT: usize = 20_000;
 const TEXT_SIZE: f32 = 18.;
@@ -228,6 +237,8 @@ pub struct Editor {
     a11y_ids: RunIds,
     /// Misspelled display ranges per line text.
     spell_cache: RefCell<std::collections::HashMap<String, Rc<[Range<usize>]>>>,
+    /// Syntax highlights per code block, by language, content hash and appearance.
+    highlights: RefCell<HighlightCache>,
     save_task: Option<Task<()>>,
     /// Watches the file for changes on disk; dropping it stops watching.
     watch: Option<(notify::RecommendedWatcher, Task<()>)>,
@@ -266,6 +277,7 @@ impl Editor {
             spell: RefCell::new(SpellChecker::new()),
             a11y_ids: RunIds::default(),
             spell_cache: RefCell::default(),
+            highlights: RefCell::default(),
             save_task: None,
             watch: None,
         };
@@ -1211,6 +1223,85 @@ impl Editor {
         self.after_selection(cx);
     }
 
+    // ---- Code highlighting ------------------------------------------------
+
+    /// Highlighted runs for a line of a fenced code block in a known language.
+    fn code_runs(
+        &self,
+        line: usize,
+        view: &LineView,
+        base: Hsla,
+        dimmed: bool,
+        dark: bool,
+    ) -> Option<Vec<TextRun>> {
+        let analysis = &self.snapshot.analysis;
+        let info = analysis.info(line);
+        if info.kind != LineKind::Code {
+            return None;
+        }
+        let block = analysis.code_blocks.get(info.code_block?)?;
+        let language = crate::highlight::language_name(block.language.as_deref()?)?;
+        let lines: Vec<usize> = block
+            .lines
+            .clone()
+            .filter(|&l| analysis.info(l).kind == LineKind::Code)
+            .collect();
+        let index = lines.iter().position(|&l| l == line)?;
+        let texts: Vec<&str> = lines
+            .iter()
+            .map(|&l| &self.text()[analysis.content_range(l)])
+            .collect();
+        let mut hasher = DefaultHasher::new();
+        texts.hash(&mut hasher);
+        let key = (language, hasher.finish(), dark);
+        let highlights = {
+            let mut cache = self.highlights.borrow_mut();
+            if cache.len() > HIGHLIGHT_CACHE_LIMIT {
+                cache.clear();
+            }
+            cache
+                .entry(key)
+                .or_insert_with(|| {
+                    Rc::new(crate::highlight::highlight_block(language, &texts, dark))
+                })
+                .clone()
+        };
+        let styles = highlights.get(index)?;
+        let fade = |color: Hsla| if dimmed { color.opacity(0.3) } else { color };
+        let run = |len: usize, style: Option<&HighlightStyle>| {
+            let mut font = font(MONO_FONT);
+            if let Some(style) = style {
+                font.weight = style.font_weight.unwrap_or(font.weight);
+                font.style = style.font_style.unwrap_or(font.style);
+            }
+            TextRun {
+                len,
+                font,
+                color: fade(style.and_then(|s| s.color).unwrap_or(base)),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            }
+        };
+        let mut runs = Vec::new();
+        let mut at = 0;
+        for (range, style) in styles {
+            let range = range.start.max(at).min(view.text.len())..range.end.min(view.text.len());
+            if range.start >= range.end {
+                continue;
+            }
+            if range.start > at {
+                runs.push(run(range.start - at, None));
+            }
+            runs.push(run(range.len(), Some(style)));
+            at = range.end;
+        }
+        if at < view.text.len() {
+            runs.push(run(view.text.len() - at, None));
+        }
+        Some(runs)
+    }
+
     // ---- Spelling -----------------------------------------------------------
 
     /// Misspelled words of a line, as display ranges. Only prose is checked;
@@ -1430,15 +1521,23 @@ impl Editor {
         }
         let misspelled = self.misspelled(line, &view, &info.kind, true);
         let marked = mark_runs(&view.runs, &misspelled, InlineStyle::MISSPELLED);
-        let runs = text_runs(
-            &marked,
-            family,
-            weight,
-            base,
-            theme,
-            info.alert.map(|a| theme.alert(a)),
-            dimmed,
+        let dark = matches!(
+            window.appearance(),
+            WindowAppearance::Dark | WindowAppearance::VibrantDark
         );
+        let runs = self
+            .code_runs(line, &view, base, dimmed, dark)
+            .unwrap_or_else(|| {
+                text_runs(
+                    &marked,
+                    family,
+                    weight,
+                    base,
+                    theme,
+                    info.alert.map(|a| theme.alert(a)),
+                    dimmed,
+                )
+            });
         let text = StyledText::new(view.text.clone()).with_runs(runs);
         let layout = text.layout().clone();
         let line_range = analysis.content_range(line);

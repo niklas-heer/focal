@@ -4,6 +4,7 @@
 mod accessibility;
 mod document;
 mod editor;
+mod highlight;
 mod prefix;
 mod spell;
 mod theme;
