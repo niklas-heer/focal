@@ -127,9 +127,11 @@ impl TableModel {
         })
     }
 
+    /// Sets a cell's text. A table row is one line, so line breaks become
+    /// spaces.
     pub fn set_cell(&mut self, row: usize, column: usize, text: &str) {
         if let Some(cell) = self.rows.get_mut(row).and_then(|r| r.get_mut(column)) {
-            text.clone_into(cell);
+            *cell = text.replace("\r\n", " ").replace(['\n', '\r'], " ");
         }
     }
 
@@ -195,6 +197,13 @@ mod tests {
 
     fn model(text: &str) -> TableModel {
         TableModel::from_analysis(&analyze(text), text, 0).unwrap()
+    }
+
+    #[test]
+    fn a_line_break_in_a_cell_becomes_a_space() {
+        let mut m = model("| a |\n|---|\n| 1 |\n");
+        m.set_cell(1, 0, "one\r\ntwo\nthree");
+        assert_eq!(m.cell(1, 0), "one two three");
     }
 
     #[test]
