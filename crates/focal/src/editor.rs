@@ -81,6 +81,11 @@ actions!(
         Quit,
         ShowCharacterPalette,
         CellExit,
+        CellNext,
+        CellPrevious,
+        CellBelow,
+        CellUp,
+        CellDown,
     ]
 );
 
@@ -170,6 +175,11 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, context),
         KeyBinding::new("escape", CellExit, Some(CELL_CONTEXT)),
+        KeyBinding::new("tab", CellNext, Some(CELL_CONTEXT)),
+        KeyBinding::new("shift-tab", CellPrevious, Some(CELL_CONTEXT)),
+        KeyBinding::new("enter", CellBelow, Some(CELL_CONTEXT)),
+        KeyBinding::new("up", CellUp, Some(CELL_CONTEXT)),
+        KeyBinding::new("down", CellDown, Some(CELL_CONTEXT)),
     ]);
 }
 
@@ -213,6 +223,13 @@ enum Granularity {
     Character,
     Word,
     Line,
+}
+
+/// Where a vertical caret move lands.
+enum Vertical {
+    To(usize),
+    /// On a table, which the caret enters by editing a cell.
+    Table(usize),
 }
 
 enum Hit {
@@ -664,24 +681,48 @@ impl Editor {
         self.select_to(to, cx);
     }
 
-    fn up(&mut self, _: &Up, _: &mut Window, cx: &mut Context<Self>) {
-        let to = self.vertical(-1);
-        self.move_to(to, cx);
+    fn up(&mut self, _: &Up, window: &mut Window, cx: &mut Context<Self>) {
+        match self.vertical(-1) {
+            Vertical::To(to) => self.move_to(to, cx),
+            Vertical::Table(table) => {
+                let last = self.snapshot.analysis.tables[table]
+                    .rows
+                    .len()
+                    .saturating_sub(1);
+                self.edit_cell(table, last, 0, window, cx);
+            }
+        }
     }
 
-    fn down(&mut self, _: &Down, _: &mut Window, cx: &mut Context<Self>) {
-        let to = self.vertical(1);
-        self.move_to(to, cx);
+    fn down(&mut self, _: &Down, window: &mut Window, cx: &mut Context<Self>) {
+        match self.vertical(1) {
+            Vertical::To(to) => self.move_to(to, cx),
+            Vertical::Table(table) => self.edit_cell(table, 0, 0, window, cx),
+        }
+    }
+
+    /// A selection may span a table: it extends to the table's start or end.
+    fn select_vertically(&mut self, direction: i32, cx: &mut Context<Self>) {
+        let to = match self.vertical(direction) {
+            Vertical::To(to) => to,
+            Vertical::Table(table) => {
+                let range = &self.snapshot.analysis.tables[table].range;
+                if direction < 0 {
+                    range.start
+                } else {
+                    range.end
+                }
+            }
+        };
+        self.select_to(to, cx);
     }
 
     fn select_up(&mut self, _: &SelectUp, _: &mut Window, cx: &mut Context<Self>) {
-        let to = self.vertical(-1);
-        self.select_to(to, cx);
+        self.select_vertically(-1, cx);
     }
 
     fn select_down(&mut self, _: &SelectDown, _: &mut Window, cx: &mut Context<Self>) {
-        let to = self.vertical(1);
-        self.select_to(to, cx);
+        self.select_vertically(1, cx);
     }
 
     fn word_left(&mut self, _: &WordLeft, _: &mut Window, cx: &mut Context<Self>) {
@@ -1025,7 +1066,7 @@ impl Editor {
     }
 
     /// The source offset one visual line above or below the caret.
-    fn vertical(&mut self, direction: i32) -> usize {
+    fn vertical(&mut self, direction: i32) -> Vertical {
         let analysis = &self.snapshot.analysis;
         let head = self.head();
         let line = analysis.lines.line_of(head);
@@ -1037,10 +1078,10 @@ impl Editor {
             })
         };
         let Some((layout, view)) = find(line) else {
-            return self.vertical_by_column(direction);
+            return Vertical::To(self.vertical_by_column(direction));
         };
         let Some(position) = caret_position(&layout, view.map.to_display(head)) else {
-            return self.vertical_by_column(direction);
+            return Vertical::To(self.vertical_by_column(direction));
         };
         let x = *self.goal_x.get_or_insert(position.x);
         let line_height = layout.line_height();
@@ -1054,18 +1095,18 @@ impl Editor {
                 .map
                 .to_source(display_index(&layout, point(x, target_y)));
             if target != head {
-                return target;
+                return Vertical::To(target);
             }
         }
         let target = if direction < 0 {
             match line.checked_sub(1) {
                 Some(target) => target,
-                None => return 0,
+                None => return Vertical::To(0),
             }
         } else if line + 1 < analysis.line_count() {
             line + 1
         } else {
-            return self.text().len();
+            return Vertical::To(self.text().len());
         };
         let target_row = self
             .snapshot
@@ -1073,12 +1114,7 @@ impl Editor {
             .get(target)
             .and_then(|&row| self.snapshot.rows.get(row));
         if let Some(&Row::Table(table)) = target_row {
-            let table = &analysis.tables[table];
-            return if direction < 0 {
-                analysis.lines.range(table.lines.end - 1).start
-            } else {
-                table.range.start
-            };
+            return Vertical::Table(table);
         }
         match find(target) {
             Some((layout, view)) => {
@@ -1089,9 +1125,9 @@ impl Editor {
                 } else {
                     bounds.top() + half
                 };
-                view.map.to_source(display_index(&layout, point(x, y)))
+                Vertical::To(view.map.to_source(display_index(&layout, point(x, y))))
             }
-            None => self.vertical_by_column(direction),
+            None => Vertical::To(self.vertical_by_column(direction)),
         }
     }
 
@@ -2177,6 +2213,11 @@ impl Render for Editor {
             .on_action(cx.listener(Self::ignore_spelling))
             .on_action(cx.listener(Self::learn_spelling))
             .on_action(cx.listener(Self::cell_exit))
+            .on_action(cx.listener(Self::cell_next))
+            .on_action(cx.listener(Self::cell_previous))
+            .on_action(cx.listener(Self::cell_below))
+            .on_action(cx.listener(Self::cell_up))
+            .on_action(cx.listener(Self::cell_down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_down(MouseButton::Right, cx.listener(Self::on_right_mouse_down))
             .on_mouse_move(cx.listener(Self::on_mouse_move))

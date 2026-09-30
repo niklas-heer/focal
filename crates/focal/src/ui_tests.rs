@@ -122,19 +122,16 @@ fn tab_and_shift_tab_change_the_list_level(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn down_into_a_table_shows_its_source_with_the_caret_in_it(cx: &mut TestAppContext) {
+fn down_into_a_table_edits_its_first_cell(cx: &mut TestAppContext) {
     let text = "before\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nafter";
     let (window, editor) = open_editor(cx, text);
     act(cx, window, |window, cx| {
         window.press("down", cx);
         window.press("down", cx);
     });
+    act(cx, window, |window, cx| window.input("x", cx));
     editor.read_with(cx, |editor, _| {
-        let caret = editor.selection().start;
-        assert!(
-            (8..37).contains(&caret),
-            "caret {caret} is inside the table source"
-        );
+        assert!(editor.text().contains("| ax  | b   |"), "{}", editor.text());
     });
 }
 
@@ -199,4 +196,50 @@ fn tables_never_show_their_source(cx: &mut TestAppContext) {
         );
     });
     let _ = editor;
+}
+
+#[gpui_kit::test]
+fn tab_and_return_move_through_cells_and_add_rows(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "| a | b |\n|---|---|\n| 1 | 2 |\n");
+    // Each step gets its own frame: a newly focused cell's input receives
+    // text only once it has been drawn, as it always is between key presses.
+    act(cx, window, |window, cx| {
+        click_cell(window, cx, 0, 1, 0);
+        window.press("tab", cx);
+    });
+    act(cx, window, |window, cx| window.press("cmd-a", cx));
+    act(cx, window, |window, cx| {
+        window.input("B", cx);
+        window.press("enter", cx);
+    });
+    act(cx, window, |window, cx| window.input("new", cx));
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.text(),
+            "| a   | b   |\n| --- | --- |\n| 1   | B   |\n|     | new |\n"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn arrows_enter_and_leave_the_grid(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "above\n\n| a |\n|---|\n| 1 |\n\nbelow");
+    act(cx, window, |window, cx| {
+        window.press("down", cx);
+        window.press("down", cx);
+    });
+    act(cx, window, |window, cx| window.input("h", cx));
+    editor.read_with(cx, |editor, _| {
+        assert!(editor.text().contains("| ah  |"), "{}", editor.text());
+    });
+    act(cx, window, |window, cx| window.press("down", cx));
+    act(cx, window, |window, cx| window.press("down", cx));
+    act(cx, window, |window, cx| window.input("!", cx));
+    // ↓ from the last row leaves to the start of the line after the table.
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.text(),
+            "above\n\n| ah  |\n| --- |\n| 1   |\n!\nbelow"
+        );
+    });
 }
