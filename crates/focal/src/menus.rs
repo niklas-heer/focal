@@ -1,8 +1,9 @@
 //! The menu bar. Items dispatch the same actions as the keyboard shortcuts,
 //! which macOS shows beside them.
 
-use gpui_kit::{App, Menu, MenuItem, OsAction};
+use gpui_kit::{App, Menu, MenuItem, OsAction, actions};
 
+use crate::cli_install::{InstallCommand, UninstallCommand};
 use crate::editor::{
     Bold, CloseWindow, Copy, Cut, InlineCode, InsertCodeBlock, InsertLink, InsertMath, InsertTable,
     Italic, Paste, Quit, Redo, Save, SelectAll, SetHeading, Strikethrough, ToggleBullets,
@@ -12,10 +13,18 @@ use crate::settings::OpenSettings;
 use crate::switcher::QuickOpen;
 use crate::workspace::ToggleSidebar;
 
+actions!(focal, [AboutFocal]);
+
 pub fn set_menus(cx: &mut App) {
+    cx.on_action(|_: &AboutFocal, _| crate::mac::about_panel());
     cx.set_menus(vec![
         Menu::new("Focal").items([
+            MenuItem::action("About Focal", AboutFocal),
+            MenuItem::separator(),
             MenuItem::action("Settings…", OpenSettings),
+            MenuItem::separator(),
+            MenuItem::action("Install Command Line Tool…", InstallCommand),
+            MenuItem::action("Uninstall Command Line Tool…", UninstallCommand),
             MenuItem::separator(),
             MenuItem::action("Quit Focal", Quit),
         ]),

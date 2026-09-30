@@ -3,12 +3,14 @@
 
 mod accessibility;
 mod bar;
+mod cli_install;
 mod document;
 mod editor;
 mod folder;
 mod grid;
 mod highlight;
 mod instance;
+mod mac;
 mod menus;
 mod prefix;
 mod settings;
@@ -192,13 +194,14 @@ fn run_app(launch: Launch) {
     });
     app.run(move |cx: &mut App| {
         gpui_kit::init(cx);
-        force_appearance();
+        mac::force_appearance();
         load_fonts(cx);
         editor::bind_keys(cx);
         workspace::bind_keys(cx);
         switcher::bind_keys(cx);
         settings::init(cx);
         windows::init(cx);
+        cli_install::init(cx);
         cx.on_action(|_: &Quit, cx| cx.quit());
         menus::set_menus(cx);
         serve(cx);
@@ -274,24 +277,6 @@ fn serve(cx: &mut App) {
         async {}
     })
     .detach();
-}
-
-/// `FOCAL_APPEARANCE=light` or `dark` overrides the system appearance for
-/// Focal alone, to check both palettes without switching the whole Mac.
-fn force_appearance() {
-    use objc2::MainThreadMarker;
-    use objc2_app_kit::{NSAppearance, NSApplication};
-    use objc2_foundation::NSString;
-    let name = match std::env::var("FOCAL_APPEARANCE").as_deref() {
-        Ok("light") => "NSAppearanceNameAqua",
-        Ok("dark") => "NSAppearanceNameDarkAqua",
-        _ => return,
-    };
-    let Some(mtm) = MainThreadMarker::new() else {
-        return;
-    };
-    let appearance = NSAppearance::appearanceNamed(&NSString::from_str(name));
-    NSApplication::sharedApplication(mtm).setAppearance(appearance.as_deref());
 }
 
 fn load_fonts(cx: &App) {
