@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use focal_core::analysis::{InlineStyle, LineKind};
 use focal_core::display::{Run, mark_runs, prose_ranges};
 use focal_core::{
-    Analysis, Buffer, Caret, EditKind, LineView, analyze, editing, line_view, range_view,
+    Analysis, Bias, Buffer, Caret, EditKind, LineView, analyze, editing, line_view, range_view,
 };
 use gpui_kit::accesskit::{ActionData, TextSelection};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -423,12 +423,24 @@ impl Editor {
     // ---- Selection and edits -------------------------------------------
 
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.move_biased(offset, Bias::Right, cx);
+    }
+
+    /// Moves the caret, stepping out of a line's prefix (quote bars, list
+    /// markers) in the direction of `bias`.
+    fn move_biased(&mut self, offset: usize, bias: Bias, cx: &mut Context<Self>) {
+        let offset = self.snapshot.analysis.snap(offset, bias);
         self.selection = offset..offset;
         self.reversed = false;
         self.after_selection(cx);
     }
 
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.select_biased(offset, Bias::Right, cx);
+    }
+
+    fn select_biased(&mut self, offset: usize, bias: Bias, cx: &mut Context<Self>) {
+        let offset = self.snapshot.analysis.snap(offset, bias);
         let tail = self.tail();
         self.reversed = offset < tail;
         self.selection = tail.min(offset)..tail.max(offset);
@@ -478,6 +490,28 @@ impl Editor {
         self.edit(range, text, caret..caret, kind, cx);
     }
 
+    /// Where the content of the line at `offset` starts, after its prefix.
+    fn content_start_at(&self, offset: usize) -> usize {
+        let analysis = &self.snapshot.analysis;
+        analysis.content_range(analysis.lines.line_of(offset)).start
+    }
+
+    /// Applies a change and keeps the selection on the same text.
+    fn apply_keeping_selection(&mut self, change: &editing::Change, cx: &mut Context<Self>) {
+        let range = &change.range;
+        let shift = |at: usize| {
+            if at >= range.end {
+                at - range.len() + change.text.len()
+            } else if at > range.start {
+                range.start + change.text.len()
+            } else {
+                at
+            }
+        };
+        let selection = shift(self.selection.start)..shift(self.selection.end);
+        self.edit(range.clone(), &change.text, selection, EditKind::Other, cx);
+    }
+
     fn line_range_at(&self, offset: usize) -> Range<usize> {
         let lines = &self.snapshot.analysis.lines;
         lines.range(lines.line_of(offset))
@@ -488,6 +522,10 @@ impl Editor {
     fn backspace(&mut self, _: &Backspace, _: &mut Window, cx: &mut Context<Self>) {
         if self.selection.is_empty() {
             let head = self.head();
+            if let Some(change) = editing::backspace_prefix(&self.snapshot.analysis, head) {
+                self.apply(change, cx);
+                return;
+            }
             let start = self.buffer.previous_grapheme(head);
             if start == head {
                 return;
@@ -553,7 +591,7 @@ impl Editor {
         self.goal_x = None;
         if self.selection.is_empty() {
             let to = self.buffer.previous_grapheme(self.head());
-            self.move_to(to, cx);
+            self.move_biased(to, Bias::Left, cx);
         } else {
             self.move_to(self.selection.start, cx);
         }
@@ -572,7 +610,7 @@ impl Editor {
     fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
         self.goal_x = None;
         let to = self.buffer.previous_grapheme(self.head());
-        self.select_to(to, cx);
+        self.select_biased(to, Bias::Left, cx);
     }
 
     fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
@@ -603,7 +641,7 @@ impl Editor {
 
     fn word_left(&mut self, _: &WordLeft, _: &mut Window, cx: &mut Context<Self>) {
         let to = self.buffer.previous_word(self.head());
-        self.move_to(to, cx);
+        self.move_biased(to, Bias::Left, cx);
     }
 
     fn word_right(&mut self, _: &WordRight, _: &mut Window, cx: &mut Context<Self>) {
@@ -613,7 +651,7 @@ impl Editor {
 
     fn select_word_left(&mut self, _: &SelectWordLeft, _: &mut Window, cx: &mut Context<Self>) {
         let to = self.buffer.previous_word(self.head());
-        self.select_to(to, cx);
+        self.select_biased(to, Bias::Left, cx);
     }
 
     fn select_word_right(&mut self, _: &SelectWordRight, _: &mut Window, cx: &mut Context<Self>) {
@@ -622,7 +660,7 @@ impl Editor {
     }
 
     fn line_start(&mut self, _: &LineStart, _: &mut Window, cx: &mut Context<Self>) {
-        let to = self.line_range_at(self.head()).start;
+        let to = self.content_start_at(self.head());
         self.move_to(to, cx);
     }
 
@@ -632,7 +670,7 @@ impl Editor {
     }
 
     fn select_line_start(&mut self, _: &SelectLineStart, _: &mut Window, cx: &mut Context<Self>) {
-        let to = self.line_range_at(self.head()).start;
+        let to = self.content_start_at(self.head());
         self.select_to(to, cx);
     }
 
@@ -678,32 +716,19 @@ impl Editor {
     }
 
     fn indent(&mut self, _: &Indent, _: &mut Window, cx: &mut Context<Self>) {
-        let line = self.line_range_at(self.head());
-        if is_list_line(&self.text()[line.clone()]) {
-            let selection = self.selection.start + 2..self.selection.end + 2;
-            self.edit(line.start..line.start, "  ", selection, EditKind::Other, cx);
-        } else {
-            self.insert("\t", EditKind::Typing, cx);
+        let lines = &self.snapshot.analysis.lines;
+        let line = lines.line_of(self.head());
+        match editing::indent_list_item(self.text(), lines, line) {
+            Some(change) => self.apply_keeping_selection(&change, cx),
+            None => self.insert("\t", EditKind::Typing, cx),
         }
     }
 
     fn outdent(&mut self, _: &Outdent, _: &mut Window, cx: &mut Context<Self>) {
-        let line = self.line_range_at(self.head());
-        let spaces = self.text()[line.clone()]
-            .bytes()
-            .take(2)
-            .take_while(|&b| b == b' ')
-            .count();
-        if spaces > 0 {
-            let start = self.selection.start.saturating_sub(spaces).max(line.start);
-            let end = self.selection.end.saturating_sub(spaces).max(line.start);
-            self.edit(
-                line.start..line.start + spaces,
-                "",
-                start..end,
-                EditKind::Other,
-                cx,
-            );
+        let lines = &self.snapshot.analysis.lines;
+        let line = lines.line_of(self.head());
+        if let Some(change) = editing::outdent_list_item(self.text(), lines, line) {
+            self.apply_keeping_selection(&change, cx);
         }
     }
 
@@ -1870,16 +1895,6 @@ fn paragraph_around(analysis: &Analysis, text: &str, offset: usize) -> Range<usi
         end += 1;
     }
     start..end
-}
-
-fn is_list_line(line: &str) -> bool {
-    let trimmed = line.trim_start_matches([' ', '\t', '>']);
-    trimmed.starts_with("- ")
-        || trimmed.starts_with("* ")
-        || trimmed.starts_with("+ ")
-        || trimmed.split_once(['.', ')']).is_some_and(|(n, rest)| {
-            !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) && rest.starts_with(' ')
-        })
 }
 
 impl EntityInputHandler for Editor {

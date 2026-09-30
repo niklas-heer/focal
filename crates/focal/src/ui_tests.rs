@@ -85,3 +85,38 @@ fn clicking_a_checkbox_toggles_the_task(cx: &mut TestAppContext) {
         assert_eq!(editor.text(), "- [x] buy milk\n- [ ] done");
     });
 }
+
+#[gpui_kit::test]
+fn arrow_left_from_an_item_skips_its_marker(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "intro\n- item");
+    act(cx, window, |window, cx| {
+        window.press("cmd-down", cx);
+        window.press("cmd-left", cx);
+    });
+    editor.read_with(cx, |editor, _| assert_eq!(editor.selection(), 8..8));
+    act(cx, window, |window, cx| window.press("left", cx));
+    editor.read_with(cx, |editor, _| assert_eq!(editor.selection(), 5..5));
+}
+
+#[gpui_kit::test]
+fn backspace_at_an_item_start_removes_the_bullet(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "- item");
+    act(cx, window, |window, cx| {
+        window.press("cmd-down", cx);
+        window.press("cmd-left", cx);
+        window.press("backspace", cx);
+    });
+    editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "item"));
+}
+
+#[gpui_kit::test]
+fn tab_and_shift_tab_change_the_list_level(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "- a\n- b");
+    act(cx, window, |window, cx| {
+        window.press("cmd-down", cx);
+        window.press("tab", cx);
+    });
+    editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "- a\n  - b"));
+    act(cx, window, |window, cx| window.press("shift-tab", cx));
+    editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "- a\n- b"));
+}
