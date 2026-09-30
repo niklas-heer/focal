@@ -9,7 +9,8 @@
 #
 # Overrides: FOCAL_SIGNING_IDENTITY, FOCAL_NOTARY_PROFILE, FOCAL_UPDATE_FEED_URL,
 # FOCAL_UPDATE_PUBLIC_KEY, FOCAL_SPARKLE_ACCOUNT (Keychain account of the
-# Sparkle key) or FOCAL_SPARKLE_KEY_FILE (a key file instead, for tests).
+# Sparkle key) or FOCAL_SPARKLE_KEY_FILE (a key file instead, for tests; give
+# its public key as FOCAL_UPDATE_PUBLIC_KEY).
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
@@ -72,6 +73,10 @@ cp "$artifact" "$temporary/appcast/"
   --link "https://github.com/niklas-heer/focal/releases/tag/v$version" \
   -o "$artifacts/appcast.xml" "$temporary/appcast"
 signature="$(sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p' "$artifacts/appcast.xml" | head -1)"
+if [[ -z "$signature" ]]; then
+  echo "appcast.xml has no EdDSA signature: the Sparkle key does not match the app's SUPublicEDKey." >&2
+  exit 65
+fi
 "$tools/sign_update" "${key[@]}" --verify "$artifact" "$signature"
 
 echo "Prepared release artifacts:"
