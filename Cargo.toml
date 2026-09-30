@@ -29,6 +29,8 @@ missing_errors_doc = "allow"
 cast_precision_loss = "allow"
 # GPUI builder closures such as `|d| d.border_l_1()` read better inline.
 redundant_closure_for_method_calls = "allow"
+# `use Kind::*` keeps long matches over operation kinds readable.
+enum_glob_use = "allow"
 
 [profile.dev]
 debug = 0

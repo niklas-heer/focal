@@ -2,11 +2,41 @@
 //! change rewrites the table's source through the buffer, and a whole cell
 //! edit undoes as one step.
 
+use focal_core::analysis::ColumnAlignment;
 use focal_core::{EditKind, TableModel, editing::Change};
 use gpui_kit::component::input::{InputEvent, InputState, Position};
 use gpui_kit::{AppContext as _, Context, Entity, Subscription, Window};
 
 use crate::editor::{CellBelow, CellDown, CellExit, CellNext, CellPrevious, CellUp, Editor};
+
+/// A row or column operation on a table, from its menu or hover controls.
+#[derive(Clone, Debug, PartialEq, gpui_kit::Action)]
+#[action(namespace = focal, no_json)]
+pub struct TableOp {
+    pub table: usize,
+    pub row: usize,
+    pub column: usize,
+    pub op: TableOpKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TableOpKind {
+    InsertRowAbove,
+    InsertRowBelow,
+    DeleteRow,
+    InsertColumnLeft,
+    InsertColumnRight,
+    DeleteColumn,
+    AlignLeft,
+    AlignCenter,
+    AlignRight,
+    AlignNone,
+    MoveRowUp,
+    MoveRowDown,
+    MoveColumnLeft,
+    MoveColumnRight,
+    EditAsMarkdown,
+}
 
 pub(crate) struct GridSession {
     pub table: usize,
@@ -202,5 +232,73 @@ impl Editor {
             };
             self.leave_grid(to, window, cx);
         }
+    }
+
+    pub(crate) fn table_op(
+        &mut self,
+        action: &TableOp,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use TableOpKind::*;
+        let (table, row, column) = (action.table, action.row, action.column);
+        if action.op == EditAsMarkdown {
+            self.grid = None;
+            self.table_source = Some(table);
+            let start = self.snapshot.analysis.tables[table].range.start;
+            window.focus(&self.focus_handle, cx);
+            self.move_to(start, cx);
+            return;
+        }
+        let analysis = self.snapshot.analysis.clone();
+        let Some(mut model) = TableModel::from_analysis(&analysis, self.text(), table) else {
+            return;
+        };
+        let (mut row, mut column) = (row, column);
+        match action.op {
+            InsertRowAbove => model.insert_row(row.max(1)),
+            InsertRowBelow => {
+                model.insert_row(row + 1);
+                row += 1;
+            }
+            DeleteRow => {
+                model.delete_row(row);
+                row = row.saturating_sub(1).max(usize::from(model.rows.len() > 1));
+            }
+            InsertColumnLeft => model.insert_column(column),
+            InsertColumnRight => {
+                model.insert_column(column + 1);
+                column += 1;
+            }
+            DeleteColumn => {
+                model.delete_column(column);
+                column = column.min(model.column_count() - 1);
+            }
+            AlignLeft => model.set_alignment(column, ColumnAlignment::Left),
+            AlignCenter => model.set_alignment(column, ColumnAlignment::Center),
+            AlignRight => model.set_alignment(column, ColumnAlignment::Right),
+            AlignNone => model.set_alignment(column, ColumnAlignment::None),
+            MoveRowUp => {
+                model.move_row(row, row.saturating_sub(1));
+                row = row.saturating_sub(1).max(1);
+            }
+            MoveRowDown => {
+                model.move_row(row, row + 1);
+                row = (row + 1).min(model.rows.len() - 1);
+            }
+            MoveColumnLeft => {
+                model.move_column(column, column.saturating_sub(1));
+                column = column.saturating_sub(1);
+            }
+            MoveColumnRight => {
+                model.move_column(column, column + 1);
+                column = (column + 1).min(model.column_count() - 1);
+            }
+            EditAsMarkdown => {}
+        }
+        if let Some(change) = model.replace(&analysis, self.text(), table) {
+            self.apply_in_grid(&change, EditKind::Other, cx);
+        }
+        self.edit_cell(table, row, column, window, cx);
     }
 }

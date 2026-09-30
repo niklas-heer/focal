@@ -266,6 +266,8 @@ pub struct Editor {
     /// The table cell being edited, if any.
     pub(crate) grid: Option<crate::grid::GridSession>,
     pub(crate) next_grid_session: u64,
+    /// A table shown as Markdown source until the caret leaves it.
+    pub(crate) table_source: Option<usize>,
 }
 
 impl Editor {
@@ -306,6 +308,7 @@ impl Editor {
             watch: None,
             grid: None,
             next_grid_session: 0,
+            table_source: None,
         };
         editor.refresh();
         editor.watch_document(cx);
@@ -376,7 +379,9 @@ impl Editor {
         let mut line_rows = Vec::with_capacity(views.len());
         let mut line = 0;
         while line < views.len() {
-            if let LineKind::Table(table) = analysis.info(line).kind {
+            if let LineKind::Table(table) = analysis.info(line).kind
+                && self.table_source != Some(table)
+            {
                 let lines = analysis.tables[table].lines.clone();
                 for _ in lines.clone() {
                     line_rows.push(rows.len());
@@ -482,6 +487,12 @@ impl Editor {
 
     fn after_selection(&mut self, cx: &mut Context<Self>) {
         self.marked = None;
+        // A table shown as source turns back into a grid once the caret leaves it.
+        if let Some(table) = self.table_source
+            && self.snapshot.analysis.table_at(self.head()) != Some(table)
+        {
+            self.table_source = None;
+        }
         self.refresh();
         self.list.scroll_to_reveal_item(self.head_row());
         cx.notify();
@@ -2213,6 +2224,7 @@ impl Render for Editor {
             .on_action(cx.listener(Self::ignore_spelling))
             .on_action(cx.listener(Self::learn_spelling))
             .on_action(cx.listener(Self::cell_exit))
+            .on_action(cx.listener(Self::table_op))
             .on_action(cx.listener(Self::cell_next))
             .on_action(cx.listener(Self::cell_previous))
             .on_action(cx.listener(Self::cell_below))

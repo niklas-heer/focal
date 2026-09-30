@@ -243,3 +243,62 @@ fn arrows_enter_and_leave_the_grid(cx: &mut TestAppContext) {
         );
     });
 }
+
+fn table_op(
+    cx: &mut TestAppContext,
+    window: AnyWindowHandle,
+    row: usize,
+    column: usize,
+    op: crate::grid::TableOpKind,
+) {
+    act(cx, window, |window, cx| {
+        window.dispatch_action(
+            Box::new(crate::grid::TableOp {
+                table: 0,
+                row,
+                column,
+                op,
+            }),
+            cx,
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn row_and_column_operations_rewrite_the_table(cx: &mut TestAppContext) {
+    use crate::grid::TableOpKind::*;
+    let (window, editor) = open_editor(cx, "| a | b |\n|---|---|\n| 1 | 2 |\n");
+    act(cx, window, |window, cx| click_cell(window, cx, 0, 1, 0));
+    table_op(cx, window, 1, 0, InsertRowBelow);
+    table_op(cx, window, 1, 1, InsertColumnRight);
+    table_op(cx, window, 1, 0, AlignRight);
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.text(),
+            "|   a | b   |     |\n| --: | --- | --- |\n|   1 | 2   |     |\n|     |     |     |\n"
+        );
+    });
+    table_op(cx, window, 2, 2, DeleteColumn);
+    table_op(cx, window, 2, 0, DeleteRow);
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.text(),
+            "|   a | b   |\n| --: | --- |\n|   1 | 2   |\n"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn edit_as_markdown_shows_the_source_until_the_caret_leaves(cx: &mut TestAppContext) {
+    use crate::grid::TableOpKind::*;
+    let (window, editor) = open_editor(cx, "| a |\n|---|\n| 1 |\n\nafter");
+    table_op(cx, window, 0, 0, EditAsMarkdown);
+    act(cx, window, |window, cx| {
+        assert!(
+            window.try_find(("table", 0usize)).is_none(),
+            "shown as source"
+        );
+        window.input("x", cx);
+    });
+    editor.read_with(cx, |editor, _| assert!(editor.text().starts_with("x| a |")));
+}
