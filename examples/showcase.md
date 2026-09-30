@@ -60,8 +60,23 @@ fn main() {
 | Feature | Status | Notes |
 |:--------|:------:|------:|
 | Live rendering | **works** | markers hide |
-| Tables | grid | click to edit source |
+| Tables | grid | click a cell to edit it |
 | Mermaid | later | M5 |
+
+Tab and Return move between cells, a right-click shows row and column actions, and the handles drag rows and columns. A wide table scrolls sideways:
+
+| Milestone | Scope | Rendering | Editing | Files | Status |
+|:--|:--|:--|:--|:--|:--|
+| M1 | Core editor | Live Markdown with markers that hide away from the caret | Lists, checklists, quotes, undo | Open, save, watch for changes | done |
+| M2 | Tables | A grid with aligned columns and bold headers | Cells in place, drag to reorder, alignment | Rewritten aligned only when edited | done |
+| M3 | Chrome | Bottom bar and focus mode | Typewriter scrolling | Folder mode with a sidebar and quick switcher | next |
+
+> A table can live in a quote:
+>
+> | Key | Action |
+> |:--|:--|
+> | ⌘Z | undo |
+> | Tab | next cell |
 
 ---
 

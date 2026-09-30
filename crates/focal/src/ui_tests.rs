@@ -322,3 +322,60 @@ fn dragging_a_row_handle_moves_the_row(cx: &mut TestAppContext) {
         );
     });
 }
+
+#[gpui_kit::test]
+fn jumping_to_the_end_of_a_long_document_shows_the_caret(cx: &mut TestAppContext) {
+    let text = "Line\n\n".repeat(400);
+    let (window, editor) = open_editor(cx, &text);
+    act(cx, window, |window, cx| window.press("cmd-down", cx));
+    // Rows below the viewport are measured only as they are laid out.
+    for _ in 0..3 {
+        act(cx, window, |_, _| {});
+    }
+    editor.read_with(cx, |editor, _| {
+        let bounds = editor
+            .head_row_bounds()
+            .expect("the caret's row is laid out");
+        assert!(
+            bounds.bottom() <= px(700.),
+            "the caret's row ends at {:?}, below the window",
+            bounds.bottom()
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn dragging_a_column_handle_moves_the_column(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "> | Key | Action |\n> |:--|:--|\n> | z | undo |\n");
+    act(cx, window, |window, cx| window.hover(("table", 0usize), cx));
+    act(cx, window, |window, cx| {
+        window
+            .within(("table", 0usize))
+            .within(("row", 0usize))
+            .drag_to(("column-handle", 1usize), ("cell", 0usize), cx);
+    });
+    act(cx, window, |_, _| {});
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.text(),
+            "> | Action | Key |\n> | :----- | :-- |\n> | undo   | z   |\n"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn pressing_a_drag_handle_does_not_edit_a_cell(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "| a | b |\n|---|---|\n| 1 | 2 |\n");
+    act(cx, window, |window, cx| window.hover(("table", 0usize), cx));
+    act(cx, window, |window, cx| {
+        window
+            .within(("table", 0usize))
+            .click(("column-handle", 1usize), cx);
+    });
+    act(cx, window, |window, cx| {
+        window
+            .within(("table", 0usize))
+            .click(("row-handle", 1usize), cx);
+    });
+    editor.read_with(cx, |editor, _| assert_eq!(editor.editing_cell(), None));
+}

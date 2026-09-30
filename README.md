@@ -2,7 +2,7 @@
 
 A focused, native Markdown editor for macOS that you open from the terminal.
 
-> **Status:** early. Focal is built in Rust with [GPUI](https://gpui.rs), Zed's GPU-accelerated UI framework. Milestone 1 is done: lists, checkboxes and quotes are drawn and edited properly, files reload live, code blocks are highlighted and VoiceOver can read the document. Tables in the grid are next (Milestone 2). See [the design](docs/design.md).
+> **Status:** early. Focal is built in Rust with [GPUI](https://gpui.rs), Zed's GPU-accelerated UI framework. Milestone 1 is done: lists, checkboxes and quotes are drawn and edited properly, files reload live, code blocks are highlighted and VoiceOver can read the document. Milestone 2 is done too: tables are grids you edit in place, with rows and columns you can add, move, align and drag, and the file stays aligned. The chrome (bottom bar, focus mode, folder mode) is next. See [the design](docs/design.md).
 
 ## Try it
 

@@ -245,6 +245,10 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         use TableOpKind::*;
+        // Keep what was typed, then close the cell: its row and column may
+        // hold another cell once the table changes shape.
+        self.cell_changed(window, cx);
+        self.grid = None;
         let (table, row, column) = (action.table, action.row, action.column);
         if action.op == EditAsMarkdown {
             self.grid = None;

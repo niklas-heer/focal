@@ -114,7 +114,7 @@ Tables, display math, Mermaid diagrams, images and front matter are "islands": e
 
 Milestone 0 compared TextKit 1 and TextKit 2 in a throwaway AppKit spike ([findings](spikes/2026-09-29-m0-textkit.md)); it narrowly favored TextKit 1, with a 15 ms keystroke cost and table problems on both. In parallel, a GPUI spike built the same app in Rust ([findings](gpui-spike.md)), and a follow-up gate built spell checking and VoiceOver support on it. Niklas chose GPUI on 2026-09-30.
 
-## 5. Tables (Agreed behavior, Proposed details)
+## 5. Tables (Agreed)
 
 **Agreed:**
 
@@ -125,17 +125,20 @@ Milestone 0 compared TextKit 1 and TextKit 2 in a throwaway AppKit spike ([findi
 - Wide tables scroll horizontally inside their own frame, so the text column keeps its width.
 - When a table is edited, its source is rewritten with **aligned columns**. Unedited tables are never rewritten.
 
-**Proposed serializer rules:**
+**Serializer rules (Agreed, built in M2):**
 
 - Pad each cell with spaces to the widest cell in its column. Width is measured in display columns; East Asian wide characters count as two.
 - Delimiter row: dashes to the column width, with `:` for left, right or center alignment.
 - Escape `|` inside cells as `\|`. Inline Markdown in cells (bold, code, links) stays as source text.
 - Keep the table's original indentation and line endings.
 
-**Proposed editing details:**
+**Editing details (Agreed, built in M2):**
 
-- A cell shows rendered inline Markdown. While editing it shows source with styling, like the main text.
-- Grid edits register with the document's undo manager as single, named actions.
+- A cell shows rendered inline Markdown. The focused cell is edited as source in a plain input, without inline styling while editing.
+- Each cell edit, and each row or column operation, is one undo step.
+- The arrow keys move into a table and out of it at its first and last rows.
+- "Edit as Markdown" in a cell's context menu shows the table's source until the caret leaves it.
+- Columns are as wide as their widest cell, up to a limit at which cells wrap.
 - A table the parser does not recognize stays plain text.
 
 ## 6. Chrome, typography and focus (Agreed behavior, Proposed details)
@@ -185,7 +188,7 @@ Kept deliberately small: prose font, text size, column width, focus unit and typ
 | --- | --- |
 | **M0 — Engine spikes** | Done: TextKit 1 vs 2, the GPUI spike and the spell-checking and VoiceOver gate. GPUI chosen. |
 | **M1 — Core editor** | Done: line prefixes (quote bars, bullets, numbers, clickable checkboxes) drawn beside the text with hanging indents; the caret never stops inside a prefix; list editing (Return, Tab, Shift-Tab, Backspace at a marker); live reload through FSEvents; cached accessibility tree; code highlighting with tree-sitter; GPUI integration tests. |
-| **M2 — Tables** | Grid island, cell editing and navigation, row and column operations, aligned serialization, undo. |
+| **M2 — Tables** | Done: every table is a grid with cells edited in place; Tab, Return and the arrow keys move between cells; hover buttons, a context menu and drag handles add, delete, move and align rows and columns; edited tables are rewritten aligned, and a cell edit is one undo step; wide tables scroll sideways. |
 | **M3 — Chrome** | Bottom bar, focus mode with typewriter scrolling, folder mode with sidebar and quick switcher. |
 | **M4 — Extras** | Alerts, front matter, footnotes, highlight, images, math and wiki links. |
 | **M5 — Mermaid** | Lazy renderer, cache and island. |

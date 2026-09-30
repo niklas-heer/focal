@@ -249,6 +249,9 @@ pub struct Editor {
     goal_x: Option<Pixels>,
     selecting: Option<(Granularity, Range<usize>)>,
     list: ListState,
+    /// Frames left to keep revealing the caret: rows below the viewport are
+    /// measured only once laid out, so one reveal can fall short.
+    reveal_frames: u8,
     pub(crate) painted: Rc<RefCell<Vec<PaintedRow>>>,
     focus_mode: bool,
     conflict: bool,
@@ -295,6 +298,7 @@ impl Editor {
             goal_x: None,
             selecting: None,
             list: ListState::new(0, ListAlignment::Top, px(600.)),
+            reveal_frames: 0,
             painted: Rc::default(),
             focus_mode: false,
             conflict: false,
@@ -453,6 +457,49 @@ impl Editor {
         };
     }
 
+    /// The table, row and column of the cell being edited.
+    #[cfg(test)]
+    pub(crate) fn editing_cell(&self) -> Option<(usize, usize, usize)> {
+        self.grid.as_ref().map(|g| (g.table, g.row, g.column))
+    }
+
+    /// Where the caret's row was laid out in the window, if it was.
+    #[cfg(test)]
+    pub(crate) fn head_row_bounds(&self) -> Option<gpui_kit::Bounds<gpui_kit::Pixels>> {
+        self.list.bounds_for_item(self.head_row())
+    }
+
+    fn reveal_caret(&mut self) {
+        self.reveal_frames = 4;
+        self.list.scroll_to_reveal_item(self.head_row());
+    }
+
+    /// Reveals the caret again once the rows the last reveal scrolled to
+    /// have been measured, until its row is in view.
+    fn keep_revealing(&mut self, window: &mut Window) {
+        if self.reveal_frames == 0 {
+            return;
+        }
+        self.reveal_frames -= 1;
+        let row = self.head_row();
+        let viewport = self.list.viewport_bounds();
+        match self.list.bounds_for_item(row) {
+            Some(bounds)
+                if bounds.top() >= viewport.top() && bounds.bottom() <= viewport.bottom() =>
+            {
+                self.reveal_frames = 0;
+                return;
+            }
+            Some(_) => self.list.scroll_to_reveal_item(row),
+            // Not measured yet: scroll it to the top, where it gets laid out.
+            None => self.list.scroll_to(gpui_kit::ListOffset {
+                item_ix: row,
+                offset_in_item: px(0.),
+            }),
+        }
+        window.request_animation_frame();
+    }
+
     fn head_row(&self) -> usize {
         let line = self.snapshot.analysis.lines.line_of(self.head());
         self.snapshot.line_rows.get(line).copied().unwrap_or(0)
@@ -494,7 +541,7 @@ impl Editor {
             self.table_source = None;
         }
         self.refresh();
-        self.list.scroll_to_reveal_item(self.head_row());
+        self.reveal_caret();
         cx.notify();
     }
 
@@ -530,7 +577,7 @@ impl Editor {
         self.goal_x = None;
         self.refresh();
         if self.grid.is_none() {
-            self.list.scroll_to_reveal_item(self.head_row());
+            self.reveal_caret();
         }
         self.schedule_save(cx);
         cx.notify();
@@ -875,7 +922,7 @@ impl Editor {
         self.selection = selection.start.min(len)..selection.end.min(len);
         self.reversed = false;
         self.refresh();
-        self.list.scroll_to_reveal_item(self.head_row());
+        self.reveal_caret();
         self.schedule_save(cx);
         cx.notify();
     }
@@ -2144,6 +2191,7 @@ impl Render for Editor {
     #[allow(clippy::too_many_lines)]
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::for_appearance(window.appearance());
+        self.keep_revealing(window);
         self.painted.borrow_mut().clear();
         let entity = cx.entity();
         let focus = self.focus_handle.clone();

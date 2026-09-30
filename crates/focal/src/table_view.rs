@@ -114,6 +114,8 @@ fn row_handle(table: usize, row: usize, theme: &Theme, cx: &Context<Editor>) -> 
         .group_hover(TABLE_GROUP, |style| style.opacity(1.))
         .cursor_grab()
         .child("⋮⋮")
+        // Starting a drag must not open the table's first cell.
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_drag(DraggedRow { table, row }, |dragged, _, _, cx| {
             cx.new(|_| DragPreview(format!("Row {}", dragged.row).into()))
         })
@@ -141,6 +143,8 @@ fn column_handle(table: usize, column: usize, theme: &Theme) -> impl IntoElement
         .group_hover(TABLE_GROUP, |style| style.opacity(1.))
         .cursor_grab()
         .child("⋯")
+        // Starting a drag must not open the table's first cell.
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_drag(DraggedColumn { table, column }, |dragged, _, _, cx| {
             cx.new(|_| DragPreview(format!("Column {}", dragged.column + 1).into()))
         })
@@ -152,6 +156,77 @@ const CELL_SCALE: f32 = 0.92;
 /// at the cell size; lifting it keeps the text in place when a cell is edited.
 const INPUT_LIFT: f32 = 4.;
 const CELL_LINE_HEIGHT: f32 = 1.45;
+
+/// Width a cell of `chars` characters asks of its column; bold header text is
+/// wider. Longer cells wrap; a table wider than the text column scrolls
+/// sideways.
+fn column_width(chars: usize, header: bool) -> f32 {
+    let chars = f32::from(u16::try_from(chars).unwrap_or(u16::MAX));
+    let advance = if header { 0.65 } else { 0.55 };
+    (chars * TEXT_SIZE * advance + 24.).clamp(64., 360.)
+}
+
+/// The grid in its sideways scroll frame, with the add-row and add-column
+/// buttons beside it.
+fn table_frame(
+    grid: gpui_kit::Div,
+    table_ix: usize,
+    last_row: usize,
+    last_column: usize,
+    theme: &Theme,
+    cx: &Context<Editor>,
+) -> gpui_kit::Div {
+    // Keeps the hover buttons beside a narrow table; a wide one
+    // scrolls inside it.
+    div()
+        .relative()
+        .flex_initial()
+        .min_w(px(0.))
+        .pr(px(HOVER_BUTTON))
+        .pb(px(HOVER_BUTTON))
+        .child(
+            // The scroll frame clips, so it holds the drag handles'
+            // room above and left of the grid.
+            div()
+                .id(("table-scroll", table_ix))
+                .flex()
+                .pt(px(HANDLE_ROOM))
+                .pl(px(HOVER_BUTTON))
+                .ml(px(-HOVER_BUTTON))
+                .overflow_x_scroll()
+                .child(grid),
+        )
+        .child(
+            hover_button(
+                "add-column",
+                theme,
+                cx,
+                table_ix,
+                last_row,
+                last_column,
+                TableOpKind::InsertColumnRight,
+            )
+            .top(px(HANDLE_ROOM))
+            .bottom(px(HOVER_BUTTON))
+            .right_0()
+            .w(px(HOVER_BUTTON - 4.)),
+        )
+        .child(
+            hover_button(
+                "add-row",
+                theme,
+                cx,
+                table_ix,
+                last_row,
+                last_column,
+                TableOpKind::InsertRowBelow,
+            )
+            .left_0()
+            .right(px(HOVER_BUTTON))
+            .bottom_0()
+            .h(px(HOVER_BUTTON - 4.)),
+        )
+}
 
 impl Editor {
     fn drop_row(
@@ -247,14 +322,50 @@ impl Editor {
             .show(position, window, cx);
     }
 
+    /// Each column's width, from its widest cell.
+    fn column_widths(&self, table_ix: usize, columns: usize) -> Vec<f32> {
+        let analysis = &self.snapshot.analysis;
+        let table = &analysis.tables[table_ix];
+        let editing = self
+            .grid
+            .as_ref()
+            .filter(|g| g.table == table_ix)
+            .map(|g| (g.row, g.column));
+        // The edited cell shows its source, markers included.
+        (0..columns)
+            .map(|c| {
+                table
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(r, row)| {
+                        let cell = row.get(c)?;
+                        let chars = if editing == Some((r, c)) {
+                            self.text()[cell.clone()].chars().count()
+                        } else {
+                            let line = analysis.lines.line_of(cell.start);
+                            range_view(analysis, self.text(), line, cell.clone(), None)
+                                .text
+                                .chars()
+                                .count()
+                        };
+                        Some(column_width(chars, r == 0))
+                    })
+                    .fold(column_width(0, false), f32::max)
+            })
+            .collect()
+    }
+
     pub(crate) fn render_table(
         &self,
         table_ix: usize,
         theme: &Theme,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let table = &self.snapshot.analysis.tables[table_ix];
+        let analysis = &self.snapshot.analysis;
+        let table = &analysis.tables[table_ix];
         let columns = table.rows.iter().map(Vec::len).max().unwrap_or(0);
+        let widths = self.column_widths(table_ix, columns);
         let painted = self.painted.clone();
         let drop_color = theme.selection;
         let rows = (0..table.rows.len()).map(|r| {
@@ -278,57 +389,35 @@ impl Editor {
                     }))
                     .child(row_handle(table_ix, r, theme, cx))
                 })
-                .children((0..columns).map(|c| self.render_cell(table_ix, r, c, theme, cx)))
+                .children(
+                    (0..columns).map(|c| self.render_cell(table_ix, r, c, widths[c], theme, cx)),
+                )
         });
         let last_row = table.rows.len().saturating_sub(1);
         let last_column = columns.saturating_sub(1);
         let grid = div()
+            .flex_none()
             .text_size(px(TEXT_SIZE * CELL_SCALE))
             .line_height(relative(CELL_LINE_HEIGHT))
             .border_1()
             .border_color(theme.rule)
             .rounded(px(6.))
             .children(rows);
-        div()
+        let element = div()
             .id(("table", table_ix))
             .test_support()
             .group(TABLE_GROUP)
             .relative()
-            .my(px(6.))
-            .pt(px(HANDLE_ROOM))
-            .pr(px(HOVER_BUTTON))
-            .pb(px(HOVER_BUTTON))
-            .child(grid)
-            .child(
-                hover_button(
-                    "add-column",
-                    theme,
-                    cx,
-                    table_ix,
-                    last_row,
-                    last_column,
-                    TableOpKind::InsertColumnRight,
-                )
-                .top(px(HANDLE_ROOM))
-                .bottom(px(HOVER_BUTTON))
-                .right_0()
-                .w(px(HOVER_BUTTON - 4.)),
-            )
-            .child(
-                hover_button(
-                    "add-row",
-                    theme,
-                    cx,
-                    table_ix,
-                    last_row,
-                    last_column,
-                    TableOpKind::InsertRowBelow,
-                )
-                .left_0()
-                .right(px(HOVER_BUTTON))
-                .bottom_0()
-                .h(px(HOVER_BUTTON - 4.)),
-            )
+            .py(px(6.))
+            .flex()
+            .child(table_frame(
+                grid,
+                table_ix,
+                last_row,
+                last_column,
+                theme,
+                cx,
+            ))
             .child(
                 canvas(
                     |_, _, _| {},
@@ -346,8 +435,22 @@ impl Editor {
                 .left_0()
                 .size_full(),
             )
-            .relative()
-            .into_any_element()
+            .into_any_element();
+        // A table in a quote or list keeps its quote bars and indentation.
+        let line = table.lines.start;
+        let entity = cx.entity().downgrade();
+        crate::prefix::wrap(
+            element,
+            &analysis.info(line).prefix,
+            line,
+            theme,
+            px(TEXT_SIZE * 1.6),
+            move |line, _, cx| {
+                entity
+                    .update(cx, |editor, cx| editor.toggle_task_on_line(line, cx))
+                    .ok();
+            },
+        )
     }
 
     fn render_cell(
@@ -355,6 +458,7 @@ impl Editor {
         table_ix: usize,
         r: usize,
         c: usize,
+        width: f32,
         theme: &Theme,
         cx: &Context<Self>,
     ) -> AnyElement {
@@ -382,8 +486,8 @@ impl Editor {
         div()
             .id(("cell", c))
             .test_support()
-            .flex_1()
-            .min_w(px(60.))
+            .flex_none()
+            .w(px(width))
             .px(px(10.))
             .py(px(5.))
             .cursor(CursorStyle::IBeam)
@@ -451,5 +555,27 @@ impl Editor {
                 None => d.children(content),
             })
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::column_width;
+
+    #[test]
+    fn columns_fit_their_widest_cell_within_bounds() {
+        assert!(
+            (column_width(0, false) - 64.).abs() < f32::EPSILON,
+            "narrow columns keep a minimum"
+        );
+        assert!((column_width(10, false) - (10. * 18. * 0.55 + 24.)).abs() < 0.01);
+        assert!(
+            column_width(10, true) > column_width(10, false),
+            "bold headers are wider"
+        );
+        assert!(
+            (column_width(200, false) - 360.).abs() < f32::EPSILON,
+            "long cells wrap instead"
+        );
     }
 }
