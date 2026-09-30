@@ -6,7 +6,7 @@ Guidance for coding agents working in this repository.
 
 Focal is a native macOS Markdown editor: iA Writer's minimal look with Bear-style live rendering, opened from the terminal. Read [README.md](README.md) for the goal and [docs/design.md](docs/design.md) for architecture, scope and milestones. Sections there are marked Agreed or Proposed; do not treat a proposal as settled.
 
-**Current state:** design only. No application code, build tooling or tests exist yet. The next step is Milestone 0, a throwaway spike comparing TextKit 1 and TextKit 2 (design section 4). Each milestone gets an implementation plan before work starts.
+**Current state:** design only; no application code, build tooling or tests exist on `main` yet. Milestone 0 is done: the spike chose TextKit 1, pending Niklas's acceptance (see [the findings](docs/spikes/2026-09-29-m0-textkit.md) and [the decision record](decisions/2026-09-30_194203231_build-the-editor-on-textkit-1.md)). The next step is the Milestone 1 implementation plan. Each milestone gets an implementation plan before work starts.
 
 ## Invariants
 

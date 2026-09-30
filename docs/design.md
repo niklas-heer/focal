@@ -92,6 +92,8 @@ Principles, in priority order:
 
 Parsing the whole document on each keystroke is expected to be fast enough. Milestone 0 measures it; if it is not, reparse only from the edited block onward.
 
+Full reparse and restyle measured 15 ms p95 on the 5,000-line fixture in Milestone 0, over the 8 ms budget; Milestone 1 reparses from the edited block.
+
 ### Showing and hiding syntax (Proposed)
 
 - Inline markers (`**`, `_`, `` ` ``, `~~`, `==`, link brackets and URLs) are hidden unless the caret or selection touches that span. They then appear dimmed.
@@ -115,6 +117,8 @@ TextKit 2 is better at embedding live views (`NSTextAttachmentViewProvider`) and
 - VoiceOver still reads the document.
 
 The result is a decision record naming the engine, with measurements. The spike code is not kept.
+
+Result (2026-09-30): TextKit 1, pending acceptance. See [the Milestone 0 findings](spikes/2026-09-29-m0-textkit.md) and [the decision record](../decisions/2026-09-30_194203231_build-the-editor-on-textkit-1.md).
 
 ## 5. Tables (Agreed behavior, Proposed details)
 
