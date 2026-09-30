@@ -20,6 +20,7 @@ mod table_view;
 mod theme;
 #[cfg(test)]
 mod ui_tests;
+mod updates;
 mod windows;
 mod workspace;
 
@@ -202,6 +203,7 @@ fn run_app(launch: Launch) {
         settings::init(cx);
         windows::init(cx);
         cli_install::init(cx);
+        updates::init(cx);
         cx.on_action(|_: &Quit, cx| cx.quit());
         menus::set_menus(cx);
         serve(cx);

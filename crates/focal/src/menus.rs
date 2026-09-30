@@ -11,15 +11,29 @@ use crate::editor::{
 };
 use crate::settings::OpenSettings;
 use crate::switcher::QuickOpen;
+use crate::updates::{CheckForUpdates, OpenReleases};
 use crate::workspace::ToggleSidebar;
 
 actions!(focal, [AboutFocal]);
+
+/// "Check for Updates…" when this Focal can update itself, otherwise a link
+/// to the releases.
+pub fn update_item(cx: &App) -> (&'static str, MenuItem) {
+    if crate::updates::available(cx) {
+        let label = "Check for Updates…";
+        (label, MenuItem::action(label, CheckForUpdates))
+    } else {
+        let label = "Focal Releases…";
+        (label, MenuItem::action(label, OpenReleases))
+    }
+}
 
 pub fn set_menus(cx: &mut App) {
     cx.on_action(|_: &AboutFocal, _| crate::mac::about_panel());
     cx.set_menus(vec![
         Menu::new("Focal").items([
             MenuItem::action("About Focal", AboutFocal),
+            update_item(cx).1,
             MenuItem::separator(),
             MenuItem::action("Settings…", OpenSettings),
             MenuItem::separator(),

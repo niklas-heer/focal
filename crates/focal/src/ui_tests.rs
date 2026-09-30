@@ -820,3 +820,13 @@ fn requests_open_a_window_per_file_and_reuse_open_ones(cx: &mut TestAppContext) 
         "a folder opens its own window"
     );
 }
+
+#[gpui_kit::test]
+fn without_a_bundle_there_is_no_updater(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        cx.set_global(Settings::default());
+        crate::updates::init(cx);
+        assert!(!crate::updates::available(cx));
+        assert_eq!(crate::menus::update_item(cx).0, "Focal Releases…");
+    });
+}

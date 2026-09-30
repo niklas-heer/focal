@@ -66,6 +66,8 @@ pub struct Settings {
     pub prose_font: ProseFont,
     pub text_size: TextSize,
     pub column_width: ColumnWidth,
+    /// Let a release build look for updates by itself.
+    pub check_updates: bool,
 }
 
 impl Default for Settings {
@@ -76,6 +78,7 @@ impl Default for Settings {
             prose_font: ProseFont::default(),
             text_size: TextSize::default(),
             column_width: ColumnWidth::default(),
+            check_updates: true,
         }
     }
 }
@@ -157,7 +160,7 @@ fn open_window(cx: &mut App) {
     {
         return;
     }
-    let bounds = Bounds::centered(None, size(px(460.), px(430.)), cx);
+    let bounds = Bounds::centered(None, size(px(460.), px(500.)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions {
@@ -277,6 +280,16 @@ impl Render for SettingsView {
                 settings.focus_unit,
                 |s, v| s.focus_unit = v,
             ))
+            .child(heading("UPDATES"))
+            .child(
+                Switch::new("check-updates")
+                    .label("Check for updates automatically")
+                    .checked(settings.check_updates)
+                    .on_click(|checked, _, cx| {
+                        let checked = *checked;
+                        update(cx, |settings| settings.check_updates = checked);
+                    }),
+            )
             .child(heading("TYPEWRITER SCROLLING"))
             .child(
                 Switch::new("typewriter")
@@ -310,9 +323,21 @@ mod tests {
             prose_font: ProseFont::Duo,
             text_size: TextSize::Large,
             column_width: ColumnWidth::Wide,
+            check_updates: false,
         };
         settings.save_to(&path).unwrap();
         assert_eq!(Settings::load_from(&path), settings);
+    }
+
+    #[test]
+    fn updates_are_checked_unless_turned_off() {
+        assert!(Settings::default().check_updates);
+        let path = temp("updates");
+        std::fs::write(&path, r#"{"focus_unit": "sentence"}"#).unwrap();
+        assert!(
+            Settings::load_from(&path).check_updates,
+            "older files keep checking"
+        );
     }
 
     #[test]
