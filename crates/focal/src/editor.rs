@@ -396,6 +396,14 @@ impl Editor {
             );
         }
         let table_cells = rendered_table_cells(&analysis, text);
+        // The accessibility nodes depend on the text and the rows only, not on
+        // the caret, so keep them across caret moves.
+        let a11y_document =
+            if self.snapshot.version == Some(version) && self.snapshot.rows[..] == rows[..] {
+                self.snapshot.a11y_document.clone()
+            } else {
+                Rc::default()
+            };
         self.snapshot = Snapshot {
             version: Some(version),
             analysis,
@@ -403,7 +411,7 @@ impl Editor {
             rows: rows.into(),
             text: text.into(),
             table_cells,
-            a11y_document: Rc::default(),
+            a11y_document,
             line_rows,
             keys,
             focus,
