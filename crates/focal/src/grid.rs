@@ -86,6 +86,7 @@ impl Editor {
             });
         input.update(cx, |input, cx| input.focus(window, cx));
         self.next_grid_session += 1;
+        self.reveal_cell.set(true);
         self.grid = Some(GridSession {
             table,
             row,

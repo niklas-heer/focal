@@ -8,9 +8,9 @@ use gpui_kit::component::native_menu::NativeMenu;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, AppContext as _, Context, CursorStyle, FontWeight, InteractiveElement as _,
-    IntoElement, MouseButton, MouseDownEvent, ParentElement as _, Render, SharedString,
-    StatefulInteractiveElement as _, Styled as _, StyledText, TestSupportExt as _, Window, canvas,
-    div, px, relative,
+    IntoElement, MouseButton, MouseDownEvent, ParentElement as _, Render, ScrollHandle,
+    SharedString, StatefulInteractiveElement as _, Styled as _, StyledText, TestSupportExt as _,
+    TextRun, Window, canvas, div, font, point, px, relative,
 };
 
 use crate::editor::{Editor, PaintedRow, Row, TEXT_SIZE, text_runs};
@@ -152,24 +152,43 @@ fn column_handle(table: usize, column: usize, theme: &Theme) -> impl IntoElement
 
 /// Cell text size relative to the body text.
 const CELL_SCALE: f32 = 0.92;
-/// gpui-kit's `Input` draws its line about this much lower than `StyledText`
-/// at the cell size; lifting it keeps the text in place when a cell is edited.
-const INPUT_LIFT: f32 = 4.;
+/// gpui-kit's `Input` draws its line lower than `StyledText`, by about this
+/// share of the font size; lifting it keeps the text in place when a cell is
+/// edited.
+const INPUT_LIFT: f32 = 0.24;
 const CELL_LINE_HEIGHT: f32 = 1.45;
+/// A cell's horizontal padding, plus room for the caret.
+const CELL_PADDING: f32 = 22.;
 
-/// Width a cell of `chars` characters asks of its column; bold header text is
-/// wider. Longer cells wrap; a table wider than the text column scrolls
-/// sideways.
-fn column_width(chars: usize, header: bool) -> f32 {
-    let chars = f32::from(u16::try_from(chars).unwrap_or(u16::MAX));
-    let advance = if header { 0.65 } else { 0.55 };
-    (chars * TEXT_SIZE * advance + 24.).clamp(64., 360.)
+/// Width a cell whose text is `text_width` wide asks of its column. Longer
+/// cells wrap; a table wider than the text column scrolls sideways.
+fn column_width(text_width: f32) -> f32 {
+    (text_width + CELL_PADDING).clamp(64., 360.)
+}
+
+/// Scrolls a table sideways so the column is in view, clear of the handles'
+/// room at the left edge.
+fn reveal_column(scroll: &ScrollHandle, widths: &[f32], column: usize) {
+    // The grid's 1 px border comes before the first column.
+    let left = HOVER_BUTTON + 1. + widths[..column].iter().sum::<f32>();
+    let right = left + widths.get(column).copied().unwrap_or(0.);
+    let frame = f32::from(scroll.bounds().size.width);
+    let shown = -f32::from(scroll.offset().x);
+    let shown = if left - HOVER_BUTTON - 1. < shown {
+        left - HOVER_BUTTON - 1.
+    } else if right > shown + frame {
+        right - frame
+    } else {
+        return;
+    };
+    scroll.set_offset(point(px(-shown.max(0.)), px(0.)));
 }
 
 /// The grid in its sideways scroll frame, with the add-row and add-column
 /// buttons beside it.
 fn table_frame(
     grid: gpui_kit::Div,
+    scroll: &ScrollHandle,
     table_ix: usize,
     last_row: usize,
     last_column: usize,
@@ -194,8 +213,23 @@ fn table_frame(
                 .pl(px(HOVER_BUTTON))
                 .ml(px(-HOVER_BUTTON))
                 .overflow_x_scroll()
+                .track_scroll(scroll)
+                .test_support()
                 .child(grid),
         )
+        // Once scrolled, the handles' room would show cells outside the
+        // text column.
+        .when(scroll.offset().x < px(0.), |d| {
+            d.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px(-HOVER_BUTTON))
+                    .w(px(HOVER_BUTTON))
+                    .bg(theme.background),
+            )
+        })
         .child(
             hover_button(
                 "add-column",
@@ -322,8 +356,15 @@ impl Editor {
             .show(position, window, cx);
     }
 
-    /// Each column's width, from its widest cell.
-    fn column_widths(&self, table_ix: usize, columns: usize) -> Vec<f32> {
+    /// Each column's width, from its widest cell as drawn.
+    fn column_widths(
+        &self,
+        table_ix: usize,
+        columns: usize,
+        theme: &Theme,
+        window: &Window,
+    ) -> Vec<f32> {
+        let font_size = px(TEXT_SIZE * CELL_SCALE);
         let analysis = &self.snapshot.analysis;
         let table = &analysis.tables[table_ix];
         let editing = self
@@ -340,18 +381,37 @@ impl Editor {
                     .enumerate()
                     .filter_map(|(r, row)| {
                         let cell = row.get(c)?;
-                        let chars = if editing == Some((r, c)) {
-                            self.text()[cell.clone()].chars().count()
+                        let (text, runs): (SharedString, _) = if editing == Some((r, c)) {
+                            let text = &self.text()[cell.clone()];
+                            let run = TextRun {
+                                len: text.len(),
+                                font: font(PROSE_FONT),
+                                color: theme.text,
+                                background_color: None,
+                                underline: None,
+                                strikethrough: None,
+                            };
+                            (text.to_owned().into(), vec![run])
                         } else {
                             let line = analysis.lines.line_of(cell.start);
-                            range_view(analysis, self.text(), line, cell.clone(), None)
-                                .text
-                                .chars()
-                                .count()
+                            let view = range_view(analysis, self.text(), line, cell.clone(), None);
+                            let weight = if r == 0 {
+                                FontWeight::BOLD
+                            } else {
+                                FontWeight::NORMAL
+                            };
+                            let runs = text_runs(
+                                &view.runs, PROSE_FONT, weight, theme.text, theme, None, false,
+                            );
+                            (view.text.clone().into(), runs)
                         };
-                        Some(column_width(chars, r == 0))
+                        let width = window
+                            .text_system()
+                            .shape_line(text, font_size, &runs, None)
+                            .width;
+                        Some(column_width(f32::from(width)))
                     })
-                    .fold(column_width(0, false), f32::max)
+                    .fold(column_width(0.), f32::max)
             })
             .collect()
     }
@@ -360,12 +420,24 @@ impl Editor {
         &self,
         table_ix: usize,
         theme: &Theme,
+        window: &Window,
         cx: &Context<Self>,
     ) -> AnyElement {
         let analysis = &self.snapshot.analysis;
         let table = &analysis.tables[table_ix];
         let columns = table.rows.iter().map(Vec::len).max().unwrap_or(0);
-        let widths = self.column_widths(table_ix, columns);
+        let widths = self.column_widths(table_ix, columns, theme, window);
+        let scroll = self
+            .table_scrolls
+            .borrow_mut()
+            .entry(table_ix)
+            .or_default()
+            .clone();
+        if let Some(grid) = self.grid.as_ref().filter(|g| g.table == table_ix)
+            && self.reveal_cell.take()
+        {
+            reveal_column(&scroll, &widths, grid.column);
+        }
         let painted = self.painted.clone();
         let drop_color = theme.selection;
         let rows = (0..table.rows.len()).map(|r| {
@@ -412,6 +484,7 @@ impl Editor {
             .flex()
             .child(table_frame(
                 grid,
+                &scroll,
                 table_ix,
                 last_row,
                 last_column,
@@ -543,7 +616,7 @@ impl Editor {
                                 .text_size(px(TEXT_SIZE * CELL_SCALE))
                                 .line_height(relative(CELL_LINE_HEIGHT))
                                 .font_family(PROSE_FONT)
-                                .mt(px(-INPUT_LIFT))
+                                .mt(px(-TEXT_SIZE * CELL_SCALE * INPUT_LIFT))
                                 .when(alignment == Some(ColumnAlignment::Center), |d| {
                                     d.text_center()
                                 })
@@ -565,16 +638,12 @@ mod tests {
     #[test]
     fn columns_fit_their_widest_cell_within_bounds() {
         assert!(
-            (column_width(0, false) - 64.).abs() < f32::EPSILON,
+            (column_width(0.) - 64.).abs() < f32::EPSILON,
             "narrow columns keep a minimum"
         );
-        assert!((column_width(10, false) - (10. * 18. * 0.55 + 24.)).abs() < 0.01);
+        assert!((column_width(100.) - 122.).abs() < f32::EPSILON);
         assert!(
-            column_width(10, true) > column_width(10, false),
-            "bold headers are wider"
-        );
-        assert!(
-            (column_width(200, false) - 360.).abs() < f32::EPSILON,
+            (column_width(1000.) - 360.).abs() < f32::EPSILON,
             "long cells wrap instead"
         );
     }

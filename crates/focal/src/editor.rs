@@ -2,7 +2,8 @@
 //! island), each drawn as styled text with its Markdown markers hidden or
 //! replaced away from the caret.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Range;
 use std::path::PathBuf;
@@ -252,6 +253,10 @@ pub struct Editor {
     goal_x: Option<Pixels>,
     selecting: Option<(Granularity, Range<usize>)>,
     list: ListState,
+    /// Sideways scroll of each table, by index.
+    pub(crate) table_scrolls: RefCell<HashMap<usize, gpui_kit::ScrollHandle>>,
+    /// Set when a cell starts being edited, so its table scrolls it into view.
+    pub(crate) reveal_cell: Cell<bool>,
     /// Frames left to keep revealing the caret: rows below the viewport are
     /// measured only once laid out, so one reveal can fall short.
     reveal_frames: u8,
@@ -302,6 +307,8 @@ impl Editor {
             selecting: None,
             list: ListState::new(0, ListAlignment::Top, px(600.)),
             reveal_frames: 0,
+            table_scrolls: RefCell::default(),
+            reveal_cell: Cell::new(false),
             painted: Rc::default(),
             focus_mode: false,
             conflict: false,
@@ -1586,7 +1593,7 @@ impl Editor {
         let last = ix + 1 == self.snapshot.rows.len();
         let content = match row {
             Row::Line(line) => self.render_line(line, &theme, window, cx),
-            Row::Table(table) => self.render_table(table, &theme, cx),
+            Row::Table(table) => self.render_table(table, &theme, window, cx),
         };
         div()
             .w_full()

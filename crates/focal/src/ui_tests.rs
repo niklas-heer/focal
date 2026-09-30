@@ -397,3 +397,39 @@ fn undo_in_a_focused_cell_restores_the_table(cx: &mut TestAppContext) {
     act(cx, window, |_, _| {});
     editor.read_with(cx, |editor, _| assert_eq!(editor.text(), text));
 }
+
+fn cell_bounds(
+    window: &mut Window,
+    table: usize,
+    row: usize,
+    column: usize,
+) -> Bounds<gpui_kit::Pixels> {
+    window
+        .within(("table", table))
+        .within(("row", row))
+        .find(("cell", column))
+        .bounds()
+}
+
+#[gpui_kit::test]
+fn tab_into_a_hidden_cell_scrolls_it_into_view(cx: &mut TestAppContext) {
+    let cell = "a long cell that takes up space";
+    let row = |text: &str| format!("|{}\n", format!(" {text} |").repeat(8));
+    let wide = format!("{}{}{}", row("h"), "|---".repeat(8) + "|\n", row(cell));
+    // A table drawn before the edited one must not take its reveal.
+    let text = format!("| a |\n|---|\n| 1 |\n\n{wide}");
+    let (window, _) = open_editor(cx, &text);
+    act(cx, window, |window, cx| click_cell(window, cx, 1, 1, 0));
+    for _ in 0..7 {
+        act(cx, window, |window, cx| window.press("tab", cx));
+    }
+    act(cx, window, |_, _| {});
+    act(cx, window, |window, _| {
+        let frame = window.find(("table-scroll", 1usize)).bounds();
+        let cell = cell_bounds(window, 1, 1, 7);
+        assert!(
+            cell.left() >= frame.left() && cell.right() <= frame.right(),
+            "the edited cell {cell:?} is inside the table's frame {frame:?}"
+        );
+    });
+}
