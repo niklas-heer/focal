@@ -186,10 +186,24 @@ pub fn indent_list_item(text: &str, lines: &LineIndex, line: usize) -> Option<Ch
         return None;
     }
     let at = current.lead.end;
+    // A nested ordered list must start at 1: CommonMark only lets a list that
+    // starts at 1 interrupt the paragraph of the item above.
+    let digits = current
+        .marker
+        .bytes()
+        .take_while(u8::is_ascii_digit)
+        .count();
+    let (replaced, number) = if digits > 0 && current.marker[..digits] != *"1" {
+        (digits, "1")
+    } else {
+        (0, "")
+    };
+    let text = format!("{}{number}", " ".repeat(add));
+    let caret = at + text.len();
     Some(Change {
-        range: at..at,
-        text: " ".repeat(add),
-        selection: at + add..at + add,
+        range: at..at + replaced,
+        text,
+        selection: caret..caret,
     })
 }
 
@@ -280,7 +294,12 @@ mod tests {
         let text = "1. one\n2. two";
         let lines = LineIndex::new(text);
         let change = indent_list_item(text, &lines, 1).unwrap();
-        assert_eq!(apply(text, &change), "1. one\n   2. two");
+        // A nested ordered list must start at 1, or CommonMark reads the line
+        // as a continuation of the item above.
+        assert_eq!(apply(text, &change), "1. one\n   1. two");
+        let text = "- a\n- b";
+        let change = indent_list_item(text, &LineIndex::new(text), 1).unwrap();
+        assert_eq!(apply(text, &change), "- a\n  - b");
         assert!(
             indent_list_item(text, &lines, 0).is_none(),
             "first item has no sibling"
