@@ -13,8 +13,10 @@ pub mod buffer;
 pub mod display;
 pub mod editing;
 mod lines;
+pub mod table;
 
 pub use analysis::{Analysis, Bias, LinePrefix, ListMarker, PrefixLevel, analyze};
 pub use buffer::{Buffer, EditKind};
 pub use display::{Caret, DisplayMap, LineView, line_view, range_view};
 pub use lines::LineIndex;
+pub use table::TableModel;
