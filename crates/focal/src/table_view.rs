@@ -15,7 +15,7 @@ use gpui_kit::{
 
 use crate::editor::{Editor, PaintedRow, Row, TEXT_SIZE, text_runs};
 use crate::grid::{TableOp, TableOpKind};
-use crate::theme::{PROSE_FONT, Theme};
+use crate::theme::{DIMMED, PROSE_FONT, Theme};
 
 /// Hover group of a table, for its add-row and add-column buttons.
 const TABLE_GROUP: &str = "focal-table";
@@ -416,6 +416,22 @@ impl Editor {
             .collect()
     }
 
+    /// The sideways scroll of a table.
+    fn table_scroll(&self, table: usize) -> ScrollHandle {
+        self.table_scrolls
+            .borrow_mut()
+            .entry(table)
+            .or_default()
+            .clone()
+    }
+
+    /// Whether focus mode dims the table: it is not in the caret's paragraph.
+    pub(crate) fn table_dimmed(&self, table: usize) -> bool {
+        let lines = &self.snapshot.analysis.tables[table].lines;
+        self.focus_lines()
+            .is_some_and(|focus| focus.end <= lines.start || lines.end <= focus.start)
+    }
+
     pub(crate) fn render_table(
         &self,
         table_ix: usize,
@@ -427,12 +443,7 @@ impl Editor {
         let table = &analysis.tables[table_ix];
         let columns = table.rows.iter().map(Vec::len).max().unwrap_or(0);
         let widths = self.column_widths(table_ix, columns, theme, window);
-        let scroll = self
-            .table_scrolls
-            .borrow_mut()
-            .entry(table_ix)
-            .or_default()
-            .clone();
+        let scroll = self.table_scroll(table_ix);
         if let Some(grid) = self.grid.as_ref().filter(|g| g.table == table_ix)
             && self.reveal_cell.take()
         {
@@ -477,6 +488,7 @@ impl Editor {
             .children(rows);
         let element = div()
             .id(("table", table_ix))
+            .when(self.table_dimmed(table_ix), |d| d.opacity(DIMMED))
             .test_support()
             .group(TABLE_GROUP)
             .relative()

@@ -581,6 +581,14 @@ impl Editor {
         self.grid.as_ref().map(|g| (g.table, g.row, g.column))
     }
 
+    /// The lines of the caret's paragraph in focus mode.
+    pub(crate) fn focus_lines(&self) -> Option<Range<usize>> {
+        self.snapshot
+            .focus
+            .as_ref()
+            .map(|focus| focus.lines.clone())
+    }
+
     /// What focus mode keeps bright, as source bytes.
     #[cfg(test)]
     pub(crate) fn focus_range(&self) -> Option<Range<usize>> {

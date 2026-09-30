@@ -87,6 +87,7 @@ impl Workspace {
             eprintln!("focal: {error:#}");
             (Document::untitled(), String::new())
         });
+        window.set_window_title(&document.title());
         let mut this = Self::new(document, text, window, cx);
         let watch = match folder::watch(&root) {
             Ok((watcher, events)) => Some((watcher, Self::rescan_on(events, root.clone(), cx))),

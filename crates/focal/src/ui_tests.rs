@@ -748,3 +748,11 @@ fn arrows_choose_and_escape_closes_the_switcher(cx: &mut TestAppContext) {
         );
     });
 }
+
+#[gpui_kit::test]
+fn focus_mode_dims_tables_outside_the_caret_paragraph(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "text\n\n| a |\n|---|\n| 1 |\n");
+    editor.read_with(cx, |editor, _| assert!(!editor.table_dimmed(0)));
+    act(cx, window, |window, cx| window.press("cmd-d", cx));
+    editor.read_with(cx, |editor, _| assert!(editor.table_dimmed(0)));
+}
