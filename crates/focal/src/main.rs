@@ -1,6 +1,7 @@
 //! `focal`: open a Markdown file from the terminal in a calm, live-rendered
 //! editor window.
 
+mod accessibility;
 mod document;
 mod editor;
 mod spell;

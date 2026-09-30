@@ -14,9 +14,11 @@ use focal_core::display::{Run, mark_runs, prose_ranges};
 use focal_core::{
     Analysis, Buffer, Caret, EditKind, LineView, analyze, editing, line_view, range_view,
 };
+use gpui_kit::accesskit::{ActionData, TextSelection};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::native_menu::NativeMenu;
 use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::{AccessibleAction, Role, StatefulInteractiveElement as _};
 use gpui_kit::{
     App, Bounds, ClipboardItem, Context, CursorStyle, ElementInputHandler, EntityInputHandler,
     FocusHandle, Focusable, FontStyle, FontWeight, Hsla, InteractiveElement as _, IntoElement,
@@ -26,6 +28,7 @@ use gpui_kit::{
     WindowControlArea, actions, canvas, div, fill, font, list, point, px, relative, size,
 };
 
+use crate::accessibility::{A11yDocument, A11ySource, RunIds};
 use crate::document::{self, Document, Stamp};
 use crate::spell::SpellChecker;
 use crate::theme::{BOLD_PROSE_FONT, MONO_FONT, PROSE_FONT, Theme};
@@ -158,7 +161,7 @@ pub fn bind_keys(cx: &mut App) {
 
 /// A list row: one source line, or a whole table shown as a grid.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum Row {
+pub(crate) enum Row {
     Line(usize),
     Table(usize),
 }
@@ -167,9 +170,15 @@ enum Row {
 #[derive(Default)]
 struct Snapshot {
     version: Option<u64>,
-    analysis: Analysis,
-    views: Vec<Rc<LineView>>,
-    rows: Vec<Row>,
+    analysis: Rc<Analysis>,
+    views: Rc<[Rc<LineView>]>,
+    rows: Rc<[Row]>,
+    /// The source text of this version, for the accessibility tree.
+    text: Rc<str>,
+    /// Rendered cell texts per table, for the accessibility tree.
+    table_cells: Rc<[Vec<Vec<String>>]>,
+    /// The accessibility text runs, built only when an assistive app asks.
+    a11y_document: Rc<std::cell::OnceCell<A11yDocument>>,
     line_rows: Vec<usize>,
     keys: Vec<u64>,
     /// Lines outside the caret's paragraph, dimmed in focus mode.
@@ -218,6 +227,7 @@ pub struct Editor {
     error: Option<String>,
     trace: bool,
     spell: RefCell<SpellChecker>,
+    a11y_ids: RunIds,
     /// Misspelled display ranges per line text.
     spell_cache: RefCell<std::collections::HashMap<String, Rc<[Range<usize>]>>>,
     save_task: Option<Task<()>>,
@@ -263,6 +273,7 @@ impl Editor {
             error: None,
             trace: std::env::var_os("FOCAL_TRACE").is_some(),
             spell: RefCell::new(SpellChecker::new()),
+            a11y_ids: RunIds::default(),
             spell_cache: RefCell::default(),
             save_task: None,
             _poll_task: poll,
@@ -309,7 +320,7 @@ impl Editor {
         let analysis = if self.snapshot.version == Some(version) {
             std::mem::take(&mut self.snapshot.analysis)
         } else {
-            analyze(self.buffer.text())
+            Rc::new(analyze(self.buffer.text()))
         };
         let analyzed = started.elapsed();
         let text = self.buffer.text();
@@ -375,20 +386,7 @@ impl Editor {
             })
             .collect();
 
-        let old = &self.snapshot.keys;
-        let prefix = old.iter().zip(&keys).take_while(|(a, b)| a == b).count();
-        let room = old.len().min(keys.len()) - prefix;
-        let suffix = old
-            .iter()
-            .rev()
-            .zip(keys.iter().rev())
-            .take(room)
-            .take_while(|(a, b)| a == b)
-            .count();
-        if old.len() != keys.len() || prefix != old.len() {
-            self.list
-                .splice(prefix..old.len() - suffix, keys.len() - prefix - suffix);
-        }
+        let changed = splice_changed_rows(&self.list, &self.snapshot.keys, &keys);
 
         if self.trace {
             eprintln!(
@@ -397,14 +395,18 @@ impl Editor {
                 self.selection,
                 analyzed.as_secs_f64() * 1000.,
                 started.elapsed().saturating_sub(analyzed).as_secs_f64() * 1000.,
-                keys.len() - prefix - suffix,
+                changed,
             );
         }
+        let table_cells = rendered_table_cells(&analysis, text);
         self.snapshot = Snapshot {
             version: Some(version),
             analysis,
-            views,
-            rows,
+            views: views.into(),
+            rows: rows.into(),
+            text: text.into(),
+            table_cells,
+            a11y_document: Rc::default(),
             line_rows,
             keys,
             focus,
@@ -1135,6 +1137,33 @@ impl Editor {
         );
     }
 
+    // ---- Accessibility ------------------------------------------------------
+
+    fn a11y_source(&self) -> A11ySource {
+        A11ySource {
+            analysis: self.snapshot.analysis.clone(),
+            text: self.snapshot.text.clone(),
+            rows: self.snapshot.rows.clone(),
+            table_cells: self.snapshot.table_cells.clone(),
+            document: self.snapshot.a11y_document.clone(),
+        }
+    }
+
+    /// Applies a selection requested by an assistive app such as VoiceOver.
+    fn select_from_a11y(&mut self, selection: &TextSelection, cx: &mut Context<Self>) {
+        let source = self.a11y_source();
+        let (Some(anchor), Some(focus)) = (
+            source.source_offset(&self.a11y_ids, &selection.anchor),
+            source.source_offset(&self.a11y_ids, &selection.focus),
+        ) else {
+            return;
+        };
+        self.selection = anchor.min(focus)..anchor.max(focus);
+        self.reversed = focus < anchor;
+        self.goal_x = None;
+        self.after_selection(cx);
+    }
+
     // ---- Spelling -----------------------------------------------------------
 
     /// Misspelled words of a line, as display ranges. Only prose is checked;
@@ -1781,6 +1810,47 @@ fn text_runs(
         .collect()
 }
 
+/// Tells the list which rows changed between two versions, so unchanged rows
+/// keep their measured heights and the scroll position holds. Returns the
+/// number of changed rows.
+fn splice_changed_rows(list: &ListState, old: &[u64], new: &[u64]) -> usize {
+    let prefix = old.iter().zip(new).take_while(|(a, b)| a == b).count();
+    let room = old.len().min(new.len()) - prefix;
+    let suffix = old
+        .iter()
+        .rev()
+        .zip(new.iter().rev())
+        .take(room)
+        .take_while(|(a, b)| a == b)
+        .count();
+    if old.len() != new.len() || prefix != old.len() {
+        list.splice(prefix..old.len() - suffix, new.len() - prefix - suffix);
+    }
+    new.len() - prefix - suffix
+}
+
+/// Each table's cells as rendered text, for the accessibility tree.
+fn rendered_table_cells(analysis: &Analysis, text: &str) -> Rc<[Vec<Vec<String>>]> {
+    analysis
+        .tables
+        .iter()
+        .map(|table| {
+            table
+                .rows
+                .iter()
+                .map(|row| {
+                    row.iter()
+                        .map(|cell| {
+                            let line = analysis.lines.line_of(cell.start);
+                            range_view(analysis, text, line, cell.clone(), None).text
+                        })
+                        .collect()
+                })
+                .collect()
+        })
+        .collect()
+}
+
 /// The lines of the paragraph (non-blank run of lines) around `offset`.
 fn paragraph_around(analysis: &Analysis, text: &str, offset: usize) -> Range<usize> {
     let lines = &analysis.lines;
@@ -1936,8 +2006,27 @@ impl Render for Editor {
         let focus = self.focus_handle.clone();
         let banner = self.render_banner(&theme, cx);
         let title = self.title();
+        let a11y = self.a11y_source();
+        let a11y_ids = self.a11y_ids.clone();
+        let a11y_selection = self.selection.clone();
+        let a11y_reversed = self.reversed;
+        let a11y_editor = cx.entity().downgrade();
+        let a11y_action_source = a11y.clone();
         div()
             .id("focal-editor")
+            .role(Role::MultilineTextInput)
+            .aria_label(title.clone())
+            .a11y_synthetic_children(move |builder| {
+                a11y.build_tree(builder, a11y_selection, a11y_reversed, &a11y_ids);
+            })
+            .on_a11y_action(AccessibleAction::SetTextSelection, move |data, _, cx| {
+                if let Some(ActionData::SetTextSelection(selection)) = data {
+                    let _ = &a11y_action_source;
+                    a11y_editor
+                        .update(cx, |editor, cx| editor.select_from_a11y(selection, cx))
+                        .ok();
+                }
+            })
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
             .relative()

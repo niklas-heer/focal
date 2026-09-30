@@ -7,6 +7,7 @@
 //! - [`buffer`] holds the text and its undo history.
 //! - [`editing`] computes Markdown-aware edits such as list continuation.
 
+pub mod a11y;
 pub mod analysis;
 pub mod buffer;
 pub mod display;
