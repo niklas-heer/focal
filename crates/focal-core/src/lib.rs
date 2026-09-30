@@ -12,8 +12,10 @@ pub mod analysis;
 pub mod buffer;
 pub mod display;
 pub mod editing;
+pub mod fuzzy;
 mod lines;
 pub mod table;
+pub mod text_stats;
 
 pub use analysis::{Analysis, Bias, LinePrefix, ListMarker, PrefixLevel, analyze};
 pub use buffer::{Buffer, EditKind};
