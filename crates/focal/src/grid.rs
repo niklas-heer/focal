@@ -35,6 +35,10 @@ pub enum TableOpKind {
     MoveRowDown,
     MoveColumnLeft,
     MoveColumnRight,
+    /// Move the row to this index, from a drag.
+    MoveRowTo(usize),
+    /// Move the column to this index, from a drag.
+    MoveColumnTo(usize),
     EditAsMarkdown,
 }
 
@@ -293,6 +297,14 @@ impl Editor {
             MoveColumnRight => {
                 model.move_column(column, column + 1);
                 column = (column + 1).min(model.column_count() - 1);
+            }
+            MoveRowTo(to) => {
+                model.move_row(row, to);
+                row = to.clamp(1, model.rows.len().saturating_sub(1).max(1));
+            }
+            MoveColumnTo(to) => {
+                model.move_column(column, to);
+                column = to.min(model.column_count() - 1);
             }
             EditAsMarkdown => {}
         }

@@ -7,9 +7,10 @@ use gpui_kit::component::input::Input;
 use gpui_kit::component::native_menu::NativeMenu;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, Context, CursorStyle, FontWeight, InteractiveElement as _, IntoElement,
-    MouseButton, MouseDownEvent, ParentElement as _, Styled as _, StyledText, TestSupportExt as _,
-    Window, canvas, div, px, relative,
+    AnyElement, AppContext as _, Context, CursorStyle, FontWeight, InteractiveElement as _,
+    IntoElement, MouseButton, MouseDownEvent, ParentElement as _, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, StyledText, TestSupportExt as _, Window, canvas,
+    div, px, relative,
 };
 
 use crate::editor::{Editor, PaintedRow, Row, TEXT_SIZE, text_runs};
@@ -62,11 +63,135 @@ fn hover_button(
         )
 }
 
+/// Room above the grid for the column handles.
+const HANDLE_ROOM: f32 = 16.;
+
+/// A row being dragged by its handle.
+#[derive(Clone, Copy)]
+pub(crate) struct DraggedRow {
+    table: usize,
+    row: usize,
+}
+
+/// A column being dragged by its handle.
+#[derive(Clone, Copy)]
+pub(crate) struct DraggedColumn {
+    table: usize,
+    column: usize,
+}
+
+/// What follows the pointer while a row or column is dragged.
+struct DragPreview(SharedString);
+
+impl Render for DragPreview {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px(px(8.))
+            .py(px(2.))
+            .rounded(px(4.))
+            .bg(gpui_kit::rgba(0x7f7f_7f40))
+            .text_size(px(12.))
+            .child(self.0.clone())
+    }
+}
+
+/// The grip at a body row's left edge, for dragging the row.
+fn row_handle(table: usize, row: usize, theme: &Theme, cx: &Context<Editor>) -> impl IntoElement {
+    div()
+        .id(("row-handle", row))
+        .test_support()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .left(px(-22.))
+        .w(px(18.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_size(px(11.))
+        .text_color(theme.marker)
+        .opacity(0.)
+        .group_hover(TABLE_GROUP, |style| style.opacity(1.))
+        .cursor_grab()
+        .child("⋮⋮")
+        .on_drag(DraggedRow { table, row }, |dragged, _, _, cx| {
+            cx.new(|_| DragPreview(format!("Row {}", dragged.row).into()))
+        })
+        .on_drop(cx.listener(move |this, dragged: &DraggedRow, window, cx| {
+            this.drop_row(dragged, table, row, window, cx);
+        }))
+}
+
+/// The grip above a header cell, for dragging the column.
+fn column_handle(table: usize, column: usize, theme: &Theme) -> impl IntoElement {
+    div()
+        .id(("column-handle", column))
+        .test_support()
+        .absolute()
+        .left_0()
+        .right_0()
+        .top(px(-HANDLE_ROOM - 1.))
+        .h(px(HANDLE_ROOM - 2.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_size(px(11.))
+        .text_color(theme.marker)
+        .opacity(0.)
+        .group_hover(TABLE_GROUP, |style| style.opacity(1.))
+        .cursor_grab()
+        .child("⋯")
+        .on_drag(DraggedColumn { table, column }, |dragged, _, _, cx| {
+            cx.new(|_| DragPreview(format!("Column {}", dragged.column + 1).into()))
+        })
+}
+
 /// Cell text size relative to the body text.
 const CELL_SCALE: f32 = 0.92;
+/// gpui-kit's `Input` draws its line about this much lower than `StyledText`
+/// at the cell size; lifting it keeps the text in place when a cell is edited.
+const INPUT_LIFT: f32 = 4.;
 const CELL_LINE_HEIGHT: f32 = 1.45;
 
 impl Editor {
+    fn drop_row(
+        &mut self,
+        dragged: &DraggedRow,
+        table: usize,
+        to: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if dragged.table == table && dragged.row != to {
+            let op = TableOp {
+                table,
+                row: dragged.row,
+                column: 0,
+                op: TableOpKind::MoveRowTo(to),
+            };
+            self.table_op(&op, window, cx);
+        }
+    }
+
+    fn drop_column(
+        &mut self,
+        dragged: &DraggedColumn,
+        table: usize,
+        to: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if dragged.table == table && dragged.column != to {
+            let op = TableOp {
+                table,
+                row: 0,
+                column: dragged.column,
+                op: TableOpKind::MoveColumnTo(to),
+            };
+            self.table_op(&op, window, cx);
+        }
+    }
+
     fn show_cell_menu(
         &mut self,
         table: usize,
@@ -131,13 +256,28 @@ impl Editor {
         let table = &self.snapshot.analysis.tables[table_ix];
         let columns = table.rows.iter().map(Vec::len).max().unwrap_or(0);
         let painted = self.painted.clone();
+        let drop_color = theme.selection;
         let rows = (0..table.rows.len()).map(|r| {
             div()
                 .id(("row", r))
+                .relative()
                 .flex()
                 .when(r > 0, |d| d.border_t_1())
-                .when(r == 0, |d| d.bg(theme.code_background))
+                .when(r == 0, |d| d.bg(theme.code_background).rounded_t(px(5.)))
                 .border_color(theme.rule)
+                .when(r > 0, |d| {
+                    d.drag_over::<DraggedRow>(move |style, dragged: &DraggedRow, _, _| {
+                        if dragged.table == table_ix {
+                            style.bg(drop_color)
+                        } else {
+                            style
+                        }
+                    })
+                    .on_drop(cx.listener(move |this, dragged: &DraggedRow, window, cx| {
+                        this.drop_row(dragged, table_ix, r, window, cx);
+                    }))
+                    .child(row_handle(table_ix, r, theme, cx))
+                })
                 .children((0..columns).map(|c| self.render_cell(table_ix, r, c, theme, cx)))
         });
         let last_row = table.rows.len().saturating_sub(1);
@@ -148,7 +288,6 @@ impl Editor {
             .border_1()
             .border_color(theme.rule)
             .rounded(px(6.))
-            .overflow_hidden()
             .children(rows);
         div()
             .id(("table", table_ix))
@@ -156,6 +295,7 @@ impl Editor {
             .group(TABLE_GROUP)
             .relative()
             .my(px(6.))
+            .pt(px(HANDLE_ROOM))
             .pr(px(HOVER_BUTTON))
             .pb(px(HOVER_BUTTON))
             .child(grid)
@@ -169,7 +309,7 @@ impl Editor {
                     last_column,
                     TableOpKind::InsertColumnRight,
                 )
-                .top_0()
+                .top(px(HANDLE_ROOM))
                 .bottom(px(HOVER_BUTTON))
                 .right_0()
                 .w(px(HOVER_BUTTON - 4.)),
@@ -220,6 +360,7 @@ impl Editor {
     ) -> AnyElement {
         let analysis = &self.snapshot.analysis;
         let table = &analysis.tables[table_ix];
+        let drop_color = theme.selection;
         let alignment = table.alignments.get(c).copied();
         let editing = self
             .grid
@@ -260,6 +401,20 @@ impl Editor {
                     this.show_cell_menu(table_ix, r, c, event.position, window, cx);
                 }),
             )
+            .relative()
+            .drag_over::<DraggedColumn>(move |style, dragged: &DraggedColumn, _, _| {
+                if dragged.table == table_ix {
+                    style.bg(drop_color)
+                } else {
+                    style
+                }
+            })
+            .on_drop(
+                cx.listener(move |this, dragged: &DraggedColumn, window, cx| {
+                    this.drop_column(dragged, table_ix, c, window, cx);
+                }),
+            )
+            .when(r == 0, |d| d.child(column_handle(table_ix, c, theme)))
             .when(c > 0, |d| d.border_l_1())
             .border_color(theme.rule)
             .when(alignment == Some(ColumnAlignment::Center), |d| {
@@ -270,17 +425,28 @@ impl Editor {
             })
             .map(|d| match editing {
                 Some(input) => d.child(
-                    div().key_context("FocalCell").child(
-                        // Match the rendered cell so the row keeps its size
-                        // while its cell is edited.
-                        Input::new(&input)
-                            .appearance(false)
-                            .p(px(0.))
-                            .h(px(TEXT_SIZE * CELL_SCALE * CELL_LINE_HEIGHT))
-                            .text_size(px(TEXT_SIZE * CELL_SCALE))
-                            .line_height(relative(CELL_LINE_HEIGHT))
-                            .font_family(PROSE_FONT),
-                    ),
+                    div()
+                        .key_context("FocalCell")
+                        .h(px(TEXT_SIZE * CELL_SCALE * CELL_LINE_HEIGHT))
+                        .overflow_hidden()
+                        .child(
+                            // Match the rendered cell so the row keeps its size
+                            // while its cell is edited.
+                            Input::new(&input)
+                                .appearance(false)
+                                .p(px(0.))
+                                .h(px(TEXT_SIZE * CELL_SCALE * CELL_LINE_HEIGHT))
+                                .text_size(px(TEXT_SIZE * CELL_SCALE))
+                                .line_height(relative(CELL_LINE_HEIGHT))
+                                .font_family(PROSE_FONT)
+                                .mt(px(-INPUT_LIFT))
+                                .when(alignment == Some(ColumnAlignment::Center), |d| {
+                                    d.text_center()
+                                })
+                                .when(alignment == Some(ColumnAlignment::Right), |d| {
+                                    d.text_right()
+                                }),
+                        ),
                 ),
                 None => d.children(content),
             })

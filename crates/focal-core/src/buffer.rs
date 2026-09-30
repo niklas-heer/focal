@@ -215,7 +215,11 @@ mod tests {
         buffer.edit(4..7, "abcd", 0..0, 0..0, EditKind::Grid(2));
         assert_eq!(buffer.text(), "x | abcd | y");
         buffer.undo();
-        assert_eq!(buffer.text(), "x | abc | y", "a new session is its own step");
+        assert_eq!(
+            buffer.text(),
+            "x | abc | y",
+            "a new session is its own step"
+        );
         buffer.undo();
         assert_eq!(buffer.text(), "x | a | y", "one session is one step");
     }

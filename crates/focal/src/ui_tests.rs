@@ -302,3 +302,23 @@ fn edit_as_markdown_shows_the_source_until_the_caret_leaves(cx: &mut TestAppCont
     });
     editor.read_with(cx, |editor, _| assert!(editor.text().starts_with("x| a |")));
 }
+
+#[gpui_kit::test]
+fn dragging_a_row_handle_moves_the_row(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "| h |\n|---|\n| 1 |\n| 2 |\n| 3 |\n");
+    // The handles show while the pointer is over the table.
+    act(cx, window, |window, cx| window.hover(("table", 0usize), cx));
+    act(cx, window, |window, cx| {
+        window.within(("table", 0usize)).drag_to(
+            ("row-handle", 3usize),
+            ("row-handle", 1usize),
+            cx,
+        );
+    });
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.text(),
+            "| h   |\n| --- |\n| 3   |\n| 1   |\n| 2   |\n"
+        );
+    });
+}
