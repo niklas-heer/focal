@@ -13,6 +13,8 @@ pub enum EditKind {
     Typing,
     Deleting,
     Other,
+    /// An edit of a table cell; all edits in one session undo together.
+    Grid(u64),
 }
 
 #[derive(Clone, Debug)]
@@ -76,6 +78,16 @@ impl Buffer {
         self.version += 1;
         self.redo.clear();
         let now = Instant::now();
+        if let EditKind::Grid(session) = kind
+            && let Some(last) = self.undo.last_mut()
+            && last.kind == EditKind::Grid(session)
+            && range == (last.start..last.start + last.new.len())
+        {
+            new.clone_into(&mut last.new);
+            last.selection_after = selection_after;
+            last.at = now;
+            return;
+        }
         if let Some(last) = self.undo.last_mut()
             && last.kind == kind
             && now.duration_since(last.at) < COALESCE
@@ -194,6 +206,19 @@ impl Buffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grid_edits_in_one_session_undo_together() {
+        let mut buffer = Buffer::new("x | a | y".into());
+        buffer.edit(4..5, "ab", 0..0, 0..0, EditKind::Grid(1));
+        buffer.edit(4..6, "abc", 0..0, 0..0, EditKind::Grid(1));
+        buffer.edit(4..7, "abcd", 0..0, 0..0, EditKind::Grid(2));
+        assert_eq!(buffer.text(), "x | abcd | y");
+        buffer.undo();
+        assert_eq!(buffer.text(), "x | abc | y", "a new session is its own step");
+        buffer.undo();
+        assert_eq!(buffer.text(), "x | a | y", "one session is one step");
+    }
 
     #[test]
     fn typing_coalesces_into_one_undo() {
