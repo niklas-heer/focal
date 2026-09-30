@@ -120,3 +120,33 @@ fn tab_and_shift_tab_change_the_list_level(cx: &mut TestAppContext) {
     act(cx, window, |window, cx| window.press("shift-tab", cx));
     editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "- a\n- b"));
 }
+
+#[gpui_kit::test]
+fn down_into_a_table_shows_its_source_with_the_caret_in_it(cx: &mut TestAppContext) {
+    let text = "before\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nafter";
+    let (window, editor) = open_editor(cx, text);
+    act(cx, window, |window, cx| {
+        window.press("down", cx);
+        window.press("down", cx);
+    });
+    editor.read_with(cx, |editor, _| {
+        let caret = editor.selection().start;
+        assert!(
+            (8..37).contains(&caret),
+            "caret {caret} is inside the table source"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn undo_restores_text_after_list_editing(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "- a");
+    act(cx, window, |window, cx| {
+        window.press("cmd-down", cx);
+        window.press("enter", cx);
+        window.input("b", cx);
+        window.press("cmd-z", cx);
+        window.press("cmd-z", cx);
+    });
+    editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "- a"));
+}
