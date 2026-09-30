@@ -75,10 +75,11 @@ Proposed details: Sparkle 2, as in Keywink and Spokn, with an appcast published 
 
 ### Folder mode
 
-- One window with a sidebar of Markdown files. The sidebar is collapsed by default and toggled with a shortcut.
+- One window with a sidebar of Markdown files. The sidebar is collapsed by default and toggled with ⌃⌘S (the macOS "Show Sidebar" shortcut; ⌘\\ belongs to 1Password on many Macs).
+- The folder opens its most recently changed Markdown file, or a new `Untitled.md` in it. Hidden entries, `node_modules` and `target` are skipped, and scanning stops at 5,000 files.
 - The file list updates live through FSEvents.
-- ⌘P opens a fuzzy quick switcher by file name.
-- Switching files saves the current one first.
+- ⌘P opens a fuzzy quick switcher by file name (and folder path); with no query, the newest files come first.
+- Switching files saves the current one first, including a table cell being edited.
 - Wiki links resolve against this folder.
 
 ### Stack
@@ -156,14 +157,15 @@ Milestone 0 compared TextKit 1 and TextKit 2 in a throwaway AppKit spike ([findi
 - It lives at the **bottom edge**.
 - It fades in when the pointer comes within about 40 pt of the bottom, and fades out shortly after the pointer leaves.
 - It never appears while you type.
-- It holds the file name, heading level, bold, italic, strikethrough, inline code, link, lists, task, quote, table, code block, math and a focus toggle.
-- Proposed: word count and reading time on its trailing side. Liquid Glass material.
+- It holds the file name, heading level, bold, italic, strikethrough, inline code, link, lists, task, quote, table, code block, math and a focus toggle. The same actions are in the Format menu, several with shortcuts (see the README).
+- Built in M3: word count and reading time on its trailing side ("12 of 340 words" with a selection); it fades in over 150 ms and out one second after the pointer leaves; it hides on any key press.
+- Proposed: Liquid Glass material; today it is a plain strip with a top rule.
 
 ### Focus mode (Agreed)
 
-- Off by default, toggled with a shortcut (proposed: ⌘D, as in iA Writer).
-- Dims everything except the current sentence or paragraph; the unit is a setting.
-- Typewriter scrolling keeps the current line vertically centered.
+- Off by default, toggled with ⌘D, as in iA Writer.
+- Dims everything except the current sentence or paragraph; the unit is a setting. In a list, a sentence ends with its item. List markers, checkboxes and highlights dim with their text.
+- Typewriter scrolling keeps the current line vertically centered (a setting, on by default), except while a table cell is edited.
 - Hides the sidebar and the bar.
 
 ### Typography and themes (Proposed)
@@ -176,6 +178,8 @@ Milestone 0 compared TextKit 1 and TextKit 2 in a throwaway AppKit spike ([findi
 ### Settings (Proposed)
 
 Kept deliberately small: prose font, text size, column width, focus unit, typewriter scrolling, and whether to check for updates automatically (Agreed, see [Updates](#updates)).
+
+Built in M3: a settings window (⌘,) with the focus unit and typewriter scrolling, saved to `~/Library/Application Support/Focal/settings.json`. Prose font, text size and column width need the fixed text size to become a setting first; the updates setting comes with M6.
 
 ## 7. Extras (Agreed scope, Proposed implementation)
 
@@ -197,7 +201,7 @@ Kept deliberately small: prose font, text size, column width, focus unit, typewr
 | **M0 — Engine spikes** | Done: TextKit 1 vs 2, the GPUI spike and the spell-checking and VoiceOver gate. GPUI chosen. |
 | **M1 — Core editor** | Done: line prefixes (quote bars, bullets, numbers, clickable checkboxes) drawn beside the text with hanging indents; the caret never stops inside a prefix; list editing (Return, Tab, Shift-Tab, Backspace at a marker); live reload through FSEvents; cached accessibility tree; code highlighting with tree-sitter; GPUI integration tests. |
 | **M2 — Tables** | Done: every table is a grid with cells edited in place; Tab, Return and the arrow keys move between cells; hover buttons, a context menu and drag handles add, delete, move and align rows and columns; edited tables are rewritten aligned, and a cell edit is one undo step; wide tables scroll sideways. |
-| **M3 — Chrome** | Bottom bar, focus mode with typewriter scrolling, folder mode with sidebar and quick switcher. |
+| **M3 — Chrome** | Done: bottom bar with word count, focus mode by sentence or paragraph with typewriter scrolling, folder mode with a live sidebar and a ⌘P quick switcher, a settings window, a menu bar, and formatting shortcuts. |
 | **M4 — Extras** | Alerts, front matter, footnotes, highlight, images, math and wiki links. |
 | **M5 — Mermaid** | Lazy renderer, cache and island. |
 | **M6 — Distribution** | `Focal.app` bundle, single-instance forwarding for the `focal` command, "Install Command Line Tool…", automatic updates with a setting and a download prompt, signing, notarization, Homebrew cask, release process. |

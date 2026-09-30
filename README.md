@@ -2,7 +2,7 @@
 
 A focused, native Markdown editor for macOS that you open from the terminal.
 
-> **Status:** early. Focal is built in Rust with [GPUI](https://gpui.rs), Zed's GPU-accelerated UI framework. Milestone 1 is done: lists, checkboxes and quotes are drawn and edited properly, files reload live, code blocks are highlighted and VoiceOver can read the document. Milestone 2 is done too: tables are grids you edit in place, with rows and columns you can add, move, align and drag, and the file stays aligned. The chrome (bottom bar, focus mode, folder mode) is next. See [the design](docs/design.md).
+> **Status:** early. Focal is built in Rust with [GPUI](https://gpui.rs), Zed's GPU-accelerated UI framework. Milestone 1 is done: lists, checkboxes and quotes are drawn and edited properly, files reload live, code blocks are highlighted and VoiceOver can read the document. Milestone 2 made tables grids you edit in place. Milestone 3 added the chrome: the bottom formatting bar, focus mode with typewriter scrolling, folder mode with a sidebar and a quick switcher, settings and a menu bar. The Markdown extras (alerts, images, math, wiki links) are next. See [the design](docs/design.md).
 
 ## Try it
 
@@ -17,6 +17,18 @@ mise run stress                        # timings on a 5,000-line document
 ```
 
 Set `FOCAL_TRACE=1` to print parse and restyle times for every change.
+
+| Shortcut | Does |
+| --- | --- |
+| ⌘B, ⌘I, ⇧⌘X, ⌘E | Bold, italic, strikethrough, inline code |
+| ⌘K | Link |
+| ⌘1 to ⌘6, ⌘0 | Heading level, paragraph |
+| ⌘D | Focus mode |
+| ⌃⌘S | Sidebar (folder mode) |
+| ⌘P | Quick switcher (folder mode) |
+| ⌘, | Settings |
+
+Lists, tasks, quotes, tables, code and math blocks are in the Format menu and the bottom bar.
 
 ## The goal
 

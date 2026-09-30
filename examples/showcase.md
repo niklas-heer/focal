@@ -80,6 +80,8 @@ Tab and Return move between cells, a right-click shows row and column actions, a
 
 ---
 
+Move the pointer to the bottom edge for the formatting bar, or press ⌘D for focus mode.
+
 ### A smaller heading
 
 Wiki links like [[design]] resolve against the folder. That's it.
