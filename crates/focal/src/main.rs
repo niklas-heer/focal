@@ -6,6 +6,8 @@ mod document;
 mod editor;
 mod spell;
 mod theme;
+#[cfg(test)]
+mod ui_tests;
 
 use std::borrow::Cow;
 use std::ffi::OsString;

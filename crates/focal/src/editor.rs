@@ -18,7 +18,7 @@ use gpui_kit::accesskit::{ActionData, TextSelection};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::native_menu::NativeMenu;
 use gpui_kit::prelude::FluentBuilder as _;
-use gpui_kit::{AccessibleAction, Role, StatefulInteractiveElement as _};
+use gpui_kit::{AccessibleAction, Role, StatefulInteractiveElement as _, TestSupportExt as _};
 use gpui_kit::{
     App, Bounds, ClipboardItem, Context, CursorStyle, ElementInputHandler, EntityInputHandler,
     FocusHandle, Focusable, FontStyle, FontWeight, Hsla, InteractiveElement as _, IntoElement,
@@ -283,7 +283,12 @@ impl Editor {
         self.document.title()
     }
 
-    fn text(&self) -> &str {
+    #[cfg(test)]
+    pub(crate) fn selection(&self) -> Range<usize> {
+        self.selection.clone()
+    }
+
+    pub(crate) fn text(&self) -> &str {
         self.buffer.text()
     }
 
@@ -1995,6 +2000,7 @@ impl Render for Editor {
                 }
             })
             .key_context(CONTEXT)
+            .test_support()
             .track_focus(&self.focus_handle)
             .relative()
             .size_full()

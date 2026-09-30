@@ -1,0 +1,74 @@
+//! Headless UI tests: the real editor in a test window, driven by key presses,
+//! text input and clicks through GPUI Kit's test harness.
+
+use gpui_kit::test::TestWindowExt as _;
+use gpui_kit::{
+    AnyWindowHandle, App, AppContext as _, Bounds, Entity, Focusable as _, TestAppContext, Window,
+    WindowBounds, WindowOptions, point, px, size,
+};
+
+use crate::document::Document;
+use crate::editor::{self, Editor};
+
+pub fn open_editor(cx: &mut TestAppContext, text: &str) -> (AnyWindowHandle, Entity<Editor>) {
+    let text = text.to_owned();
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        editor::bind_keys(cx);
+        let bounds = Bounds {
+            origin: point(px(0.), px(0.)),
+            size: size(px(900.), px(700.)),
+        };
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            ..WindowOptions::default()
+        };
+        gpui_kit::open_window(options, cx, |window, cx| {
+            let editor = cx.new(|cx| Editor::new(Document::untitled(), text, window, cx));
+            window.focus(&editor.read(cx).focus_handle(cx), cx);
+            editor
+        })
+        .expect("open test window")
+    })
+}
+
+/// Renders a frame, then runs `f` with the window.
+pub fn act(
+    cx: &mut TestAppContext,
+    window: AnyWindowHandle,
+    f: impl FnOnce(&mut Window, &mut App),
+) {
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        f(window, cx);
+    })
+    .expect("window is open");
+}
+
+#[gpui_kit::test]
+fn typing_inserts_at_the_caret(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "Hello");
+    act(cx, window, |window, cx| {
+        window.press("cmd-down", cx);
+        window.input(" world", cx);
+    });
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.text(), "Hello world");
+        assert_eq!(
+            editor.selection(),
+            11..11,
+            "the caret follows the typed text"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn return_continues_a_list(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "- one");
+    act(cx, window, |window, cx| {
+        window.press("cmd-down", cx);
+        window.press("enter", cx);
+        window.input("two", cx);
+    });
+    editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "- one\n- two"));
+}
