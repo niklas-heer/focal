@@ -64,11 +64,28 @@ That is inside the design's 8 ms keystroke budget without incremental parsing. I
 
 ## What GPUI does not give Focal (compared with AppKit)
 
-- **Accessibility.** GPUI has AccessKit support (`examples/a11y.rs`), but the custom text element exposes nothing to VoiceOver yet. Making an editor accessible is real work in either stack; AppKit's `NSTextView` provides it for free.
-- **System text services:** spell checking, grammar, autocorrect, Look Up, Writing Tools and the services menu are absent. IME and the character palette work through the input handler.
+- **Accessibility** has to be built, but GPUI supports it well; see the gate below. In the TextKit spike on `main`, neither engine exposed table grids to VoiceOver either.
+- **System text services:** spell checking is built on `NSSpellChecker` (see the gate below). Grammar, autocorrect, Look Up, Writing Tools and the services menu are still absent. IME and the character palette work through the input handler.
 - **Document infrastructure:** no `NSDocument`, so no versions browser, native tabs, recent documents or file coordination. The spike polls the file instead of using `NSFilePresenter`/FSEvents.
 - **Mermaid and math** need new approaches: no `WKWebView` in GPUI and no SwiftMath. Candidates are rendering to SVG out of process (for example `mmdc`, or KaTeX/MathJax through a JavaScript engine) and showing the SVG with GPUI's `svg()`/`img()`, or a Rust math typesetter.
 - **App shell:** single-instance forwarding (a second `focal file.md` bringing the window forward), an `.app` bundle, signing and notarization are not done; each `focal` call starts its own process.
+
+## Gate: spell checking and VoiceOver (2026-09-30)
+
+After the TextKit Milestone 0 spike on `main` (which chose TextKit 1 by a narrow margin, with a 15 ms keystroke cost and table problems on both engines), Niklas asked to test the two gaps that could stay painful in GPUI before choosing it.
+
+**Spell checking: pass.** `crates/focal/src/spell.rs` calls macOS's `NSSpellChecker` through the `objc2-app-kit` bindings, with no `unsafe` code. Misspelled words in prose get a red wavy underline; inline code, math, HTML, URLs and revealed markers are skipped, and so is the word being typed. Right-click opens a native menu (GPUI Kit's `NativeMenu`) with guesses, Ignore Spelling and Learn Spelling; choosing a guess replaces the word as one undoable edit. English and German typos in the same document were both flagged. Checked in the running app with real mouse and key events; Learn Spelling was not exercised because it writes to the system dictionary.
+
+- On a German Mac, guesses for a short English phrase came back empty: automatic language identification treats it as German. Focal asks in each of the user's preferred spelling languages and merges the results. Their order is not ranked yet ("typo" was not in the top six for "tpyo").
+- Results are cached per line text; only visible lines are checked.
+
+**VoiceOver: pass at the accessibility-API level, not yet listened to.** `crates/focal/src/accessibility.rs` makes the editor an AccessKit multi-line text input using GPUI's synthetic accessibility children. A macOS accessibility client (the API VoiceOver uses) confirmed:
+
+- the document's rendered text, with markers hidden, as text runs: character count, text for any range and line numbers work;
+- the caret as the selection, in both directions: setting the selection from the client moved Focal's caret;
+- tables as a table with rows and cells whose labels are the rendered cell text (`works`, not `**works**`), which neither TextKit engine managed.
+
+Limits found: the text area's overall value is empty, because AccessKit does not compute it for multi-line fields (readers use ranges instead); text runs have no screen bounds yet, so VoiceOver's cursor frame is not drawn; one selection request landed one character off at a hidden marker; and building the tree for the 5,000-line document costs about 12 ms per frame while an assistive app is connected (none otherwise), so it needs caching or viewport windowing. Listening with VoiceOver itself is still Niklas's check.
 
 ## What GPUI does well here
 
@@ -78,6 +95,6 @@ That is inside the design's 8 ms keystroke budget without incremental parsing. I
 
 ## Open questions for choosing a stack
 
-- Is losing system spell checking and VoiceOver-by-default acceptable, or worth building (AccessKit for the text element; a spell-check service through AppKit bindings)?
+- Spell checking and VoiceOver proved buildable (see the gate). Are grammar checking, autocorrect and Writing Tools needed, or acceptable to leave out?
 - Is the Duo-for-bold workaround acceptable until the Quattro weight problem is fixed upstream?
 - Is depending on `gpui-pre`/`gpui-kit` (a community-published snapshot of Zed's in-tree GPUI, pinned exactly) acceptable for a long-lived app?

@@ -26,13 +26,13 @@ Evidence from the spike (Apple M4, release build):
 
 Costs found:
 
-- No system spell checking, grammar, autocorrect, Look Up or Writing Tools. VoiceOver needs AccessKit work for the custom text element.
+- No system grammar checking, autocorrect, Look Up or Writing Tools. Spell checking and VoiceOver have to be built; a gate on 2026-09-30 built both (macOS's `NSSpellChecker` through `objc2-app-kit`; AccessKit text runs, selection and tables) and checked them through the accessibility API, with the limits listed in `docs/gpui-spike.md`.
 - No `NSDocument` (versions, native tabs, file coordination); Mermaid and math need non-web, non-SwiftMath renderers.
 - GPUI text lacks paragraph styles (no hanging indent for wrapped list items) and pads no run backgrounds.
 - The static iA Writer Quattro S Bold files report weight 400, so GPUI cannot select them; the spike uses Duo S Bold for bold prose.
 - `gpui-kit` pins `gpui-pre`, a community-published snapshot of Zed's in-tree GPUI, so upgrades follow that publisher.
 
-The alternative is the accepted AppKit plan with its TextKit Milestone 0 spike.
+The alternative is the AppKit plan. Its Milestone 0 spike (on `main`, `docs/spikes/2026-09-29-m0-textkit.md`) chose TextKit 1 by a narrow margin, measured a 15 ms keystroke cost against the same 8 ms budget, and found that neither TextKit engine kept the caret out of hidden table source or exposed table grids to VoiceOver.
 
 ## Consequences
 
