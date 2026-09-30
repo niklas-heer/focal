@@ -1,0 +1,85 @@
+#!/bin/bash
+# Prepare a Developer ID signed Focal release and its Sparkle appcast in
+# build/release. Publishing the GitHub release stays a separate step
+# (RELEASE.md).
+#
+#   FOCAL_BUILD=2 scripts/release              signed dry run: nothing leaves this Mac
+#   FOCAL_BUILD=2 scripts/release --notarize   also submits the app to Apple's notary
+#                                              service and staples the ticket
+#
+# Overrides: FOCAL_SIGNING_IDENTITY, FOCAL_NOTARY_PROFILE, FOCAL_UPDATE_FEED_URL,
+# FOCAL_UPDATE_PUBLIC_KEY, FOCAL_SPARKLE_ACCOUNT (Keychain account of the
+# Sparkle key) or FOCAL_SPARKLE_KEY_FILE (a key file instead, for tests).
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$root"
+notarize=false
+case "${1:-}" in
+  --notarize) notarize=true ;;
+  "") ;;
+  *) echo "Usage: FOCAL_BUILD=N scripts/release [--notarize]" >&2; exit 64 ;;
+esac
+identity="${FOCAL_SIGNING_IDENTITY:-Developer ID Application: Niklas Heer (WL5ASJ82YX)}"
+profile="${FOCAL_NOTARY_PROFILE:-keywink-notary}"
+feed="${FOCAL_UPDATE_FEED_URL:-https://github.com/niklas-heer/focal/releases/latest/download/appcast.xml}"
+public_key="${FOCAL_UPDATE_PUBLIC_KEY:-SL638YLPjJQuUkrCa0p26d1nfMoa69+ymt0mzNQDscA=}"
+build="${FOCAL_BUILD:?Set FOCAL_BUILD to a build number higher than the last release}"
+artifacts="build/release"
+if [[ -n "${FOCAL_SPARKLE_KEY_FILE:-}" ]]; then
+  key=(--ed-key-file "$FOCAL_SPARKLE_KEY_FILE")
+else
+  key=(--account "${FOCAL_SPARKLE_ACCOUNT:-ed25519}")
+fi
+
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo 'Tracked files must be clean before preparing a release.' >&2
+  exit 65
+fi
+security find-identity -v -p codesigning | grep -q "$identity" || { echo "No signing identity matching '$identity' in the Keychain." >&2; exit 64; }
+
+FOCAL_BUILD="$build" scripts/bundle --sign "$identity" --feed "$feed" --public-key "$public_key"
+app="build/Focal.app"
+plist="$app/Contents/Info.plist"
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")" == com.niklasheer.focal ]] || { echo 'Unexpected bundle identifier.' >&2; exit 65; }
+version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")"
+artifact="$artifacts/Focal-$version-$build.zip"
+if [[ -e "$artifact" ]]; then
+  echo "A release artifact for $version ($build) already exists in $artifacts." >&2
+  exit 73
+fi
+
+temporary="$(mktemp -d "${TMPDIR:-/tmp}/focal-release.XXXXXX")"
+trap 'rm -rf "$temporary"' EXIT
+if $notarize; then
+  ditto -c -k --sequesterRsrc --keepParent "$app" "$temporary/Focal-notarization.zip"
+  xcrun notarytool submit "$temporary/Focal-notarization.zip" --keychain-profile "$profile" --wait
+  xcrun stapler staple "$app"
+  xcrun stapler validate "$app"
+  spctl --assess --type execute --verbose "$app"
+fi
+
+mkdir -p "$artifacts"
+ditto -c -k --sequesterRsrc --keepParent "$app" "$artifact"
+(cd "$artifacts" && shasum -a 256 "$(basename "$artifact")" > "$(basename "$artifact").sha256")
+
+# The appcast lists only this release: every installed version updates
+# straight to the newest one through GitHub's latest-release redirect.
+tools="$(scripts/sparkle)/bin"
+mkdir -p "$temporary/appcast"
+cp "$artifact" "$temporary/appcast/"
+"$tools/generate_appcast" "${key[@]}" \
+  --download-url-prefix "https://github.com/niklas-heer/focal/releases/download/v$version/" \
+  --link "https://github.com/niklas-heer/focal/releases/tag/v$version" \
+  -o "$artifacts/appcast.xml" "$temporary/appcast"
+signature="$(sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p' "$artifacts/appcast.xml" | head -1)"
+"$tools/sign_update" "${key[@]}" --verify "$artifact" "$signature"
+
+echo "Prepared release artifacts:"
+echo "  $artifact"
+echo "  $artifact.sha256"
+echo "  $artifacts/appcast.xml"
+if $notarize; then
+  echo "Publish with: gh release create v$version $artifact $artifact.sha256 $artifacts/appcast.xml --title 'Focal $version' --notes-file <notes>"
+else
+  echo "Dry run: the app is signed but not notarized. Do not publish these artifacts."
+fi
