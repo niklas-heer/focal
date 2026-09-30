@@ -107,7 +107,8 @@ const SPELL_CACHE_LIMIT: usize = 20_000;
 const TEXT_SIZE: f32 = 18.;
 const COLUMN_WIDTH: f32 = 720.;
 const AUTOSAVE_DELAY: Duration = Duration::from_millis(400);
-const DISK_POLL: Duration = Duration::from_secs(1);
+/// Editors and agents write in bursts; wait this long before reloading.
+const RELOAD_SETTLE: Duration = Duration::from_millis(50);
 
 pub fn bind_keys(cx: &mut App) {
     let context = Some(CONTEXT);
@@ -228,7 +229,8 @@ pub struct Editor {
     /// Misspelled display ranges per line text.
     spell_cache: RefCell<std::collections::HashMap<String, Rc<[Range<usize>]>>>,
     save_task: Option<Task<()>>,
-    _poll_task: Task<()>,
+    /// Watches the file for changes on disk; dropping it stops watching.
+    watch: Option<(notify::RecommendedWatcher, Task<()>)>,
 }
 
 impl Editor {
@@ -238,14 +240,6 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let poll = cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(DISK_POLL).await;
-                if this.update(cx, |this, cx| this.check_disk(cx)).is_err() {
-                    break;
-                }
-            }
-        });
         let weak = cx.entity().downgrade();
         window.on_window_should_close(cx, move |_, cx| {
             weak.update(cx, |this, cx| this.save_now(cx)).ok();
@@ -273,9 +267,10 @@ impl Editor {
             a11y_ids: RunIds::default(),
             spell_cache: RefCell::default(),
             save_task: None,
-            _poll_task: poll,
+            watch: None,
         };
         editor.refresh();
+        editor.watch_document(cx);
         editor
     }
 
@@ -820,6 +815,7 @@ impl Editor {
             if let Ok(Ok(Some(path))) = chosen.await {
                 this.update_in(cx, |this, window, cx| {
                     this.document.path = Some(path);
+                    this.watch_document(cx);
                     this.save_now(cx);
                     window.set_window_title(&this.title());
                 })
@@ -862,6 +858,31 @@ impl Editor {
             Err(error) => self.error = Some(format!("{error:#}")),
         }
         cx.notify();
+    }
+
+    /// Watches the document's file through FSEvents and reloads it on change.
+    fn watch_document(&mut self, cx: &mut Context<Self>) {
+        self.watch = None;
+        let Some(path) = self.document.path.clone() else {
+            return;
+        };
+        let (watcher, events) = match document::watch(&path) {
+            Ok(watch) => watch,
+            Err(error) => {
+                self.error = Some(format!("Not watching the file for changes: {error:#}"));
+                return;
+            }
+        };
+        let task = cx.spawn(async move |this, cx| {
+            while events.recv().await.is_ok() {
+                cx.background_executor().timer(RELOAD_SETTLE).await;
+                while events.try_recv().is_ok() {}
+                if this.update(cx, |this, cx| this.check_disk(cx)).is_err() {
+                    break;
+                }
+            }
+        });
+        self.watch = Some((watcher, task));
     }
 
     /// Reloads the file when it changed on disk. With unsaved local edits,

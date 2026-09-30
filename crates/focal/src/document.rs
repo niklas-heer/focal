@@ -79,6 +79,33 @@ impl Document {
     }
 }
 
+/// Watches `path` for changes, including being replaced by a rename (editors
+/// and agents often write a temporary file and rename it over the original).
+/// The file's folder is watched, because a rename replaces the file itself;
+/// events are matched by file name, since FSEvents may report the folder
+/// through a different path (such as `/private/var` for `/var`).
+pub fn watch(path: &Path) -> Result<(notify::RecommendedWatcher, async_channel::Receiver<()>)> {
+    use notify::{RecursiveMode, Watcher as _};
+    let name = path
+        .file_name()
+        .context("the path has no file name")?
+        .to_owned();
+    let folder = path.parent().context("the file has no folder")?;
+    let (tx, rx) = async_channel::unbounded();
+    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        if let Ok(event) = event
+            && event
+                .paths
+                .iter()
+                .any(|p| p.file_name() == Some(name.as_os_str()))
+        {
+            let _ = tx.try_send(());
+        }
+    })?;
+    watcher.watch(folder, RecursiveMode::NonRecursive)?;
+    Ok((watcher, rx))
+}
+
 /// Reads a file as UTF-8. Other encodings are refused rather than guessed, so
 /// saving can never change bytes Focal did not understand.
 pub fn read(path: &Path) -> Result<String> {
@@ -98,6 +125,33 @@ fn is_not_found(error: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn next_event(rx: &async_channel::Receiver<()>) -> bool {
+        let rx = rx.clone();
+        let (tx, done) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(rx.recv_blocking().is_ok());
+        });
+        done.recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn watching_reports_writes_and_atomic_renames() {
+        let dir = std::env::temp_dir().join(format!("focal-watch-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("watched.md");
+        fs::write(&path, "one").unwrap();
+        let (_watcher, rx) = watch(&path).unwrap();
+        fs::write(&path, "two").unwrap();
+        assert!(next_event(&rx), "a write is reported");
+        while rx.try_recv().is_ok() {}
+        let temp = dir.join(".watched.md.tmp");
+        fs::write(&temp, "three").unwrap();
+        fs::rename(&temp, &path).unwrap();
+        assert!(next_event(&rx), "an atomic rename is reported");
+        fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn round_trips_bytes_exactly() {

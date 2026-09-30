@@ -9,7 +9,9 @@ license.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"
+async-channel = "2.5.0"
 focal-core.workspace = true
+notify = "7.0.0"
 gpui-kit = { version = "=0.7.0", default-features = false, features = ["component"] }
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSSpellChecker"] }

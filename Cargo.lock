@@ -1846,8 +1846,10 @@ name = "focal"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-channel",
  "focal-core",
  "gpui-kit",
+ "notify",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
