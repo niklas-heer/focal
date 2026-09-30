@@ -31,9 +31,6 @@ impl InlineStyle {
     pub const HTML: Self = Self(1 << 8);
     pub const FOOTNOTE: Self = Self(1 << 9);
     pub const IMAGE: Self = Self(1 << 10);
-    /// A list bullet drawn in place of `-`, `*` or `+`.
-    pub const BULLET: Self = Self(1 << 11);
-    pub const TASK_OPEN: Self = Self(1 << 12);
     pub const TASK_DONE: Self = Self(1 << 13);
     /// The title that replaces a GitHub alert's `[!KIND]` line.
     pub const ALERT_TITLE: Self = Self(1 << 14);
@@ -122,6 +119,44 @@ pub struct LineInfo {
     pub alert: Option<Alert>,
     /// The code block with this index in [`Analysis::code_blocks`].
     pub code_block: Option<usize>,
+    pub prefix: LinePrefix,
+}
+
+/// A list item's marker, drawn in the item's marker column.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ListMarker {
+    Bullet,
+    /// The source label, such as `1.` or `3)`.
+    Ordered(String),
+    Task {
+        checked: bool,
+    },
+}
+
+/// One container level in front of a line's content, outermost first.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum PrefixLevel {
+    Quote(Option<Alert>),
+    /// A list level: the marker on an item's first line, `None` on its other lines.
+    List(Option<ListMarker>),
+}
+
+/// What stands in front of a line's content. Its source is drawn as elements
+/// (quote bars, bullets, checkboxes) and the caret never stops inside it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct LinePrefix {
+    pub levels: Vec<PrefixLevel>,
+    pub content_start: usize,
+    /// The list marker's source on an item's first line, task box and spaces included.
+    pub marker: Option<Range<usize>>,
+    /// This line's `>` markers, each with one following space.
+    pub quotes: Vec<Range<usize>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Bias {
+    Left,
+    Right,
 }
 
 /// When a hidden marker becomes visible again.
@@ -131,15 +166,11 @@ pub enum Reveal {
     Touching(Range<usize>),
     /// When the caret or selection is on one of these lines.
     Lines(Range<usize>),
-    /// When the caret is inside the marker itself, as for list bullets.
-    Inside,
 }
 
 /// What a hidden marker shows instead of nothing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Replacement {
-    Bullet,
-    Task { checked: bool },
     AlertTitle(Alert),
     Label(String),
 }
@@ -147,9 +178,6 @@ pub enum Replacement {
 impl Replacement {
     pub fn text(&self) -> String {
         match self {
-            Self::Bullet => "•\u{2002}".to_owned(),
-            Self::Task { checked: false } => "☐\u{2002}".to_owned(),
-            Self::Task { checked: true } => "☑\u{2002}".to_owned(),
             Self::AlertTitle(alert) => alert.title().to_owned(),
             Self::Label(label) => label.clone(),
         }
@@ -157,9 +185,6 @@ impl Replacement {
 
     pub const fn style(&self) -> InlineStyle {
         match self {
-            Self::Bullet => InlineStyle::BULLET,
-            Self::Task { checked: false } => InlineStyle::TASK_OPEN,
-            Self::Task { checked: true } => InlineStyle::TASK_DONE,
             Self::AlertTitle(_) => InlineStyle::ALERT_TITLE,
             Self::Label(_) => InlineStyle::LABEL,
         }
@@ -243,6 +268,30 @@ impl Analysis {
         &self.infos[line.min(self.infos.len() - 1)]
     }
 
+    /// The part of a line after its prefix.
+    pub fn content_range(&self, line: usize) -> Range<usize> {
+        let range = self.lines.range(line);
+        self.info(line)
+            .prefix
+            .content_start
+            .clamp(range.start, range.end)..range.end
+    }
+
+    /// Moves an offset out of a line's prefix, where the caret may not stop.
+    pub fn snap(&self, offset: usize, bias: Bias) -> usize {
+        let line = self.lines.line_of(offset);
+        let content = self.content_range(line);
+        let line_start = self.lines.range(line).start;
+        if offset >= content.start || content.start == line_start {
+            return offset;
+        }
+        if bias == Bias::Left && line > 0 {
+            self.lines.range(line - 1).end
+        } else {
+            content.start
+        }
+    }
+
     /// The innermost link containing `offset`.
     pub fn link_at(&self, offset: usize) -> Option<&Link> {
         self.links
@@ -286,6 +335,7 @@ pub fn analyze(text: &str) -> Analysis {
         tables: Vec::new(),
         code_blocks: Vec::new(),
         stack: Vec::new(),
+        containers: Vec::new(),
     };
     for (event, range) in Parser::new_ext(text, options()).into_offset_iter() {
         builder.event(event, range);
@@ -310,6 +360,19 @@ impl Frame<'_> {
     }
 }
 
+enum ContainerKind {
+    Quote(Option<Alert>),
+    Item {
+        marker: ListMarker,
+        marker_range: Range<usize>,
+    },
+}
+
+struct Container {
+    range: Range<usize>,
+    kind: ContainerKind,
+}
+
 struct Builder<'a> {
     text: &'a str,
     lines: LineIndex,
@@ -322,6 +385,7 @@ struct Builder<'a> {
     tables: Vec<Table>,
     code_blocks: Vec<CodeBlock>,
     stack: Vec<Frame<'a>>,
+    containers: Vec<Container>,
 }
 
 impl<'a> Builder<'a> {
@@ -376,11 +440,10 @@ impl<'a> Builder<'a> {
                 if pos < line_range.end && bytes[pos] == b' ' {
                     pos += 1;
                 }
-                self.markers.push(Marker {
-                    range: self.prefix_end[line]..pos,
-                    reveal: Reveal::Lines(line..line + 1),
-                    replacement: None,
-                });
+                self.infos[line]
+                    .prefix
+                    .quotes
+                    .push(self.prefix_end[line]..pos);
                 self.prefix_end[line] = pos;
             }
             let info = &mut self.infos[line];
@@ -404,6 +467,10 @@ impl<'a> Builder<'a> {
                 });
             }
         }
+        self.containers.push(Container {
+            range: self.trim_line_ending(range),
+            kind: ContainerKind::Quote(alert),
+        });
     }
 
     fn leaf(&mut self, event: &Event<'a>, range: &Range<usize>) {
@@ -468,7 +535,7 @@ impl<'a> Builder<'a> {
             }
             Tag::Image { .. } => self.markers_around(&range, content, InlineStyle::IMAGE),
             Tag::Heading { level, .. } => self.heading(&range, content, level),
-            Tag::Item => self.item(&range, content, frame.task),
+            Tag::Item => self.item(&range, content.as_ref(), frame.task.as_ref()),
             Tag::CodeBlock(kind) => self.code_block(&range, content, &kind),
             Tag::MetadataBlock(MetadataBlockKind::YamlStyle) => self.front_matter(&range),
             Tag::HtmlBlock => {
@@ -594,42 +661,38 @@ impl<'a> Builder<'a> {
     fn item(
         &mut self,
         range: &Range<usize>,
-        content: Option<Range<usize>>,
-        task: Option<(Range<usize>, bool)>,
+        content: Option<&Range<usize>>,
+        task: Option<&(Range<usize>, bool)>,
     ) {
         let bytes = self.text.as_bytes();
         let line_end = self.lines.range(self.lines.line_of(range.start)).end;
         let start = range.start;
-        let bullet = matches!(bytes.get(start), Some(b'-' | b'*' | b'+'));
-        if let Some((task_range, checked)) = task {
-            let mut end = task_range.end;
-            while end < line_end && bytes[end] == b' ' {
-                end += 1;
-            }
-            let marker_start = if bullet { start } else { task_range.start };
-            self.markers.push(Marker {
-                range: marker_start..end,
-                reveal: Reveal::Inside,
-                replacement: Some(Replacement::Task { checked }),
-            });
-            if checked && let Some(content) = content {
-                let content = end.max(content.start)..content.end;
-                self.style(content, InlineStyle::TASK_DONE);
-            }
-            return;
-        }
-        if !bullet {
-            return;
-        }
-        let mut end = start + 1;
-        let content_start = content.map_or(line_end, |content| content.start.min(line_end));
-        while end < content_start && matches!(bytes[end], b' ' | b'\t') {
+        let mut end = start;
+        while end < line_end && !matches!(bytes[end], b' ' | b'\t') {
             end += 1;
         }
-        self.markers.push(Marker {
-            range: start..end,
-            reveal: Reveal::Inside,
-            replacement: Some(Replacement::Bullet),
+        let label = &self.text[start..end];
+        let mut marker = if matches!(label, "-" | "*" | "+") {
+            ListMarker::Bullet
+        } else {
+            ListMarker::Ordered(label.to_owned())
+        };
+        if let Some((task_range, checked)) = task {
+            marker = ListMarker::Task { checked: *checked };
+            end = task_range.end;
+            if *checked && let Some(content) = content {
+                self.style(end.max(content.start)..content.end, InlineStyle::TASK_DONE);
+            }
+        }
+        while end < line_end && matches!(bytes[end], b' ' | b'\t') {
+            end += 1;
+        }
+        self.containers.push(Container {
+            range: self.trim_line_ending(range),
+            kind: ContainerKind::Item {
+                marker,
+                marker_range: start..end,
+            },
         });
     }
 
@@ -736,11 +799,58 @@ impl<'a> Builder<'a> {
 
     fn finish(self) -> Analysis {
         let count = self.lines.len();
+        let mut infos = self.infos;
+        for (line, info) in infos.iter_mut().enumerate() {
+            info.prefix.content_start = self.prefix_end[line];
+        }
+        let mut containers = self.containers;
+        containers.sort_by_key(|c| (c.range.start, std::cmp::Reverse(c.range.end)));
+        for container in &containers {
+            let lines = self.lines.lines_of(&container.range);
+            match &container.kind {
+                ContainerKind::Quote(alert) => {
+                    for line in lines {
+                        infos[line].prefix.levels.push(PrefixLevel::Quote(*alert));
+                    }
+                }
+                ContainerKind::Item {
+                    marker,
+                    marker_range,
+                } => {
+                    let first = lines.start;
+                    // The item's own indent, measured from where its prefix starts on
+                    // its first line; continuation lines skip up to that much whitespace.
+                    let own_start = infos[first].prefix.content_start.min(marker_range.start);
+                    let indent = marker_range.end - own_start;
+                    for line in lines {
+                        let prefix = &mut infos[line].prefix;
+                        if line == first {
+                            prefix.levels.push(PrefixLevel::List(Some(marker.clone())));
+                            prefix.marker = Some(marker_range.clone());
+                            prefix.content_start = marker_range.end;
+                        } else {
+                            prefix.levels.push(PrefixLevel::List(None));
+                            let end = self.lines.range(line).end;
+                            let bytes = self.text.as_bytes();
+                            let mut at = prefix.content_start;
+                            while at < end
+                                && at - prefix.content_start < indent
+                                && matches!(bytes[at], b' ' | b'\t')
+                            {
+                                at += 1;
+                            }
+                            prefix.content_start = at;
+                        }
+                    }
+                }
+            }
+        }
+
         let line_markers = bucket(&self.lines, count, self.markers.iter().map(|m| &m.range));
         let line_styles = bucket(&self.lines, count, self.styles.iter().map(|s| &s.range));
         Analysis {
             lines: self.lines,
-            infos: self.infos,
+            infos,
             markers: self.markers,
             styles: self.styles,
             links: self.links,
@@ -777,6 +887,7 @@ fn bucket<'r>(
 }
 
 #[cfg(test)]
+#[allow(clippy::single_range_in_vec_init)] // one marker per line is common here
 mod tests {
     use super::*;
 
@@ -828,18 +939,6 @@ mod tests {
     }
 
     #[test]
-    fn list_bullets_and_tasks_are_replaced() {
-        let text = "- one\n- [x] done\n1. ordered\n";
-        let analysis = analyze(text);
-        assert_eq!(marker_texts(text, &analysis), ["- ", "- [x] "]);
-        assert_eq!(analysis.markers[0].replacement, Some(Replacement::Bullet));
-        assert_eq!(
-            analysis.markers[1].replacement,
-            Some(Replacement::Task { checked: true })
-        );
-    }
-
-    #[test]
     fn fenced_code_marks_fences_and_body() {
         let text = "```rust\nfn main() {}\n```\n";
         let analysis = analyze(text);
@@ -864,27 +963,6 @@ mod tests {
         let analysis = analyze("```\ncode\n");
         assert_eq!(analysis.markers.len(), 1);
         assert_eq!(analysis.infos[1].kind, LineKind::Code);
-    }
-
-    #[test]
-    fn quotes_and_alerts() {
-        let text = "> [!WARNING]\n> Careful\n";
-        let analysis = analyze(text);
-        assert_eq!(analysis.infos[0].alert, Some(Alert::Warning));
-        assert_eq!(analysis.infos[1].quote_depth, 1);
-        assert_eq!(marker_texts(text, &analysis), ["> ", "> ", "[!WARNING]"]);
-        assert_eq!(
-            analysis.markers[2].replacement,
-            Some(Replacement::AlertTitle(Alert::Warning))
-        );
-    }
-
-    #[test]
-    fn nested_quote_markers_stack() {
-        let text = "> > deep\n";
-        let analysis = analyze(text);
-        assert_eq!(analysis.infos[0].quote_depth, 2);
-        assert_eq!(marker_texts(text, &analysis), ["> ", "> "]);
     }
 
     #[test]
@@ -926,5 +1004,106 @@ mod tests {
     fn thematic_break_line() {
         let analysis = analyze("a\n\n---\n\nb\n");
         assert_eq!(analysis.infos[2].kind, LineKind::ThematicBreak);
+    }
+
+    fn prefix(text: &str, line: usize) -> LinePrefix {
+        analyze(text).info(line).prefix.clone()
+    }
+
+    #[test]
+    fn list_items_have_a_marker_and_content_after_it() {
+        let text = "- one\n- [x] done\n12. twelve\n";
+        let p = prefix(text, 0);
+        assert_eq!(p.levels, [PrefixLevel::List(Some(ListMarker::Bullet))]);
+        assert_eq!((p.marker, p.content_start), (Some(0..2), 2));
+        let p = prefix(text, 1);
+        assert_eq!(
+            p.levels,
+            [PrefixLevel::List(Some(ListMarker::Task { checked: true }))]
+        );
+        assert_eq!((p.marker, p.content_start), (Some(6..12), 12));
+        let p = prefix(text, 2);
+        assert_eq!(
+            p.levels,
+            [PrefixLevel::List(Some(ListMarker::Ordered("12.".into())))]
+        );
+        assert_eq!(&text[p.content_start..p.content_start + 6], "twelve");
+    }
+
+    #[test]
+    fn nested_items_and_continuations_get_columns() {
+        // A blank line ends b's paragraph; without it, "  back to a" would be a
+        // lazy continuation of b (CommonMark).
+        let text = "- a\n  - b\n    more b\n\n  back to a\n";
+        let levels = |line| prefix(text, line).levels;
+        assert_eq!(
+            levels(1),
+            [
+                PrefixLevel::List(None),
+                PrefixLevel::List(Some(ListMarker::Bullet))
+            ]
+        );
+        assert_eq!(
+            levels(2),
+            [PrefixLevel::List(None), PrefixLevel::List(None)]
+        );
+        assert_eq!(levels(4), [PrefixLevel::List(None)]);
+        assert_eq!(
+            &text[prefix(text, 2).content_start..],
+            "more b\n\n  back to a\n"
+        );
+        assert_eq!(&text[prefix(text, 4).content_start..], "back to a\n");
+        assert_eq!(prefix(text, 1).marker, Some(6..8));
+    }
+
+    #[test]
+    fn quotes_and_lists_nest_in_source_order() {
+        let text = "> - a\n\n- b\n  > c\n";
+        assert_eq!(
+            prefix(text, 0).levels,
+            [
+                PrefixLevel::Quote(None),
+                PrefixLevel::List(Some(ListMarker::Bullet))
+            ]
+        );
+        assert_eq!(prefix(text, 0).quotes, [0..2]);
+        assert_eq!(prefix(text, 0).content_start, 4);
+        assert_eq!(
+            prefix(text, 3).levels,
+            [PrefixLevel::List(None), PrefixLevel::Quote(None)]
+        );
+        assert_eq!(&text[prefix(text, 3).content_start..], "c\n");
+    }
+
+    #[test]
+    fn alerts_keep_their_kind_and_title_marker() {
+        let text = "> [!WARNING]\n> Careful\n";
+        let analysis = analyze(text);
+        assert_eq!(
+            analysis.info(1).prefix.levels,
+            [PrefixLevel::Quote(Some(Alert::Warning))]
+        );
+        assert_eq!(analysis.info(0).alert, Some(Alert::Warning));
+        assert_eq!(marker_texts(text, &analysis), ["[!WARNING]"]);
+    }
+
+    #[test]
+    fn crlf_prefix_stops_before_the_line_ending() {
+        let text = "- a\r\n- \r\n";
+        let p = prefix(text, 1);
+        assert_eq!(p.marker, Some(5..7));
+        assert_eq!(p.content_start, 7);
+        assert_eq!(analyze(text).content_range(1), 7..7);
+    }
+
+    #[test]
+    fn snapping_moves_out_of_the_prefix() {
+        let text = "intro\n- item\n";
+        let analysis = analyze(text);
+        assert_eq!(analysis.snap(6, Bias::Right), 8);
+        assert_eq!(analysis.snap(7, Bias::Right), 8);
+        assert_eq!(analysis.snap(7, Bias::Left), 5);
+        assert_eq!(analysis.snap(9, Bias::Left), 9);
+        assert_eq!(analyze("- x").snap(0, Bias::Left), 2);
     }
 }

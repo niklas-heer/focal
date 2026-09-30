@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use focal_core::analysis::{InlineStyle, LineKind, Replacement};
+use focal_core::analysis::{InlineStyle, LineKind};
 use focal_core::display::{Run, mark_runs, prose_ranges};
 use focal_core::{
     Analysis, Buffer, Caret, EditKind, LineView, analyze, editing, line_view, range_view,
@@ -202,10 +202,7 @@ enum Granularity {
 }
 
 enum Hit {
-    Text {
-        offset: usize,
-        task: Option<Range<usize>>,
-    },
+    Text { offset: usize },
     Table(usize),
 }
 
@@ -917,14 +914,8 @@ impl Editor {
             Row::Line(_) => {
                 let (layout, view) = (row.layout.as_ref()?, row.view.as_ref()?);
                 let display = display_index(layout, position);
-                let task = view.map.replaced_at(display).and_then(|segment| {
-                    let marker = &self.snapshot.analysis.markers.get(segment.marker?)?;
-                    matches!(marker.replacement, Some(Replacement::Task { .. }))
-                        .then(|| marker.range.clone())
-                });
                 Some(Hit::Text {
                     offset: view.map.to_source(display),
-                    task,
                 })
             }
         }
@@ -1049,13 +1040,7 @@ impl Editor {
                 self.move_to(start, cx);
                 return;
             }
-            Hit::Text { offset, task } => {
-                if let Some(marker) = task {
-                    self.toggle_task(marker, cx);
-                    return;
-                }
-                offset
-            }
+            Hit::Text { offset } => offset,
         };
         if event.modifiers.platform
             && let Some(link) = self.snapshot.analysis.link_at(offset)
@@ -1119,22 +1104,6 @@ impl Editor {
                 range.start..range.end + ending
             }
         }
-    }
-
-    fn toggle_task(&mut self, marker: Range<usize>, cx: &mut Context<Self>) {
-        let Some(open) = self.text()[marker.clone()].find('[') else {
-            return;
-        };
-        let at = marker.start + open + 1;
-        let checked = matches!(self.text().as_bytes().get(at), Some(b'x' | b'X'));
-        let selection = self.selection.clone();
-        self.edit(
-            at..at + 1,
-            if checked { " " } else { "x" },
-            selection,
-            EditKind::Other,
-            cx,
-        );
     }
 
     // ---- Accessibility ------------------------------------------------------
@@ -1756,8 +1725,6 @@ fn text_runs(
                 font.style = FontStyle::Italic;
             }
             let color = if style.contains(InlineStyle::MARKER)
-                || style.contains(InlineStyle::BULLET)
-                || style.contains(InlineStyle::TASK_OPEN)
                 || style.contains(InlineStyle::LABEL)
                 || style.contains(InlineStyle::HTML)
                 || style.contains(InlineStyle::TASK_DONE)

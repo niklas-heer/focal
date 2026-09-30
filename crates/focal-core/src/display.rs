@@ -29,14 +29,6 @@ impl Caret {
         match &marker.reveal {
             Reveal::Touching(range) => sel.start <= range.end && sel.end >= range.start,
             Reveal::Lines(lines) => self.lines.start < lines.end && lines.start < self.lines.end,
-            Reveal::Inside => {
-                let range = &marker.range;
-                if sel.is_empty() {
-                    range.start <= self.head && self.head < range.end
-                } else {
-                    sel.start < range.end && range.start < sel.end
-                }
-            }
         }
     }
 }
@@ -146,7 +138,7 @@ pub struct LineView {
 
 /// Builds the display of `line`. With no caret, every marker stays hidden.
 pub fn line_view(analysis: &Analysis, text: &str, line: usize, caret: Option<&Caret>) -> LineView {
-    range_view(analysis, text, line, analysis.lines.range(line), caret)
+    range_view(analysis, text, line, analysis.content_range(line), caret)
 }
 
 /// Builds the display of part of `line`, such as one table cell.
@@ -389,16 +381,6 @@ mod tests {
     }
 
     #[test]
-    fn bullets_are_replaced_until_the_caret_enters() {
-        let text = "- item";
-        let away = view(text, 0, Some(6));
-        assert_eq!(away.text, "•\u{2002}item");
-        assert_eq!(away.map.to_source(0), 2);
-        assert!(away.map.replaced_at(0).is_some());
-        assert_eq!(view(text, 0, Some(1)).text, "- item");
-    }
-
-    #[test]
     fn empty_line_has_one_segment() {
         let text = "a\n\nb";
         let empty = view(text, 1, None);
@@ -481,5 +463,15 @@ mod tests {
             hidden.runs[0].style,
             InlineStyle::STRONG | InlineStyle::EMPHASIS
         );
+    }
+
+    #[test]
+    fn list_lines_display_only_their_content() {
+        let text = "- item **b**\n> - quoted\n";
+        assert_eq!(view(text, 0, None).text, "item b");
+        assert_eq!(view(text, 1, None).text, "quoted");
+        let map = view(text, 0, None).map;
+        assert_eq!(map.to_source(0), 2);
+        assert_eq!(map.source_range().start, 2);
     }
 }
