@@ -1111,6 +1111,25 @@ impl Editor {
         }
     }
 
+    pub(crate) fn toggle_task_on_line(&mut self, line: usize, cx: &mut Context<Self>) {
+        let Some(marker) = self.snapshot.analysis.info(line).prefix.marker.clone() else {
+            return;
+        };
+        let Some(open) = self.text()[marker.clone()].find('[') else {
+            return;
+        };
+        let at = marker.start + open + 1;
+        let checked = matches!(self.text().as_bytes().get(at), Some(b'x' | b'X'));
+        let selection = self.selection.clone();
+        self.edit(
+            at..at + 1,
+            if checked { " " } else { "x" },
+            selection,
+            EditKind::Other,
+            cx,
+        );
+    }
+
     // ---- Accessibility ------------------------------------------------------
 
     fn a11y_source(&self) -> A11ySource {
@@ -1164,7 +1183,7 @@ impl Editor {
         };
         let prose = prose_ranges(view);
         let head = self.head();
-        let line_range = self.snapshot.analysis.lines.range(line);
+        let line_range = self.snapshot.analysis.content_range(line);
         let caret = (hide_at_caret && line_range.start <= head && head <= line_range.end)
             .then(|| view.map.to_display(head));
         found
@@ -1368,7 +1387,7 @@ impl Editor {
         );
         let text = StyledText::new(view.text.clone()).with_runs(runs);
         let layout = text.layout().clone();
-        let line_range = analysis.lines.range(line);
+        let line_range = analysis.content_range(line);
         let code_fence = matches!(info.kind, LineKind::CodeFence { .. });
         let code = matches!(info.kind, LineKind::Code) || code_fence;
         let rule = info.kind == LineKind::ThematicBreak && view.text.is_empty();
@@ -1383,10 +1402,7 @@ impl Editor {
         let caret_color = theme.caret;
         let _ = (window, cx);
 
-        let quote_bar = info
-            .alert
-            .map_or(theme.quote_bar, |alert| theme.alert(alert));
-        div()
+        let content = div()
             .relative()
             .pt(px(top))
             .font_family(family)
@@ -1396,12 +1412,6 @@ impl Editor {
             } else {
                 1.6
             }))
-            .when(info.quote_depth > 0, |d| {
-                d.ml(px(f32::from(info.quote_depth - 1) * 18.))
-                    .pl(px(16.))
-                    .border_l(px(3.))
-                    .border_color(quote_bar)
-            })
             .when(code, |d| d.px(px(14.)).bg(theme.code_background))
             .when(
                 matches!(info.kind, LineKind::CodeFence { opening: true }),
@@ -1481,8 +1491,28 @@ impl Editor {
                 .top_0()
                 .left_0()
                 .size_full(),
-            )
-            .into_any_element()
+            );
+        let entity = cx.entity().downgrade();
+        let on_toggle = move |line: usize, _: &mut Window, cx: &mut App| {
+            entity
+                .update(cx, |editor, cx| editor.toggle_task_on_line(line, cx))
+                .ok();
+        };
+        let line_height = px(TEXT_SIZE
+            * scale
+            * if matches!(info.kind, LineKind::Heading(_)) {
+                1.3
+            } else {
+                1.6
+            });
+        crate::prefix::wrap(
+            content.into_any_element(),
+            &info.prefix,
+            line,
+            theme,
+            line_height,
+            on_toggle,
+        )
     }
 
     fn render_table(&self, table_ix: usize, theme: &Theme) -> gpui_kit::AnyElement {

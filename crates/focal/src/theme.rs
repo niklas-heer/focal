@@ -27,6 +27,7 @@ pub struct Theme {
     pub quote_bar: Hsla,
     pub banner: Hsla,
     pub misspelled: Hsla,
+    pub checkbox: Hsla,
     alerts: [Hsla; 5],
 }
 
@@ -53,6 +54,7 @@ impl Theme {
             quote_bar: rgba(0x2121_2130).into(),
             banner: rgb(0x00ec_e9e2).into(),
             misspelled: rgb(0x00e0_3b30).into(),
+            checkbox: rgb(0x0026_6fb5).into(),
             alerts: [
                 rgb(0x0009_69da).into(),
                 rgb(0x001a_7f37).into(),
@@ -78,6 +80,7 @@ impl Theme {
             quote_bar: rgba(0xd9d7_d238).into(),
             banner: rgb(0x0026_2624).into(),
             misspelled: rgb(0x00ff_5f57).into(),
+            checkbox: rgb(0x0068_a9e8).into(),
             alerts: [
                 rgb(0x0047_8be6).into(),
                 rgb(0x0034_a853).into(),

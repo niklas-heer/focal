@@ -72,3 +72,16 @@ fn return_continues_a_list(cx: &mut TestAppContext) {
     });
     editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "- one\n- two"));
 }
+
+#[gpui_kit::test]
+fn clicking_a_checkbox_toggles_the_task(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "- [ ] buy milk\n- [x] done");
+    act(cx, window, |window, cx| window.click(("task", 0usize), cx));
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.text(), "- [x] buy milk\n- [x] done");
+    });
+    act(cx, window, |window, cx| window.click(("task", 1usize), cx));
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.text(), "- [x] buy milk\n- [ ] done");
+    });
+}

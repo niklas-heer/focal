@@ -19,8 +19,11 @@ use crate::editor::Row;
 /// not change as the caret reveals and hides markers.
 pub struct A11yDocument {
     views: Vec<LineView>,
-    /// Each line's display text, with its line break except on the last line.
+    /// Each line's list marker as text ("• ", "1. ", "☐ ") followed by its
+    /// display text, with its line break except on the last line.
     texts: Vec<String>,
+    /// Byte length of each line's marker text, before the display text.
+    lead: Vec<usize>,
     chunks: Vec<Vec<TextChunk>>,
 }
 
@@ -30,11 +33,14 @@ impl A11yDocument {
             .map(|line| line_view(analysis, source, line, None))
             .collect();
         let last = views.len().saturating_sub(1);
+        let mut lead = Vec::with_capacity(views.len());
         let texts: Vec<String> = views
             .iter()
             .enumerate()
             .map(|(line, view)| {
-                let mut text = view.text.clone();
+                let mut text = crate::prefix::marker_text(&analysis.info(line).prefix);
+                lead.push(text.len());
+                text.push_str(&view.text);
                 if line < last {
                     text.push('\n');
                 }
@@ -45,6 +51,7 @@ impl A11yDocument {
         Self {
             views,
             texts,
+            lead,
             chunks,
         }
     }
@@ -214,7 +221,7 @@ impl A11ySource {
         offset: usize,
     ) -> Option<TextPosition> {
         let line = self.analysis.lines.line_of(offset);
-        let display = document.views.get(line)?.map.to_display(offset);
+        let display = document.views.get(line)?.map.to_display(offset) + document.lead[line];
         let (chunk, character_index) = position_of(&document.chunks[line], display);
         let node = run_ids
             .iter()
@@ -231,7 +238,8 @@ impl A11ySource {
     pub fn source_offset(&self, ids: &RunIds, position: &TextPosition) -> Option<usize> {
         let &(line, chunk) = ids.borrow().get(&position.node)?;
         let document = self.document();
-        let display = offset_of(&document.chunks[line], chunk, position.character_index);
+        let display = offset_of(&document.chunks[line], chunk, position.character_index)
+            .saturating_sub(document.lead[line]);
         let view = document.views.get(line)?;
         // The line break at the end of a line maps to the end of the line.
         Some(view.map.to_source(display.min(view.text.len())))

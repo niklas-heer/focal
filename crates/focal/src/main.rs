@@ -4,6 +4,7 @@
 mod accessibility;
 mod document;
 mod editor;
+mod prefix;
 mod spell;
 mod theme;
 #[cfg(test)]
