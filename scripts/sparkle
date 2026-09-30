@@ -1,0 +1,17 @@
+#!/bin/bash
+# Download Sparkle once into build/sparkle and check it against the pinned
+# checksum. Prints the directory holding Sparkle.framework and bin/.
+set -euo pipefail
+version=2.10.0
+checksum=c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da0c
+root="$(cd "$(dirname "$0")/.." && pwd)"
+dir="$root/build/sparkle/$version"
+if [[ ! -d "$dir/Sparkle.framework" ]]; then
+  mkdir -p "$dir"
+  archive="$dir.tar.xz"
+  curl -fsSL -o "$archive" "https://github.com/sparkle-project/Sparkle/releases/download/$version/Sparkle-$version.tar.xz"
+  echo "$checksum  $archive" | shasum -a 256 --check --quiet || { rm -f "$archive"; echo "Sparkle $version checksum mismatch" >&2; exit 65; }
+  tar -xf "$archive" -C "$dir"
+  rm -f "$archive"
+fi
+echo "$dir"

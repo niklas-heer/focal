@@ -1,0 +1,65 @@
+#!/bin/bash
+# Build Focal.app into build/Focal.app.
+#   --sign IDENTITY      "Developer ID Application: …" for a hardened, timestamped
+#                        signature; without it the app is signed ad hoc.
+#   --feed URL           HTTPS Sparkle appcast; with --public-key it enables updates.
+#   --public-key KEY     Sparkle EdDSA public key.
+#   FOCAL_BUILD          The build number (CFBundleVersion), default 1.
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$root"
+identity="" feed="" public_key=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --sign) identity="$2"; shift 2 ;;
+    --feed) feed="$2"; shift 2 ;;
+    --public-key) public_key="$2"; shift 2 ;;
+    *) echo "Usage: scripts/bundle [--sign IDENTITY] [--feed URL --public-key KEY]" >&2; exit 64 ;;
+  esac
+done
+if [[ -n "$feed" || -n "$public_key" ]]; then
+  [[ -n "$feed" && -n "$public_key" ]] || { echo 'Give both --feed and --public-key, or neither.' >&2; exit 64; }
+  [[ "$feed" == https://* || "$feed" == http://localhost* || "$feed" == http://127.0.0.1* ]] || { echo 'The feed must use https.' >&2; exit 64; }
+fi
+version="$(sed -n 's/^version = "\(.*\)"/\1/p' crates/focal/Cargo.toml | head -1)"
+build="${FOCAL_BUILD:-1}"
+[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$build" =~ ^[1-9][0-9]*$ ]] || { echo "Invalid version $version ($build)." >&2; exit 65; }
+
+cargo build --release -p focal
+sparkle="$(scripts/sparkle)"
+
+staging="$(mktemp -d "$root/build/.Focal.XXXXXX")"
+trap 'rm -rf "$staging"' EXIT
+app="$staging/Focal.app"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Frameworks"
+cp target/release/focal "$app/Contents/MacOS/focal"
+sed -e "s/<string>VERSION</<string>$version</" -e "s/<string>BUILD</<string>$build</" \
+  packaging/Info.plist > "$app/Contents/Info.plist"
+cp packaging/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
+cp assets/fonts/LICENSE.md "$app/Contents/Resources/Fonts-LICENSE.md"
+cp -R "$sparkle/Sparkle.framework" "$app/Contents/Frameworks/"
+if [[ -n "$feed" ]]; then
+  /usr/libexec/PlistBuddy -c "Add :SUFeedURL string $feed" "$app/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string $public_key" "$app/Contents/Info.plist"
+fi
+plutil -lint -s "$app/Contents/Info.plist"
+
+framework="$app/Contents/Frameworks/Sparkle.framework"
+if [[ -n "$identity" ]]; then
+  # The hardened runtime needs every nested executable signed by the same
+  # team; sign from the inside out.
+  sign=(codesign --force --sign "$identity" --options runtime --timestamp)
+  "${sign[@]}" "$framework/Versions/B/XPCServices/Installer.xpc"
+  "${sign[@]}" --preserve-metadata=entitlements "$framework/Versions/B/XPCServices/Downloader.xpc"
+  "${sign[@]}" "$framework/Versions/B/Autoupdate"
+  "${sign[@]}" "$framework/Versions/B/Updater.app"
+  "${sign[@]}" "$framework"
+  "${sign[@]}" "$app"
+else
+  codesign --force --deep --sign - "$app"
+fi
+codesign --verify --deep --strict "$app"
+
+rm -rf build/Focal.app
+mv "$app" build/Focal.app
+echo "Built $root/build/Focal.app ($version, build $build)"

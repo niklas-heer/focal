@@ -28,6 +28,14 @@ run = "cargo run --release -p focal-core --example stress --"
 description = "Install focal into ~/.cargo/bin"
 run = "cargo install --path crates/focal --locked"
 
+[tasks.bundle]
+description = "Build Focal.app into build/ (signed ad hoc, without updates)"
+run = "scripts/bundle"
+
+[tasks.install-app]
+description = "Build Focal.app and copy it to /Applications"
+run = "scripts/bundle && ditto build/Focal.app /Applications/Focal.app"
+
 [tasks.clean]
 description = "Remove debug build output (release builds are kept)"
 run = "cargo clean --profile dev"
