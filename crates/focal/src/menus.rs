@@ -9,6 +9,7 @@ use crate::editor::{
     ToggleFocusMode, ToggleNumbers, ToggleQuote, ToggleTask, Undo,
 };
 use crate::settings::OpenSettings;
+use crate::switcher::QuickOpen;
 use crate::workspace::ToggleSidebar;
 
 pub fn set_menus(cx: &mut App) {
@@ -54,6 +55,7 @@ pub fn set_menus(cx: &mut App) {
         ]),
         Menu::new("View").items([
             MenuItem::action("Toggle Sidebar", ToggleSidebar),
+            MenuItem::action("Quick Open…", QuickOpen),
             MenuItem::action("Focus Mode", ToggleFocusMode),
         ]),
     ]);

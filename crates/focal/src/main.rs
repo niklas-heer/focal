@@ -12,6 +12,7 @@ mod menus;
 mod prefix;
 mod settings;
 mod spell;
+mod switcher;
 mod table_view;
 mod theme;
 #[cfg(test)]
@@ -163,6 +164,7 @@ fn run_app(source: Source) {
         load_fonts(cx);
         editor::bind_keys(cx);
         workspace::bind_keys(cx);
+        switcher::bind_keys(cx);
         settings::init(cx);
         cx.on_action(|_: &Quit, cx| cx.quit());
         menus::set_menus(cx);

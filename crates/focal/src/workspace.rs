@@ -16,6 +16,7 @@ use crate::bar;
 use crate::document::Document;
 use crate::editor::Editor;
 use crate::folder;
+use crate::switcher::{QuickOpen, Switcher, SwitcherEvent};
 use crate::theme::Theme;
 
 actions!(focal, [ToggleSidebar]);
@@ -55,6 +56,7 @@ pub struct Workspace {
     shows: u32,
     bar_timer: Option<Task<()>>,
     folder: Option<Folder>,
+    switcher: Option<(Entity<Switcher>, gpui_kit::Subscription)>,
 }
 
 impl Workspace {
@@ -71,6 +73,7 @@ impl Workspace {
             shows: 0,
             bar_timer: None,
             folder: None,
+            switcher: None,
         }
     }
 
@@ -151,6 +154,23 @@ impl Workspace {
         window.set_window_title(&title);
         let handle = self.editor.read(cx).focus_handle(cx);
         window.focus(&handle, cx);
+        cx.notify();
+    }
+
+    fn quick_open(&mut self, _: &QuickOpen, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(folder) = &self.folder else { return };
+        let (root, files) = (folder.root.clone(), folder.files.clone());
+        let switcher = cx.new(|cx| Switcher::new(root, &files, window, cx));
+        let subscription = cx.subscribe_in(&switcher, window, |this, _, event, window, cx| {
+            this.switcher = None;
+            if let SwitcherEvent::Open(path) = event {
+                this.open_file(path.clone(), window, cx);
+            }
+            let handle = this.editor.read(cx).focus_handle(cx);
+            window.focus(&handle, cx);
+            cx.notify();
+        });
+        self.switcher = Some((switcher, subscription));
         cx.notify();
     }
 
@@ -349,7 +369,20 @@ impl Render for Workspace {
             // The bar never shows while you type.
             .capture_key_down(cx.listener(|this, _: &KeyDownEvent, _, cx| this.hide_bar(cx)))
             .on_action(cx.listener(Self::toggle_sidebar))
+            .on_action(cx.listener(Self::quick_open))
             .children(sidebar)
             .child(main)
+            .when_some(self.switcher.as_ref(), |d, (switcher, _)| {
+                d.child(
+                    div()
+                        .absolute()
+                        .top(px(72.))
+                        .left_0()
+                        .right_0()
+                        .flex()
+                        .justify_center()
+                        .child(switcher.clone()),
+                )
+            })
     }
 }

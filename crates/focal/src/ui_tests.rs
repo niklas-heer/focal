@@ -598,6 +598,7 @@ fn open_folder(
         gpui_kit::init(cx);
         editor::bind_keys(cx);
         crate::workspace::bind_keys(cx);
+        crate::switcher::bind_keys(cx);
         cx.set_global(Settings::default());
         let bounds = Bounds {
             origin: point(px(0.), px(0.)),
@@ -702,5 +703,48 @@ fn focus_mode_hides_the_sidebar(cx: &mut TestAppContext) {
     act(cx, window, |window, cx| window.press("cmd-d", cx));
     act(cx, window, |window, _| {
         assert!(window.try_find("sidebar").is_none());
+    });
+}
+
+fn switcher_open(window: &mut Window) -> bool {
+    window.try_find("switcher").is_some()
+}
+
+#[gpui_kit::test]
+fn the_quick_switcher_finds_and_opens_a_file(cx: &mut TestAppContext) {
+    let root = notes_folder("switcher", "new text");
+    std::fs::write(root.join("design.md"), "design text").unwrap();
+    let (window, workspace) = open_folder(cx, &root);
+    act(cx, window, |window, cx| window.press("cmd-p", cx));
+    act(cx, window, |window, _| assert!(switcher_open(window)));
+    act(cx, window, |window, cx| window.input("dsg", cx));
+    act(cx, window, |_, _| {});
+    act(cx, window, |window, _| {
+        let first = window.find(("switch-result", 0usize));
+        assert_eq!(first.label(), Some("design.md"));
+    });
+    act(cx, window, |window, cx| window.press("enter", cx));
+    act(cx, window, |window, _| assert!(!switcher_open(window)));
+    assert_eq!(current_title(cx, &workspace), "design.md");
+}
+
+#[gpui_kit::test]
+fn arrows_choose_and_escape_closes_the_switcher(cx: &mut TestAppContext) {
+    let root = notes_folder("switcher-keys", "new text");
+    let (window, workspace) = open_folder(cx, &root);
+    act(cx, window, |window, cx| window.press("cmd-p", cx));
+    act(cx, window, |window, cx| window.press("down", cx));
+    act(cx, window, |window, cx| window.press("enter", cx));
+    // With no query the newest file comes first, so down picks the older one.
+    assert_eq!(current_title(cx, &workspace), "old.md");
+    act(cx, window, |window, cx| window.press("cmd-p", cx));
+    act(cx, window, |window, cx| window.press("escape", cx));
+    act(cx, window, |window, cx| {
+        assert!(!switcher_open(window));
+        let editor = workspace.read(cx).editor().clone();
+        assert!(
+            editor.read(cx).focus_handle.is_focused(window),
+            "the editor has focus again"
+        );
     });
 }
