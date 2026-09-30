@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use focal_core::analysis::{InlineStyle, LineKind};
 use focal_core::display::{Run, mark_runs, prose_ranges};
-use focal_core::text_stats::{reading_minutes, word_count};
+use focal_core::text_stats::{reading_minutes, sentence_at, word_count};
 use focal_core::{
     Analysis, Bias, Buffer, Caret, EditKind, LineView, analyze, editing, line_view, range_view,
 };
@@ -35,8 +35,9 @@ use gpui_kit::{
 
 use crate::accessibility::{A11yDocument, A11ySource, RunIds};
 use crate::document::{self, Document, Stamp};
+use crate::settings::{FocusUnit, Settings};
 use crate::spell::SpellChecker;
-use crate::theme::{BOLD_PROSE_FONT, MONO_FONT, PROSE_FONT, Theme};
+use crate::theme::{BOLD_PROSE_FONT, DIMMED, MONO_FONT, PROSE_FONT, Theme};
 
 actions!(
     focal,
@@ -245,8 +246,16 @@ pub(crate) struct Snapshot {
     a11y_document: Rc<std::cell::OnceCell<A11yDocument>>,
     line_rows: Vec<usize>,
     keys: Vec<u64>,
-    /// Lines outside the caret's paragraph, dimmed in focus mode.
-    focus: Option<Range<usize>>,
+    /// What focus mode keeps bright; everything else is dimmed.
+    focus: Option<Focus>,
+}
+
+/// The caret's paragraph (as lines) and, by sentence, the sentence in it (as
+/// source bytes).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Focus {
+    lines: Range<usize>,
+    sentence: Option<Range<usize>>,
 }
 
 /// Where a row was drawn in the last frame, for hit testing and caret moves.
@@ -298,6 +307,15 @@ pub struct Editor {
     reveal_frames: u8,
     pub(crate) painted: Rc<RefCell<Vec<PaintedRow>>>,
     focus_mode: bool,
+    focus_unit: FocusUnit,
+    /// Keep the caret's line centered in focus mode.
+    typewriter: bool,
+    /// Frames left to keep centering the caret's line.
+    center_frames: u8,
+    /// The viewport height the first and last rows were padded for.
+    padded_for: Pixels,
+    /// Set when the rows' heights were thrown away and not yet measured.
+    remeasured: bool,
     /// The word count of a text version, for the bottom bar.
     word_count: Cell<Option<(u64, usize)>>,
     conflict: bool,
@@ -333,6 +351,16 @@ impl Editor {
         });
         cx.observe_window_appearance(window, |_, _, cx| cx.notify())
             .detach();
+        let settings = cx.try_global::<Settings>().cloned().unwrap_or_default();
+        cx.observe_global::<Settings>(|this, cx| {
+            let settings = cx.global::<Settings>();
+            this.focus_unit = settings.focus_unit;
+            this.typewriter = settings.typewriter;
+            this.refresh();
+            this.remeasure();
+            cx.notify();
+        })
+        .detach();
         let mut editor = Self {
             focus_handle: cx.focus_handle(),
             buffer: Buffer::new(text),
@@ -349,6 +377,11 @@ impl Editor {
             reveal_cell: Cell::new(false),
             painted: Rc::default(),
             focus_mode: false,
+            focus_unit: settings.focus_unit,
+            typewriter: settings.typewriter,
+            center_frames: 0,
+            padded_for: px(0.),
+            remeasured: false,
             word_count: Cell::new(None),
             conflict: false,
             error: None,
@@ -405,6 +438,30 @@ impl Editor {
 
     /// Rebuilds analysis, line views and rows, and tells the list which rows
     /// changed so the others keep their measured heights and scroll position.
+    /// What focus mode keeps bright around the caret, if it is on.
+    fn focus(&self, analysis: &Analysis, text: &str) -> Option<Focus> {
+        self.focus_mode.then(|| {
+            let lines = paragraph_around(analysis, text, self.head());
+            let prose = lines.clone().all(|line| {
+                matches!(
+                    analysis.info(line).kind,
+                    LineKind::Text | LineKind::Heading(_)
+                )
+            });
+            let sentence = (self.focus_unit == FocusUnit::Sentence && prose).then(|| {
+                // In a list, a sentence never runs past its item.
+                let line = analysis.lines.line_of(self.head());
+                let range = if analysis.info(line).prefix.marker.is_some() {
+                    analysis.content_range(line)
+                } else {
+                    analysis.lines.range(lines.start).start..analysis.lines.range(lines.end - 1).end
+                };
+                sentence_at(text, range, self.head())
+            });
+            Focus { lines, sentence }
+        })
+    }
+
     fn refresh(&mut self) {
         let started = Instant::now();
         let version = self.buffer.version();
@@ -448,9 +505,7 @@ impl Editor {
             }
         }
 
-        let focus = self
-            .focus_mode
-            .then(|| paragraph_around(&analysis, text, self.head()));
+        let focus = self.focus(&analysis, text);
         let keys: Vec<u64> = rows
             .iter()
             .map(|row| {
@@ -461,7 +516,10 @@ impl Editor {
                         views[line].text.hash(&mut hasher);
                         views[line].runs.hash(&mut hasher);
                         analysis.info(line).hash(&mut hasher);
-                        focus.as_ref().map(|f| f.contains(&line)).hash(&mut hasher);
+                        focus
+                            .as_ref()
+                            .map(|f| f.lines.contains(&line).then_some(&f.sentence))
+                            .hash(&mut hasher);
                     }
                     Row::Table(table) => {
                         text[analysis.tables[table].range.clone()].hash(&mut hasher);
@@ -512,6 +570,27 @@ impl Editor {
         self.grid.as_ref().map(|g| (g.table, g.row, g.column))
     }
 
+    /// What focus mode keeps bright, as source bytes.
+    #[cfg(test)]
+    pub(crate) fn focus_range(&self) -> Option<Range<usize>> {
+        let focus = self.snapshot.focus.as_ref()?;
+        let lines = &self.snapshot.analysis.lines;
+        Some(focus.sentence.clone().unwrap_or_else(|| {
+            lines.range(focus.lines.start).start..lines.range(focus.lines.end - 1).end
+        }))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn viewport(&self) -> Bounds<Pixels> {
+        self.list.viewport_bounds()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn scroll_top(&self) -> (usize, Pixels) {
+        let top = self.list.logical_scroll_top();
+        (top.item_ix, top.offset_in_item)
+    }
+
     /// Where the caret's row was laid out in the window, if it was.
     #[cfg(test)]
     pub(crate) fn head_row_bounds(&self) -> Option<gpui_kit::Bounds<gpui_kit::Pixels>> {
@@ -520,6 +599,7 @@ impl Editor {
 
     fn reveal_caret(&mut self) {
         self.reveal_frames = 4;
+        self.center_frames = 4;
         self.list.scroll_to_reveal_item(self.head_row());
     }
 
@@ -1087,7 +1167,63 @@ impl Editor {
     fn toggle_focus_mode(&mut self, _: &ToggleFocusMode, _: &mut Window, cx: &mut Context<Self>) {
         self.focus_mode = !self.focus_mode;
         self.refresh();
+        // The first and last rows' padding depends on typewriter scrolling.
+        self.remeasure();
+        self.center_frames = 4;
         cx.notify();
+    }
+
+    fn remeasure(&mut self) {
+        self.list.remeasure();
+        self.remeasured = true;
+    }
+
+    const fn typewriter_active(&self) -> bool {
+        self.focus_mode && self.typewriter
+    }
+
+    /// Scrolls the caret's line to the vertical center, using where it was
+    /// drawn in the last frame, until it is there.
+    fn keep_centering(&mut self, window: &mut Window) {
+        if !self.typewriter_active() || self.grid.is_some() || self.center_frames == 0 {
+            return;
+        }
+        // Rows are unmeasured right after a remeasure, and `scroll_by` walks
+        // their heights; wait for a frame to lay them out.
+        if self.reveal_frames > 0 || std::mem::take(&mut self.remeasured) {
+            window.request_animation_frame();
+            return;
+        }
+        self.center_frames -= 1;
+        let head = self.head();
+        let line = self.snapshot.analysis.lines.line_of(head);
+        let caret = self.painted.borrow().iter().find_map(|painted| {
+            if painted.row != Row::Line(line) {
+                return None;
+            }
+            let (layout, view) = (painted.layout.as_ref()?, painted.view.as_ref()?);
+            let position = layout.position_for_index(view.map.to_display(head))?;
+            Some(position.y + layout.line_height() / 2.)
+        });
+        let Some(caret) = caret else {
+            window.request_animation_frame();
+            return;
+        };
+        let delta = caret - self.list.viewport_bounds().center().y;
+        let scrolled = -self.list.scroll_px_offset_for_scrollbar().y;
+        if delta.abs() <= px(0.5) || (delta < px(0.) && scrolled <= px(0.)) {
+            self.center_frames = 0;
+            return;
+        }
+        if scrolled + delta <= px(0.) {
+            self.list.scroll_to(gpui_kit::ListOffset {
+                item_ix: 0,
+                offset_in_item: px(0.),
+            });
+        } else {
+            self.list.scroll_by(delta);
+        }
+        window.request_animation_frame();
     }
 
     #[allow(clippy::unused_self)]
@@ -1534,7 +1670,7 @@ impl Editor {
                 .clone()
         };
         let styles = highlights.get(index)?;
-        let fade = |color: Hsla| if dimmed { color.opacity(0.3) } else { color };
+        let fade = |color: Hsla| if dimmed { color.opacity(DIMMED) } else { color };
         let run = |len: usize, style: Option<&HighlightStyle>| {
             let mut font = font(MONO_FONT);
             if let Some(style) = style {
@@ -1735,8 +1871,21 @@ impl Editor {
             .flex()
             .justify_center()
             .px(px(48.))
-            .when(ix == 0, |d| d.pt(px(56.)))
-            .when(last, |d| d.pb(px(240.)))
+            // Typewriter scrolling needs room to center the first and last lines.
+            .when(ix == 0, |d| {
+                d.pt(if self.typewriter_active() {
+                    window.viewport_size().height / 2.
+                } else {
+                    px(56.)
+                })
+            })
+            .when(last, |d| {
+                d.pb(if self.typewriter_active() {
+                    window.viewport_size().height / 2.
+                } else {
+                    px(240.)
+                })
+            })
             .child(div().w_full().max_w(px(COLUMN_WIDTH)).child(content))
             .into_any_element()
     }
@@ -1752,11 +1901,11 @@ impl Editor {
         let analysis = &self.snapshot.analysis;
         let info = analysis.info(line).clone();
         let view = self.snapshot.views[line].clone();
-        let dimmed = self
-            .snapshot
-            .focus
-            .as_ref()
-            .is_some_and(|focus| !focus.contains(&line));
+        let (dimmed, keep) = match &self.snapshot.focus {
+            Some(focus) if !focus.lines.contains(&line) => (true, None),
+            Some(focus) => (false, focus.sentence.clone()),
+            None => (false, None),
+        };
         let mono = matches!(
             info.kind,
             LineKind::Code
@@ -1776,7 +1925,7 @@ impl Editor {
         };
         let family = if mono { MONO_FONT } else { PROSE_FONT };
         let mut base = if dimmed {
-            theme.text.opacity(0.3)
+            theme.text.opacity(DIMMED)
         } else {
             theme.text
         };
@@ -1805,6 +1954,23 @@ impl Editor {
                     dimmed,
                 )
             });
+        // A list marker or quote bar dims with its line, or with a sentence
+        // elsewhere in the paragraph.
+        let prefix_dimmed = dimmed
+            || keep.as_ref().is_some_and(|keep| {
+                let range = analysis.lines.range(line);
+                keep.end < range.start || keep.start > range.end
+            });
+        // By sentence, the rest of the paragraph is dimmed too.
+        let runs = match keep {
+            Some(keep) => {
+                let range = analysis.lines.range(line);
+                let clamp =
+                    |offset: usize| view.map.to_display(offset.clamp(range.start, range.end));
+                fade_outside(runs, clamp(keep.start)..clamp(keep.end))
+            }
+            None => runs,
+        };
         let text = StyledText::new(view.text.clone()).with_runs(runs);
         let layout = text.layout().clone();
         let line_range = analysis.content_range(line);
@@ -1929,7 +2095,7 @@ impl Editor {
             content.into_any_element(),
             &info.prefix,
             line,
-            theme,
+            &if prefix_dimmed { theme.faded() } else { *theme },
             line_height,
             on_toggle,
         )
@@ -2079,7 +2245,7 @@ pub(crate) fn text_runs(
     alert: Option<Hsla>,
     dimmed: bool,
 ) -> Vec<TextRun> {
-    let fade = |color: Hsla| if dimmed { color.opacity(0.3) } else { color };
+    let fade = |color: Hsla| if dimmed { color.opacity(DIMMED) } else { color };
     runs.iter()
         .map(|run| {
             let style = run.style;
@@ -2125,7 +2291,7 @@ pub(crate) fn text_runs(
             };
             let background = style
                 .contains(InlineStyle::HIGHLIGHT)
-                .then_some(theme.highlight);
+                .then(|| fade(theme.highlight));
             let strike = style.contains(InlineStyle::STRIKETHROUGH)
                 || (style.contains(InlineStyle::TASK_DONE)
                     && !style.contains(InlineStyle::MARKER)
@@ -2199,6 +2365,39 @@ fn rendered_table_cells(analysis: &Analysis, text: &str) -> Rc<[Vec<Vec<String>>
 }
 
 /// The lines of the paragraph (non-blank run of lines) around `offset`.
+/// Dims the runs outside `keep`, a display range of the line.
+fn fade_outside(runs: Vec<TextRun>, keep: Range<usize>) -> Vec<TextRun> {
+    let mut out = Vec::with_capacity(runs.len() + 2);
+    let mut at = 0;
+    for run in runs {
+        let end = at + run.len;
+        let mut cuts = vec![at];
+        cuts.extend(
+            [keep.start, keep.end]
+                .into_iter()
+                .filter(|&c| at < c && c < end),
+        );
+        cuts.push(end);
+        for piece in cuts.windows(2) {
+            let mut part = run.clone();
+            part.len = piece[1] - piece[0];
+            if piece[0] < keep.start || piece[1] > keep.end || keep.is_empty() {
+                part.color = part.color.opacity(DIMMED);
+                part.background_color = part.background_color.map(|c| c.opacity(DIMMED));
+                if let Some(underline) = &mut part.underline {
+                    underline.color = underline.color.map(|c| c.opacity(DIMMED));
+                }
+                if let Some(strike) = &mut part.strikethrough {
+                    strike.color = strike.color.map(|c| c.opacity(DIMMED));
+                }
+            }
+            out.push(part);
+        }
+        at = end;
+    }
+    out
+}
+
 fn paragraph_around(analysis: &Analysis, text: &str, offset: usize) -> Range<usize> {
     let lines = &analysis.lines;
     let blank = |line: usize| text[lines.range(line)].trim().is_empty();
@@ -2339,6 +2538,12 @@ impl Render for Editor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::for_appearance(window.appearance());
         self.keep_revealing(window);
+        self.keep_centering(window);
+        let height = window.viewport_size().height;
+        if self.typewriter_active() && self.padded_for != height {
+            self.padded_for = height;
+            self.remeasure();
+        }
         self.painted.borrow_mut().clear();
         let entity = cx.entity();
         let focus = self.focus_handle.clone();

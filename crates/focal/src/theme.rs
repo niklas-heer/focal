@@ -8,6 +8,8 @@ pub const MONO_FONT: &str = "iA Writer Mono S";
 /// Bold prose. The static Quattro S Bold files report weight 400 in their
 /// OS/2 table, so GPUI cannot select them by weight; Duo S Bold reports 700.
 pub const BOLD_PROSE_FONT: &str = "iA Writer Duo S";
+/// The opacity of text that focus mode dims.
+pub const DIMMED: f32 = 0.3;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Theme {
@@ -88,6 +90,17 @@ impl Theme {
                 rgb(0x00c6_9026).into(),
                 rgb(0x00e5_534b).into(),
             ],
+        }
+    }
+
+    /// The colors for text that focus mode dims.
+    pub fn faded(self) -> Self {
+        Self {
+            text: self.text.opacity(DIMMED),
+            marker: self.marker.opacity(DIMMED),
+            checkbox: self.checkbox.opacity(DIMMED),
+            quote_bar: self.quote_bar.opacity(DIMMED),
+            ..self
         }
     }
 

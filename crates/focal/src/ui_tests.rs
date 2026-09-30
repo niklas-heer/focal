@@ -1,6 +1,7 @@
 //! Headless UI tests: the real editor in a test window, driven by key presses,
 //! text input and clicks through GPUI Kit's test harness.
 
+use gpui_kit::BorrowAppContext as _;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     AnyWindowHandle, App, AppContext as _, Bounds, Entity, TestAppContext, Window, WindowBounds,
@@ -497,4 +498,93 @@ fn heading_keys_and_the_word_count(cx: &mut TestAppContext) {
     });
     act(cx, window, |window, cx| window.press("cmd-0", cx));
     editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "two words"));
+}
+
+fn set_settings(cx: &mut TestAppContext, change: impl FnOnce(&mut Settings)) {
+    cx.update(|cx| {
+        cx.update_global::<Settings, _>(|settings, _| change(settings));
+    });
+}
+
+#[gpui_kit::test]
+fn focus_mode_keeps_the_caret_sentence_or_paragraph(cx: &mut TestAppContext) {
+    let text = "One. Two. Three.\n\nNext paragraph.";
+    let (window, editor) = open_editor(cx, text);
+    set_settings(cx, |s| s.focus_unit = crate::settings::FocusUnit::Sentence);
+    editor.update(cx, |editor, cx| editor.move_to(6, cx));
+    act(cx, window, |window, cx| window.press("cmd-d", cx));
+    editor.read_with(cx, |editor, _| assert_eq!(editor.focus_range(), Some(5..9)));
+    set_settings(cx, |s| s.focus_unit = crate::settings::FocusUnit::Paragraph);
+    act(cx, window, |_, _| {});
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.focus_range(), Some(0..16));
+    });
+}
+
+#[gpui_kit::test]
+fn focus_mode_hides_the_bar(cx: &mut TestAppContext) {
+    let (window, _) = open_workspace(cx, "text");
+    act(cx, window, |window, cx| window.hover("bar-zone", cx));
+    act(cx, window, |window, _| assert!(bar_shown(window)));
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(editor::ToggleFocusMode), cx);
+    });
+    act(cx, window, |window, _| assert!(!bar_shown(window)));
+}
+
+#[gpui_kit::test]
+fn typewriter_scrolling_centers_the_caret_line(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, &"Line\n".repeat(80));
+    act(cx, window, |window, cx| window.press("cmd-d", cx));
+    act(cx, window, |window, cx| {
+        for _ in 0..30 {
+            window.press("down", cx);
+        }
+    });
+    for _ in 0..4 {
+        act(cx, window, |_, _| {});
+    }
+    editor.read_with(cx, |editor, _| {
+        let row = editor
+            .head_row_bounds()
+            .expect("the caret's row is laid out");
+        let viewport = editor.viewport();
+        let offset = (row.center().y - viewport.center().y).abs();
+        assert!(
+            offset <= px(2.),
+            "the caret line is {offset:?} from the center"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn a_cell_edit_in_focus_mode_does_not_scroll(cx: &mut TestAppContext) {
+    let text = format!("intro\n\n| a |\n|---|\n| 1 |\n{}", "x\n".repeat(60));
+    let (window, editor) = open_editor(cx, &text);
+    act(cx, window, |window, cx| window.press("cmd-d", cx));
+    for _ in 0..3 {
+        act(cx, window, |_, _| {});
+    }
+    act(cx, window, |window, cx| click_cell(window, cx, 0, 1, 0));
+    act(cx, window, |_, _| {});
+    let before = editor.read_with(cx, |editor, _| editor.scroll_top());
+    act(cx, window, |window, cx| window.input("2", cx));
+    for _ in 0..3 {
+        act(cx, window, |_, _| {});
+    }
+    editor.read_with(cx, |editor, _| {
+        assert!(editor.text().contains("| 12  |"), "the cell was edited");
+        assert_eq!(editor.scroll_top(), before);
+    });
+}
+
+#[gpui_kit::test]
+fn sentence_focus_stops_at_a_list_item(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "- one two\n- three four");
+    set_settings(cx, |s| s.focus_unit = crate::settings::FocusUnit::Sentence);
+    editor.update(cx, |editor, cx| editor.move_to(15, cx));
+    act(cx, window, |window, cx| window.press("cmd-d", cx));
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.focus_range(), Some(12..22));
+    });
 }
