@@ -5,6 +5,8 @@ This document describes what Focal should become and how it is built. Each secti
 - **Agreed**: settled with Niklas during the design conversation on 2026-09-27 to 2026-09-29.
 - **Proposed**: a recommended direction not yet reviewed. Change it freely; record the outcome.
 
+Revised on 2026-09-30, when Niklas chose Rust and GPUI over Swift and AppKit ([decision](../decisions/2026-09-30_190238170_build-focal-in-rust-with-gpui.md)). Behavior agreed earlier still stands; the implementation sections describe the Rust stack.
+
 Lasting choices are recorded in [`decisions/`](../decisions/).
 
 ## 1. Goal and principles (Agreed)
@@ -16,10 +18,10 @@ The primary use is opening one file to read or review it, often a file in a Git 
 Principles, in priority order:
 
 1. **The file is the document.** The text on disk is the source of truth. Opening and saving a file without editing it produces identical bytes. Focal changes how Markdown looks, not what it says.
-2. **Native first.** Swift and AppKit. No web views, except the isolated Mermaid renderer (section 7).
+2. **Native first.** Native Rust with GPUI, Zed's GPU-accelerated UI framework, using macOS services such as the system spell checker through `objc2` bindings. No web views, except an isolated Mermaid renderer (section 7).
 3. **Quiet by default.** Chrome appears only when asked for: the formatting bar at the bottom edge, the file list on a shortcut, focus mode on a toggle.
 4. **Correct Markdown.** CommonMark and GitHub-flavored Markdown are rendered the way GitHub renders them, as far as the parser allows.
-5. **Stable while editing.** Rendering must never flicker, jump or lose styling while scrolling, typing or clicking. The Electron prototype failed here, so Milestone 0 tests it before anything else.
+5. **Stable while editing.** Rendering must never flicker, jump or lose styling while scrolling, typing or clicking. The Electron prototype failed here; the GPUI spike and Milestone 0 tested it first.
 
 ### Non-goals
 
@@ -54,13 +56,13 @@ Principles, in priority order:
 | `focal --wait file.md` | Blocks until the window closes, so Focal works as `$EDITOR`. |
 | `focal file.md` (already open) | Brings the existing window to the front. |
 
-`focal` is a small helper executable inside `Focal.app`. It forwards requests to the running app, launching it if needed. The Homebrew cask in `niklas-heer/homebrew-tap` links it onto `PATH`, as with Keywink.
+Today `focal` is the app itself: it relaunches in the background unless `--wait` is given. Proposed for distribution (M6): `Focal.app` contains the binary; a second `focal` call forwards the request to the running instance over a local socket instead of starting another process. The Homebrew cask in `niklas-heer/homebrew-tap` links it onto `PATH`, as with Keywink.
 
 ### Documents
 
-- One `NSDocument` per file. This provides autosave in place, macOS versions ("Revert to…"), recent documents, native window tabs and notice of external changes (`NSFilePresenter`).
+- One document per window, managed by Focal itself. There is no `NSDocument`, so macOS versions ("Revert to…"), native window tabs and the recent-documents menu are not provided unless built later.
 - **Autosave**, no ⌘S required.
-- **Live reload.** When the file changes on disk and there are no unsaved local edits, Focal reloads quietly and keeps the scroll position. When both sides changed, a banner offers "Keep mine" or "Load theirs". Focal never silently overwrites.
+- **Live reload.** When the file changes on disk and there are no unsaved local edits, Focal reloads quietly and keeps the scroll position. The spike polls the file every second; M1 watches it through FSEvents. When both sides changed, a banner offers "Keep mine" or "Load theirs". Focal never silently overwrites.
 - **Exact round-trip.** Line endings (LF or CRLF), the trailing newline and all whitespace are preserved. Files are read and written as UTF-8. The open question of non-UTF-8 input is in section 10.
 
 ### Folder mode
@@ -73,26 +75,28 @@ Principles, in priority order:
 
 ### Stack
 
-- Swift 6 with strict concurrency, AppKit, minimum macOS 26, so the bottom bar can use Liquid Glass.
-- `focal-markdown`: a Rust library wrapping `pulldown-cmark`, exposed through a C interface and linked statically (section 4).
-- The Xcode project is generated from `project.yml` with XcodeGen; mise runs build, test, check and release tasks, following Keywink.
+- Rust (pinned toolchain), a Cargo workspace. mise runs build, test, check, stress and clean tasks.
+- `focal-core`: the UI-free editor model: Markdown analysis with `pulldown-cmark`, per-line display maps, the buffer with undo, Markdown-aware edits and accessibility text chunks. Unit tested.
+- `focal`: the GPUI app, through `gpui-kit` (pinned exactly; it pins `gpui-pre`, a published snapshot of Zed's GPUI). macOS services come through `objc2` bindings.
 - Developer ID signing and notarization reuse the existing setup (`keywink-notary` profile). Distribution is through the Homebrew tap.
 
 ## 4. Rendering engine (Agreed approach, Proposed details)
 
-**Agreed:** one native text view holds the actual Markdown text. Focal styles it with attributes and hides syntax markers. Blocks that cannot be plain text are shown as embedded native views. See [decision: keep the Markdown source as the document model](../decisions/2026-09-28_221517982_keep-the-markdown-source-as-the-document-model.md).
+**Agreed:** the buffer holds the actual Markdown text. Focal draws it with syntax markers hidden or replaced away from the caret. Blocks that cannot be plain text are shown as embedded elements. See [decision: keep the Markdown source as the document model](../decisions/2026-09-28_221517982_keep-the-markdown-source-as-the-document-model.md).
 
-### Pipeline (Proposed)
+### Pipeline (Agreed approach, Proposed details)
 
-1. The text view's storage holds the file's exact text.
-2. After each edit, Swift passes the full text to `focal-markdown`, which parses it with `pulldown-cmark` (`Parser::new_ext(...).into_offset_iter()`). All needed options are enabled: tables, footnotes, strikethrough, task lists, YAML metadata blocks, math, GFM alerts, wiki links and highlight.
-3. `focal-markdown` returns a flat array of spans: kind, byte range, content range and attributes such as heading level, alignment or alert kind. Marker ranges are the span range minus the content range.
-4. Swift converts UTF-8 byte offsets to UTF-16 offsets, the unit `NSString` uses, and computes a style diff against the previous pass. Only changed ranges are restyled.
-5. Styling applies fonts, colors and paragraph styles, hides markers and places embedded views.
+1. The buffer holds the file's exact text (`focal-core::Buffer`), with undo.
+2. After each edit, `focal-core` parses the whole text with `pulldown-cmark` (`into_offset_iter()`) into styles, markers with reveal rules, line kinds, tables and links, all as byte ranges into the unchanged source.
+3. For each line it builds a display: the text with hidden markers removed or replaced, styled runs, and a map between display and source offsets.
+4. The editor shows one row per line (a table away from the caret is one row) in GPUI's virtualized `list`. After a change, rows are diffed by hash and only changed rows are spliced, so unchanged rows keep their measured heights and the scroll anchor holds.
+5. Caret, selection, clicks, IME and accessibility translate between display and source offsets through the per-line maps.
 
-Parsing the whole document on each keystroke is expected to be fast enough. Milestone 0 measures it; if it is not, reparse only from the edited block onward.
+Measured on an Apple M4 (release): full parse 2.0 ms and restyle of every line 2.0 ms on the 5,000-line fixture, inside the 8 ms budget. Incremental parsing is not needed yet; the accessibility tree (about 12 ms per frame on that fixture while an assistive app is connected) needs caching first.
 
-Full reparse and restyle measured 15 ms p95 on the 5,000-line fixture in Milestone 0, over the 8 ms budget; Milestone 1 reparses from the edited block.
+### Line layout (Proposed)
+
+The spike draws each line as one GPUI `StyledText`, which has no paragraph styles: wrapped list items do not hang under their text, bullets and task boxes are glyphs, and run backgrounds cannot be padded. M1 replaces it with a line element built from fragments, following Zed's editor (`LineFragment::Text` and `LineFragment::Element`): shaped text runs plus real elements (bullet, numbered marker, task checkbox, quote bar, heading margin marker) laid out inline, with soft wrapping computed separately so continuation lines can start at the content's indent. Zed's Markdown renderer lays out list items the same way, as a marker column beside the content, and renders task boxes as real checkboxes that toggle the source.
 
 ### Showing and hiding syntax (Proposed)
 
@@ -104,21 +108,11 @@ Full reparse and restyle measured 15 ms p95 on the 5,000-line fixture in Milesto
 
 ### Embedded views (Proposed)
 
-Tables, display math, Mermaid diagrams, images and front matter are "islands": native views embedded in the text flow while their source stays in storage. Clicking an island edits it in its own way: grid editing for tables (section 5), and source with a live preview for math and Mermaid.
+Tables, display math, Mermaid diagrams, images and front matter are "islands": elements that take the place of their source lines (like blocks that replace rows in Zed's block map) while their source stays in the buffer. Clicking an island edits it in its own way: grid editing for tables (section 5), and source with a live preview for math and Mermaid.
 
-### Text engine choice: Milestone 0 (Agreed)
+### How the engine was chosen
 
-TextKit 2 is better at embedding live views (`NSTextAttachmentViewProvider`) and lays out only the visible area. TextKit 1 hides characters cleanly (null glyphs through the layout manager delegate) and has proven, stable scrolling. The choice is made by a throwaway spike that builds both against the same cases:
-
-- Hide and reveal markers as the caret moves, with no stuck caret positions, and correct copy.
-- An editable table grid embedded in the text, whose height changes without scroll jumps.
-- A 5,000-line document with 50 tables and 50 code blocks: smooth scrolling, no layout jumps, and restyling after a keystroke in under 8 ms on Niklas's Mac.
-- Undo and redo across text edits and grid edits.
-- VoiceOver still reads the document.
-
-The result is a decision record naming the engine, with measurements. The spike code is not kept.
-
-Result (2026-09-30): TextKit 1, pending acceptance. See [the Milestone 0 findings](spikes/2026-09-29-m0-textkit.md) and [the decision record](../decisions/2026-09-30_194203231_build-the-editor-on-textkit-1.md).
+Milestone 0 compared TextKit 1 and TextKit 2 in a throwaway AppKit spike ([findings](spikes/2026-09-29-m0-textkit.md)); it narrowly favored TextKit 1, with a 15 ms keystroke cost and table problems on both. In parallel, a GPUI spike built the same app in Rust ([findings](gpui-spike.md)), and a follow-up gate built spell checking and VoiceOver support on it. Niklas chose GPUI on 2026-09-30.
 
 ## 5. Tables (Agreed behavior, Proposed details)
 
@@ -163,7 +157,7 @@ Result (2026-09-30): TextKit 1, pending acceptance. See [the Milestone 0 finding
 
 ### Typography and themes (Proposed)
 
-- Prose in iA Writer Quattro; code in iA Writer Mono. Settings offer Quattro, Duo or Mono for prose.
+- Prose in iA Writer Quattro; code in iA Writer Mono. Settings offer Quattro, Duo or Mono for prose. Bold prose currently uses Duo S Bold, because the static Quattro S Bold files report weight 400 and GPUI cannot select them.
 - Fonts are bundled unmodified with their SIL Open Font License 1.1. "iA Writer" is a reserved font name, so the files must not be modified (for example subset) under that name.
 - A text column of about 70 characters with generous margins that scale with the window.
 - Light and dark palettes follow the system: iA-like warm off-white and near-black backgrounds, low-contrast syntax markers and restrained accent colors.
@@ -176,12 +170,12 @@ Kept deliberately small: prose font, text size, column width, focus unit and typ
 
 | Feature | Proposed approach |
 | --- | --- |
-| Syntax highlighting | Open question (section 10): tree-sitter grammars (SwiftTreeSitter with Neon) or Highlightr (highlight.js in JavaScriptCore). Decide in Milestone 1. |
+| Syntax highlighting | tree-sitter grammars through GPUI Kit's highlighter (its `tree-sitter-*` features), as Zed does. |
 | GitHub alerts | Blockquote with alert kind from `pulldown-cmark`; colored bar, icon and title. |
 | Front matter | Metadata block from `pulldown-cmark`; quiet collapsed key/value view that expands to source on click. |
 | Footnotes | Superscript references; hover previews the note; click jumps and back returns. |
-| Math | SwiftMath (native LaTeX math typesetting for macOS). Inline math is drawn in the line; display math is an island. |
-| Mermaid | A single hidden `WKWebView` with a bundled, offline `mermaid.js`, created only when a document contains a Mermaid block. Renders SVG, which is cached by content hash and appearance and shown as an island image. |
+| Math | Open (section 10): typeset to SVG (for example MathJax in an embedded JavaScript engine, or a Rust typesetter) and draw the SVG with GPUI. Inline math sits in the line; display math is an island. |
+| Mermaid | Rendered to SVG off the main thread by an isolated renderer (a hidden `WKWebView` through `objc2`, or an external renderer), only when a document contains a Mermaid block. SVGs are cached by content hash and appearance and shown as island images. |
 | Wiki links | `[[name]]` and `[[name\|label]]` resolve to files in the open folder; unresolved links are styled differently; ⌘-click opens or creates. |
 | Images | Relative paths resolve against the document; remote images load asynchronously with a cache; images scale to the column width. |
 
@@ -189,13 +183,13 @@ Kept deliberately small: prose font, text size, column width, focus unit and typ
 
 | Milestone | Outcome |
 | --- | --- |
-| **M0 — Engine spike** | Throwaway TextKit 1 vs TextKit 2 comparison against section 4's cases. Output: a decision record with measurements. |
-| **M1 — Core editor** | Project setup (XcodeGen, mise, the Rust library), `focal` command, `NSDocument` with autosave, live reload and exact round-trip, parsing, inline and block styling with syntax reveal, code blocks with highlighting, fonts, light and dark mode. Usable daily for plain prose. |
+| **M0 — Engine spikes** | Done: TextKit 1 vs 2, the GPUI spike and the spell-checking and VoiceOver gate. GPUI chosen. |
+| **M1 — Core editor** | Line layout from fragments with hanging indents; real bullets, numbers and task checkboxes; nested lists, quotes and alerts drawn correctly; list editing (Return, Tab, Backspace at a marker); caret never enters hidden island source; file watching through FSEvents; accessibility tree caching; code highlighting; GPUI integration tests. Usable daily for prose and notes. |
 | **M2 — Tables** | Grid island, cell editing and navigation, row and column operations, aligned serialization, undo. |
 | **M3 — Chrome** | Bottom bar, focus mode with typewriter scrolling, folder mode with sidebar and quick switcher. |
 | **M4 — Extras** | Alerts, front matter, footnotes, highlight, images, math and wiki links. |
 | **M5 — Mermaid** | Lazy renderer, cache and island. |
-| **M6 — Distribution** | Signing, notarization, Homebrew cask, release process. |
+| **M6 — Distribution** | `Focal.app` bundle, single-instance forwarding for the `focal` command, signing, notarization, Homebrew cask, release process. |
 
 Each milestone gets its own implementation plan before work starts.
 
@@ -204,13 +198,15 @@ Each milestone gets its own implementation plan before work starts.
 - **Parser:** Rust unit tests for span output, plus the CommonMark and GFM spec examples, checked for correct span ranges.
 - **Round-trip:** property tests where opening and saving any unedited document produces identical bytes, including CRLF, missing trailing newline, tabs and non-ASCII text.
 - **Tables:** golden tests for the serializer (alignment, escaping, wide characters) and grid-edit-to-source tests.
-- **Rendering:** snapshot tests of rendered documents in light and dark mode, following Keywink's `mise run snapshots` pattern.
-- **Interaction:** tests for syntax reveal, caret movement across hidden markers, and undo.
-- **Performance:** a benchmark on the 5,000-line document for open time, keystroke restyle time and scrolling, with budgets set from the M0 measurements.
+- **Rendering:** snapshot tests of rendered documents in light and dark mode.
+- **Interaction:** GPUI integration tests through GPUI Kit's test harness (headless windows, simulated keys and mouse) for syntax reveal, caret movement across hidden markers and islands, list editing and undo.
+- **Performance:** `mise run stress` on the 5,000-line document for parse and restyle time, plus in-app traces (`FOCAL_TRACE=1`); keystroke budget 8 ms.
 
 ## 10. Open questions
 
-- Code highlighting: tree-sitter (accurate, incremental, one compiled grammar per language) or Highlightr (about 190 languages, JavaScript-based). Decide in M1.
+- Math typesetting without a web view: which renderer?
+- Grammar checking, autocorrect and Writing Tools: wanted, and reachable through `objc2`?
+- How to follow GPUI upgrades: `gpui-kit` pins `gpui-pre` exactly.
 - Encodings other than UTF-8: refuse, or detect and preserve?
 - Architecture: Apple Silicon only, or universal binaries (Intel)?
 - Whether focus mode should also dim syntax markers and chrome colors, as iA Writer does.

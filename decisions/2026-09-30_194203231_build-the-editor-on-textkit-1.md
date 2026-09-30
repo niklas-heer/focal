@@ -3,12 +3,12 @@ schema_version = 1
 id = "01M3SXD6YZ698MVJ6QXR2QKFTH"
 title = "Build the editor on TextKit 1"
 date = "2026-09-30"
-status = "proposed"
+status = "rejected"
 tags = ["architecture", "rendering"]
 supersedes = []
 superseded_by = []
 depends_on = ["01M3N1CC6YF89Y8YAY1QJW5ZWS"]
-related_to = []
+related_to = ["01M3SV51ATT58APSGWMYVXBYJG"]
 +++
 ## Decision
 
@@ -33,3 +33,7 @@ Some manual results are provisional because an agent ran them with synthetic eve
 - Milestone 1 builds on `NSLayoutManager` with non-contiguous layout, owns grid placement from laid-out line rectangles, and must investigate the `invalid glyph index` warnings.
 - Milestone 1 must keep the caret out of hidden table source (↑/↓ and clicks next to a grid), reparse from the edited block to meet the budget, and expose grid cells to accessibility.
 - TextKit 1 is Apple's older path; revisit if a future macOS makes TextKit 2 keep stable heights while scrolling, or deprecates TextKit 1.
+
+## Outcome
+
+Rejected on 2026-09-30: Niklas chose to build Focal in Rust with GPUI instead (decision `01M3SV51ATT58APSGWMYVXBYJG`). The Milestone 0 findings remain the record of how TextKit 1 and 2 compared.

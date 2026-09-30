@@ -3,16 +3,18 @@ schema_version = 1
 id = "01M3SV51ATT58APSGWMYVXBYJG"
 title = "Build Focal in Rust with GPUI"
 date = "2026-09-30"
-status = "proposed"
+status = "accepted"
 tags = ["architecture", "platform"]
-supersedes = []
+supersedes = ["01M3N1CC685R2SEASNER5DE1ZT"]
 superseded_by = []
 depends_on = []
 related_to = ["01M3N1CC685R2SEASNER5DE1ZT", "01M3N1CC76F8J8BK28GQTPV63M"]
 +++
 ## Decision
 
-Proposed, not accepted: build Focal in Rust with GPUI (through `gpui-kit`) instead of Swift and AppKit. One UI-free Rust crate, `focal-core`, holds the editor model (Markdown analysis with `pulldown-cmark`, per-line display maps, the buffer and undo); the app crate draws each source line as GPUI styled text with markers hidden or replaced away from the caret, in GPUI's virtualized list.
+Build Focal in Rust with GPUI (through `gpui-kit`) instead of Swift and AppKit. One UI-free Rust crate, `focal-core`, holds the editor model (Markdown analysis with `pulldown-cmark`, per-line display maps, the buffer and undo); the app crate draws each source line as GPUI text with markers hidden or replaced away from the caret, in GPUI's virtualized list. macOS services GPUI lacks, starting with spell checking, are reached through `objc2` bindings.
+
+Niklas accepted this on 2026-09-30, after the TextKit Milestone 0 spike and after a gate showed spell checking and VoiceOver support could be built on GPUI. It supersedes the AppKit decision; the TextKit 1 proposal from Milestone 0 was rejected.
 
 ## Context
 
@@ -36,5 +38,6 @@ The alternative is the AppKit plan. Its Milestone 0 spike (on `main`, `docs/spik
 
 ## Consequences
 
-- If accepted, this supersedes "Build Focal as a native AppKit application" and changes the parser decision's C interface into a plain Rust dependency. Milestones 1 to 6 would need replanning around the gaps above, especially accessibility and spell checking.
-- If rejected, the `rust-gpui` branch remains a reference: `focal-core`'s analysis and display-map logic can still back the AppKit app through the planned C interface.
+- Supersedes "Build Focal as a native AppKit application". The parser decision stands, but its C interface is no longer needed: `pulldown-cmark` is an ordinary Rust dependency.
+- Milestones are replanned on the Rust stack (design section 8). Grammar checking, autocorrect, Look Up and Writing Tools stay unavailable unless built through `objc2`.
+- Revisit if GPUI (or `gpui-pre`/`gpui-kit`) stops being maintained, or if accessibility or text services turn out to need more than the bindings can give.

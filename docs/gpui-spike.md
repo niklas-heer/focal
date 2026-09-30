@@ -1,8 +1,8 @@
 # Focal on Rust and GPUI: spike findings
 
-This branch (`rust-gpui`) builds the same app idea as [the design](design.md), in Rust with [GPUI](https://gpui.rs), the GPU-accelerated UI framework from Zed, instead of Swift and AppKit. It answers one question: can GPUI carry Focal's core, a calm live-rendering Markdown editor, before any milestone commits to a stack?
+The `rust-gpui` branch built the same app idea as [the design](design.md), in Rust with [GPUI](https://gpui.rs), the GPU-accelerated UI framework from Zed, instead of Swift and AppKit. It answers one question: can GPUI carry Focal's core, a calm live-rendering Markdown editor, before any milestone commits to a stack?
 
-**Status:** working spike, not the agreed direction. The AppKit decision stays accepted until Niklas decides otherwise; the alternative is recorded as a proposed decision in [`decisions/`](../decisions/).
+**Status:** accepted on 2026-09-30. This spike became Focal's codebase ([decision](../decisions/2026-09-30_190238170_build-focal-in-rust-with-gpui.md)); this document records what it established.
 
 ## What the spike does
 

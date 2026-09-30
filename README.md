@@ -2,11 +2,9 @@
 
 A focused, native Markdown editor for macOS that you open from the terminal.
 
-> **Status:** design phase. On `main`, the plan is Swift and AppKit, with Milestone 0 settling the text engine. See [the design](docs/design.md).
->
-> **This branch (`rust-gpui`)** is a working spike of the same app in Rust with [GPUI](https://gpui.rs), Zed's GPU-accelerated UI framework. It is an alternative under evaluation, not the agreed direction. See [the spike findings](docs/gpui-spike.md).
+> **Status:** early. Focal is built in Rust with [GPUI](https://gpui.rs), Zed's GPU-accelerated UI framework. The editor works for everyday prose; Milestone 1 (lists, checkboxes, layout and polish) is under way. See [the design](docs/design.md).
 
-## Try the GPUI spike
+## Try it
 
 Requires macOS, [mise](https://mise.jdx.dev) and rustup (the toolchain is pinned in `rust-toolchain.toml`).
 
@@ -51,7 +49,7 @@ focal --wait msg.md     # block until closed, usable as $EDITOR
 ## Documentation
 
 - [Design](docs/design.md): goals, architecture and milestones.
-- [GPUI spike findings](docs/gpui-spike.md): what the Rust and GPUI version does, measurements and trade-offs against AppKit.
+- [GPUI spike findings](docs/gpui-spike.md) and [Milestone 0 TextKit findings](docs/spikes/2026-09-29-m0-textkit.md): how the stack was chosen.
 - [Decision records](decisions/): lasting choices and why they were made (managed with [vrdx](https://github.com/niklas-heer/vrdx)).
 - [AGENTS.md](AGENTS.md): guidance for coding agents.
 
