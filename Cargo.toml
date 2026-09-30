@@ -1,0 +1,40 @@
+[workspace]
+resolver = "3"
+members = ["crates/focal-core", "crates/focal"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.97"
+license = "MIT"
+repository = "https://github.com/niklas-heer/focal"
+
+[workspace.dependencies]
+focal-core = { path = "crates/focal-core" }
+pulldown-cmark = { version = "0.13.4", default-features = false }
+unicode-segmentation = "1.13"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "warn"
+todo = "deny"
+dbg_macro = "deny"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_panics_doc = "allow"
+missing_errors_doc = "allow"
+cast_precision_loss = "allow"
+# GPUI builder closures such as `|d| d.border_l_1()` read better inline.
+redundant_closure_for_method_calls = "allow"
+
+[profile.dev]
+debug = 0
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"

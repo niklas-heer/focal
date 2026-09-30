@@ -1,0 +1,33 @@
+# The Rust toolchain itself is pinned in rust-toolchain.toml.
+
+[tasks.build]
+description = "Build the focal binary (debug)"
+run = "cargo build -p focal"
+
+[tasks.run]
+description = "Open a file in Focal and wait for the window to close: mise run run -- notes.md"
+run = "cargo run -p focal -- --wait"
+
+[tasks.test]
+description = "Run all tests"
+run = "cargo test --workspace"
+
+[tasks.check]
+description = "Format check, Clippy and tests"
+run = [
+  "cargo fmt --all -- --check",
+  "cargo clippy --workspace --all-targets -- -D warnings",
+  "cargo test --workspace",
+]
+
+[tasks.stress]
+description = "Time analysis and restyling on the 5,000-line stress document"
+run = "cargo run --release -p focal-core --example stress --"
+
+[tasks.install]
+description = "Install focal into ~/.cargo/bin"
+run = "cargo install --path crates/focal --locked"
+
+[tasks.clean]
+description = "Remove debug build output (release builds are kept)"
+run = "cargo clean --profile dev"

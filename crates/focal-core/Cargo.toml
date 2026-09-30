@@ -1,0 +1,15 @@
+[package]
+name = "focal-core"
+version = "0.0.0"
+description = "Focal's editor model: Markdown analysis, line display maps and the edit buffer, independent of any UI toolkit."
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+pulldown-cmark.workspace = true
+unicode-segmentation.workspace = true
+
+[lints]
+workspace = true
