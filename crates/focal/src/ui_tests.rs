@@ -3,18 +3,22 @@
 
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
-    AnyWindowHandle, App, AppContext as _, Bounds, Entity, Focusable as _, TestAppContext, Window,
-    WindowBounds, WindowOptions, point, px, size,
+    AnyWindowHandle, App, AppContext as _, Bounds, Entity, TestAppContext, Window, WindowBounds,
+    WindowOptions, point, px, size,
 };
 
 use crate::document::Document;
 use crate::editor::{self, Editor};
+use crate::settings::Settings;
+use crate::workspace::Workspace;
 
-pub fn open_editor(cx: &mut TestAppContext, text: &str) -> (AnyWindowHandle, Entity<Editor>) {
+pub fn open_workspace(cx: &mut TestAppContext, text: &str) -> (AnyWindowHandle, Entity<Workspace>) {
     let text = text.to_owned();
     cx.update(|cx| {
         gpui_kit::init(cx);
         editor::bind_keys(cx);
+        // Tests never read or write the user's settings file.
+        cx.set_global(Settings::default());
         let bounds = Bounds {
             origin: point(px(0.), px(0.)),
             size: size(px(900.), px(700.)),
@@ -24,12 +28,18 @@ pub fn open_editor(cx: &mut TestAppContext, text: &str) -> (AnyWindowHandle, Ent
             ..WindowOptions::default()
         };
         gpui_kit::open_window(options, cx, |window, cx| {
-            let editor = cx.new(|cx| Editor::new(Document::untitled(), text, window, cx));
-            window.focus(&editor.read(cx).focus_handle(cx), cx);
-            editor
+            let workspace = cx.new(|cx| Workspace::new(Document::untitled(), text, window, cx));
+            Workspace::focus_editor(&workspace, window, cx);
+            workspace
         })
         .expect("open test window")
     })
+}
+
+pub fn open_editor(cx: &mut TestAppContext, text: &str) -> (AnyWindowHandle, Entity<Editor>) {
+    let (window, workspace) = open_workspace(cx, text);
+    let editor = workspace.read_with(cx, |workspace, _| workspace.editor().clone());
+    (window, editor)
 }
 
 /// Renders a frame, then runs `f` with the window.
@@ -431,5 +441,14 @@ fn tab_into_a_hidden_cell_scrolls_it_into_view(cx: &mut TestAppContext) {
             cell.left() >= frame.left() && cell.right() <= frame.right(),
             "the edited cell {cell:?} is inside the table's frame {frame:?}"
         );
+    });
+}
+
+#[gpui_kit::test]
+fn the_workspace_focuses_its_editor(cx: &mut TestAppContext) {
+    let (window, workspace) = open_workspace(cx, "text");
+    act(cx, window, |window, cx| {
+        let editor = workspace.read(cx).editor().clone();
+        assert!(editor.read(cx).focus_handle.is_focused(window));
     });
 }

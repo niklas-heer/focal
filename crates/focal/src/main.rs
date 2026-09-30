@@ -6,12 +6,15 @@ mod document;
 mod editor;
 mod grid;
 mod highlight;
+mod menus;
 mod prefix;
+mod settings;
 mod spell;
 mod table_view;
 mod theme;
 #[cfg(test)]
 mod ui_tests;
+mod workspace;
 
 use std::borrow::Cow;
 use std::ffi::OsString;
@@ -22,12 +25,12 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context as _, Result, bail};
 use gpui_kit::{
-    App, AppContext as _, Bounds, Focusable as _, Menu, MenuItem, TitlebarOptions, WindowBounds,
-    WindowOptions, point, px, size,
+    App, AppContext as _, Bounds, TitlebarOptions, WindowBounds, WindowOptions, point, px, size,
 };
 
 use crate::document::Document;
-use crate::editor::{Editor, Quit};
+use crate::editor::Quit;
+use crate::workspace::Workspace;
 
 const USAGE: &str = "\
 Usage: focal [--wait] [FILE]
@@ -157,12 +160,9 @@ fn run_app(source: Source) {
         gpui_kit::init(cx);
         load_fonts(cx);
         editor::bind_keys(cx);
+        settings::init(cx);
         cx.on_action(|_: &Quit, cx| cx.quit());
-        cx.set_menus(vec![Menu {
-            name: "Focal".into(),
-            items: vec![MenuItem::action("Quit Focal", Quit)],
-            disabled: false,
-        }]);
+        menus::set_menus(cx);
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
                 cx.quit();
@@ -193,9 +193,9 @@ fn run_app(source: Source) {
             ..WindowOptions::default()
         };
         let opened = gpui_kit::open_window(options, cx, |window, cx| {
-            let editor = cx.new(|cx| Editor::new(document, text, window, cx));
-            window.focus(&editor.read(cx).focus_handle(cx), cx);
-            editor
+            let workspace = cx.new(|cx| Workspace::new(document, text, window, cx));
+            Workspace::focus_editor(&workspace, window, cx);
+            workspace
         });
         if let Err(error) = opened {
             eprintln!("focal: could not open a window: {error:#}");
