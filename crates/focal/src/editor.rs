@@ -175,6 +175,9 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, context),
         KeyBinding::new("escape", CellExit, Some(CELL_CONTEXT)),
+        // The document's undo, not the input's: a cell edit rewrites the table.
+        KeyBinding::new("cmd-z", Undo, Some(CELL_CONTEXT)),
+        KeyBinding::new("cmd-shift-z", Redo, Some(CELL_CONTEXT)),
         KeyBinding::new("tab", CellNext, Some(CELL_CONTEXT)),
         KeyBinding::new("shift-tab", CellPrevious, Some(CELL_CONTEXT)),
         KeyBinding::new("enter", CellBelow, Some(CELL_CONTEXT)),
@@ -904,13 +907,15 @@ impl Editor {
         }
     }
 
-    fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
+    fn undo(&mut self, _: &Undo, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_cell(window, cx);
         if let Some(selection) = self.buffer.undo() {
             self.restore(selection, cx);
         }
     }
 
-    fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
+    fn redo(&mut self, _: &Redo, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_cell(window, cx);
         if let Some(selection) = self.buffer.redo() {
             self.restore(selection, cx);
         }

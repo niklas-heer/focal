@@ -127,10 +127,18 @@ impl Editor {
 
     /// Ends cell editing and puts the caret at `to` in the text.
     pub(crate) fn leave_grid(&mut self, to: usize, window: &mut Window, cx: &mut Context<Self>) {
-        self.cell_changed(window, cx);
-        self.grid = None;
-        window.focus(&self.focus_handle, cx);
+        self.close_cell(window, cx);
         self.move_to(to, cx);
+    }
+
+    /// Keeps what was typed in the open cell, if any, and returns focus to
+    /// the text.
+    pub(crate) fn close_cell(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.grid.is_some() {
+            self.cell_changed(window, cx);
+            self.grid = None;
+            window.focus(&self.focus_handle, cx);
+        }
     }
 
     pub(crate) fn cell_exit(&mut self, _: &CellExit, window: &mut Window, cx: &mut Context<Self>) {
@@ -245,13 +253,11 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         use TableOpKind::*;
-        // Keep what was typed, then close the cell: its row and column may
-        // hold another cell once the table changes shape.
-        self.cell_changed(window, cx);
-        self.grid = None;
+        // Close the cell first: its row and column may hold another cell once
+        // the table changes shape.
+        self.close_cell(window, cx);
         let (table, row, column) = (action.table, action.row, action.column);
         if action.op == EditAsMarkdown {
-            self.grid = None;
             self.table_source = Some(table);
             let start = self.snapshot.analysis.tables[table].range.start;
             window.focus(&self.focus_handle, cx);

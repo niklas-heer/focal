@@ -379,3 +379,21 @@ fn pressing_a_drag_handle_does_not_edit_a_cell(cx: &mut TestAppContext) {
     });
     editor.read_with(cx, |editor, _| assert_eq!(editor.editing_cell(), None));
 }
+
+#[gpui_kit::test]
+fn undo_in_a_focused_cell_restores_the_table(cx: &mut TestAppContext) {
+    let text = "| a | b |\n|---|---|\n| 1 | 2 |\n";
+    let (window, editor) = open_editor(cx, text);
+    act(cx, window, |window, cx| click_cell(window, cx, 0, 1, 0));
+    act(cx, window, |window, cx| window.input("0", cx));
+    act(cx, window, |_, _| {});
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.text(),
+            "| a   | b   |\n| --- | --- |\n| 10  | 2   |\n"
+        );
+    });
+    act(cx, window, |window, cx| window.press("cmd-z", cx));
+    act(cx, window, |_, _| {});
+    editor.read_with(cx, |editor, _| assert_eq!(editor.text(), text));
+}
