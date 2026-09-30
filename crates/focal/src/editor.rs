@@ -405,6 +405,17 @@ impl Editor {
         self.document.title()
     }
 
+    pub(crate) fn path(&self) -> Option<&std::path::Path> {
+        self.document.path.as_deref()
+    }
+
+    /// Writes an open table cell into the text and saves, before the editor is
+    /// replaced by another file's.
+    pub(crate) fn flush(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_cell(window, cx);
+        self.save_now(cx);
+    }
+
     #[cfg(test)]
     pub(crate) fn selection(&self) -> Range<usize> {
         self.selection.clone()

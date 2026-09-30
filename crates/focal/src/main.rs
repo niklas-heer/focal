@@ -5,6 +5,7 @@ mod accessibility;
 mod bar;
 mod document;
 mod editor;
+mod folder;
 mod grid;
 mod highlight;
 mod menus;
@@ -34,10 +35,11 @@ use crate::editor::Quit;
 use crate::workspace::Workspace;
 
 const USAGE: &str = "\
-Usage: focal [--wait] [FILE]
+Usage: focal [--wait] [FILE | FOLDER]
 
-Opens FILE (created on first save if missing). With no FILE, opens text piped
-to standard input as an untitled document.
+Opens FILE (created on first save if missing), or FOLDER with a sidebar of its
+Markdown files. With neither, opens text piped to standard input as an
+untitled document.
 
 Options:
   -w, --wait     Stay in the foreground until the window closes (for $EDITOR)
@@ -56,6 +58,7 @@ struct Args {
 
 enum Source {
     File(PathBuf),
+    Folder(PathBuf),
     Untitled(String),
 }
 
@@ -77,12 +80,10 @@ fn run() -> Result<()> {
     } else if let Some(path) = &args.path {
         let path = std::path::absolute(path).context("resolving the path")?;
         if path.is_dir() {
-            bail!(
-                "{} is a folder; folder mode is not part of this spike yet",
-                path.display()
-            );
+            Source::Folder(path)
+        } else {
+            Source::File(path)
         }
-        Source::File(path)
     } else if std::io::stdin().is_terminal() {
         Source::Untitled(String::new())
     } else {
@@ -136,7 +137,7 @@ fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Option<Args>> {
 fn detach(source: &Source) -> Result<()> {
     let mut command = Command::new(std::env::current_exe().context("locating focal")?);
     match source {
-        Source::File(path) => {
+        Source::File(path) | Source::Folder(path) => {
             command.arg(path);
         }
         Source::Untitled(text) => {
@@ -161,6 +162,7 @@ fn run_app(source: Source) {
         gpui_kit::init(cx);
         load_fonts(cx);
         editor::bind_keys(cx);
+        workspace::bind_keys(cx);
         settings::init(cx);
         cx.on_action(|_: &Quit, cx| cx.quit());
         menus::set_menus(cx);
@@ -171,18 +173,27 @@ fn run_app(source: Source) {
         })
         .detach();
 
-        let (document, text) = match source {
+        let (title, folder, opened) = match source {
+            Source::Folder(root) => {
+                let title = root.file_name().map_or_else(
+                    || root.display().to_string(),
+                    |n| n.to_string_lossy().into_owned(),
+                );
+                (title, Some(root), None)
+            }
             Source::File(path) => match Document::open(path) {
-                Ok(opened) => opened,
+                Ok(opened) => (opened.0.title(), None, Some(opened)),
                 Err(error) => {
                     eprintln!("focal: {error:#}");
                     cx.quit();
                     return;
                 }
             },
-            Source::Untitled(text) => (Document::untitled(), text),
+            Source::Untitled(text) => {
+                let document = Document::untitled();
+                (document.title(), None, Some((document, text)))
+            }
         };
-        let title = document.title();
         let bounds = Bounds::centered(None, size(px(860.), px(920.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -193,12 +204,16 @@ fn run_app(source: Source) {
             }),
             ..WindowOptions::default()
         };
-        let opened = gpui_kit::open_window(options, cx, |window, cx| {
-            let workspace = cx.new(|cx| Workspace::new(document, text, window, cx));
+        let window = gpui_kit::open_window(options, cx, |window, cx| {
+            let workspace = cx.new(|cx| match (folder, opened) {
+                (Some(root), _) => Workspace::new_folder(root, window, cx),
+                (None, Some((document, text))) => Workspace::new(document, text, window, cx),
+                (None, None) => Workspace::new(Document::untitled(), String::new(), window, cx),
+            });
             Workspace::focus_editor(&workspace, window, cx);
             workspace
         });
-        if let Err(error) = opened {
+        if let Err(error) = window {
             eprintln!("focal: could not open a window: {error:#}");
             cx.quit();
             return;

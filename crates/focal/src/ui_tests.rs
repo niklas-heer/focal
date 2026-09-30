@@ -588,3 +588,119 @@ fn sentence_focus_stops_at_a_list_item(cx: &mut TestAppContext) {
         assert_eq!(editor.focus_range(), Some(12..22));
     });
 }
+
+fn open_folder(
+    cx: &mut TestAppContext,
+    root: &std::path::Path,
+) -> (AnyWindowHandle, Entity<Workspace>) {
+    let root = root.to_path_buf();
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        editor::bind_keys(cx);
+        crate::workspace::bind_keys(cx);
+        cx.set_global(Settings::default());
+        let bounds = Bounds {
+            origin: point(px(0.), px(0.)),
+            size: size(px(900.), px(700.)),
+        };
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            ..WindowOptions::default()
+        };
+        gpui_kit::open_window(options, cx, |window, cx| {
+            let workspace = cx.new(|cx| Workspace::new_folder(root, window, cx));
+            Workspace::focus_editor(&workspace, window, cx);
+            workspace
+        })
+        .expect("open test window")
+    })
+}
+
+/// A folder with `old.md` and a newer `new.md`.
+fn notes_folder(name: &str, new: &str) -> std::path::PathBuf {
+    let root = crate::folder::tests::temp_folder(name);
+    std::fs::write(root.join("old.md"), "old text").unwrap();
+    std::fs::write(root.join("new.md"), new).unwrap();
+    let past = std::time::SystemTime::now() - std::time::Duration::from_hours(1);
+    std::fs::File::options()
+        .write(true)
+        .open(root.join("old.md"))
+        .unwrap()
+        .set_modified(past)
+        .unwrap();
+    root
+}
+
+fn current_title(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> String {
+    workspace.read_with(cx, |w, cx| w.editor().read(cx).title())
+}
+
+#[gpui_kit::test]
+fn a_folder_opens_its_newest_file(cx: &mut TestAppContext) {
+    let root = notes_folder("newest", "new text");
+    let (_, workspace) = open_folder(cx, &root);
+    assert_eq!(current_title(cx, &workspace), "new.md");
+}
+
+#[gpui_kit::test]
+fn an_empty_folder_opens_untitled(cx: &mut TestAppContext) {
+    let root = crate::folder::tests::temp_folder("empty");
+    let (_, workspace) = open_folder(cx, &root);
+    assert_eq!(current_title(cx, &workspace), "Untitled.md");
+}
+
+#[gpui_kit::test]
+fn the_sidebar_opens_files_and_saves_the_current_one(cx: &mut TestAppContext) {
+    let root = notes_folder("sidebar", "new text");
+    let (window, workspace) = open_folder(cx, &root);
+    act(cx, window, |window, _| {
+        assert!(window.try_find("sidebar").is_none(), "collapsed");
+    });
+    act(cx, window, |window, cx| {
+        window.press("cmd-down", cx);
+        window.input("!", cx);
+        window.press("ctrl-cmd-s", cx);
+    });
+    act(cx, window, |window, cx| window.click(("file", 1usize), cx));
+    assert_eq!(current_title(cx, &workspace), "old.md");
+    assert_eq!(
+        std::fs::read_to_string(root.join("new.md")).unwrap(),
+        "new text!"
+    );
+}
+
+#[gpui_kit::test]
+fn switching_files_writes_an_open_cell_into_its_own_file(cx: &mut TestAppContext) {
+    let root = notes_folder("cell", "| a |\n|---|\n| 1 |\n");
+    let (window, workspace) = open_folder(cx, &root);
+    act(cx, window, |window, cx| click_cell(window, cx, 0, 1, 0));
+    act(cx, window, |window, cx| window.input("Z", cx));
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::workspace::ToggleSidebar), cx);
+    });
+    act(cx, window, |window, cx| window.click(("file", 1usize), cx));
+    assert_eq!(current_title(cx, &workspace), "old.md");
+    assert!(
+        std::fs::read_to_string(root.join("new.md"))
+            .unwrap()
+            .contains("1Z")
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("old.md")).unwrap(),
+        "old text"
+    );
+}
+
+#[gpui_kit::test]
+fn focus_mode_hides_the_sidebar(cx: &mut TestAppContext) {
+    let root = notes_folder("focus-sidebar", "text");
+    let (window, _) = open_folder(cx, &root);
+    act(cx, window, |window, cx| window.press("ctrl-cmd-s", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("sidebar").is_some());
+    });
+    act(cx, window, |window, cx| window.press("cmd-d", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("sidebar").is_none());
+    });
+}

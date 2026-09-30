@@ -9,6 +9,7 @@ use crate::editor::{
     ToggleFocusMode, ToggleNumbers, ToggleQuote, ToggleTask, Undo,
 };
 use crate::settings::OpenSettings;
+use crate::workspace::ToggleSidebar;
 
 pub fn set_menus(cx: &mut App) {
     cx.set_menus(vec![
@@ -51,6 +52,9 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::action("Code Block", InsertCodeBlock),
             MenuItem::action("Math Block", InsertMath),
         ]),
-        Menu::new("View").items([MenuItem::action("Focus Mode", ToggleFocusMode)]),
+        Menu::new("View").items([
+            MenuItem::action("Toggle Sidebar", ToggleSidebar),
+            MenuItem::action("Focus Mode", ToggleFocusMode),
+        ]),
     ]);
 }
