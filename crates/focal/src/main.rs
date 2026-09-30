@@ -2,6 +2,7 @@
 //! editor window.
 
 mod accessibility;
+mod bar;
 mod document;
 mod editor;
 mod grid;

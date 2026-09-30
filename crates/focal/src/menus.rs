@@ -4,7 +4,9 @@
 use gpui_kit::{App, Menu, MenuItem, OsAction};
 
 use crate::editor::{
-    Bold, CloseWindow, Copy, Cut, Italic, Paste, Quit, Redo, Save, SelectAll, ToggleFocusMode, Undo,
+    Bold, CloseWindow, Copy, Cut, InlineCode, InsertCodeBlock, InsertLink, InsertMath, InsertTable,
+    Italic, Paste, Quit, Redo, Save, SelectAll, SetHeading, Strikethrough, ToggleBullets,
+    ToggleFocusMode, ToggleNumbers, ToggleQuote, ToggleTask, Undo,
 };
 use crate::settings::OpenSettings;
 
@@ -31,6 +33,23 @@ pub fn set_menus(cx: &mut App) {
         Menu::new("Format").items([
             MenuItem::action("Bold", Bold),
             MenuItem::action("Italic", Italic),
+            MenuItem::action("Strikethrough", Strikethrough),
+            MenuItem::action("Inline Code", InlineCode),
+            MenuItem::action("Link", InsertLink),
+            MenuItem::separator(),
+            MenuItem::action("Paragraph", SetHeading(0)),
+            MenuItem::action("Heading 1", SetHeading(1)),
+            MenuItem::action("Heading 2", SetHeading(2)),
+            MenuItem::action("Heading 3", SetHeading(3)),
+            MenuItem::separator(),
+            MenuItem::action("Bulleted List", ToggleBullets),
+            MenuItem::action("Numbered List", ToggleNumbers),
+            MenuItem::action("Task", ToggleTask),
+            MenuItem::action("Quote", ToggleQuote),
+            MenuItem::separator(),
+            MenuItem::action("Table", InsertTable),
+            MenuItem::action("Code Block", InsertCodeBlock),
+            MenuItem::action("Math Block", InsertMath),
         ]),
         Menu::new("View").items([MenuItem::action("Focus Mode", ToggleFocusMode)]),
     ]);

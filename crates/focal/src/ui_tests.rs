@@ -452,3 +452,49 @@ fn the_workspace_focuses_its_editor(cx: &mut TestAppContext) {
         assert!(editor.read(cx).focus_handle.is_focused(window));
     });
 }
+
+fn bar_shown(window: &mut Window) -> bool {
+    window
+        .try_find("bottom-bar")
+        .is_some_and(|bar| bar.visible())
+}
+
+#[gpui_kit::test]
+fn the_bar_shows_near_the_bottom_and_hides_while_typing(cx: &mut TestAppContext) {
+    let (window, _) = open_workspace(cx, "text");
+    act(cx, window, |window, _| {
+        assert!(!bar_shown(window), "hidden at first");
+    });
+    act(cx, window, |window, cx| window.hover("bar-zone", cx));
+    act(cx, window, |window, _| {
+        assert!(bar_shown(window), "the pointer is near the bottom");
+    });
+    act(cx, window, |window, cx| window.input("x", cx));
+    act(cx, window, |window, _| {
+        assert!(!bar_shown(window), "typing hides it");
+    });
+}
+
+#[gpui_kit::test]
+fn bar_buttons_format_the_selection(cx: &mut TestAppContext) {
+    let (window, workspace) = open_workspace(cx, "word");
+    act(cx, window, |window, cx| window.press("cmd-a", cx));
+    act(cx, window, |window, cx| window.hover("bar-zone", cx));
+    act(cx, window, |window, cx| window.click("bar-bold", cx));
+    act(cx, window, |window, cx| window.click("bar-quote", cx));
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "> **word**"));
+}
+
+#[gpui_kit::test]
+fn heading_keys_and_the_word_count(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "two words");
+    act(cx, window, |window, cx| window.press("cmd-2", cx));
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.text(), "## two words");
+        let state = editor.bar_state();
+        assert_eq!((state.heading, state.words, state.minutes), (2, 2, 1));
+    });
+    act(cx, window, |window, cx| window.press("cmd-0", cx));
+    editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "two words"));
+}

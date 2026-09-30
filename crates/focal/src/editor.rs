@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use focal_core::analysis::{InlineStyle, LineKind};
 use focal_core::display::{Run, mark_runs, prose_ranges};
+use focal_core::text_stats::{reading_minutes, word_count};
 use focal_core::{
     Analysis, Bias, Buffer, Caret, EditKind, LineView, analyze, editing, line_view, range_view,
 };
@@ -20,8 +21,8 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::native_menu::NativeMenu;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AccessibleAction, HighlightStyle, Role, StatefulInteractiveElement as _, TestSupportExt as _,
-    WindowAppearance,
+    AccessibleAction, HighlightStyle, Role, SharedString, StatefulInteractiveElement as _,
+    TestSupportExt as _, WindowAppearance,
 };
 use gpui_kit::{
     App, Bounds, ClipboardItem, Context, CursorStyle, ElementInputHandler, EntityInputHandler,
@@ -87,8 +88,33 @@ actions!(
         CellBelow,
         CellUp,
         CellDown,
+        Strikethrough,
+        InlineCode,
+        InsertLink,
+        ToggleBullets,
+        ToggleNumbers,
+        ToggleTask,
+        ToggleQuote,
+        InsertTable,
+        InsertCodeBlock,
+        InsertMath,
     ]
 );
+
+/// Makes the selected lines a heading of this level, or paragraphs with 0.
+#[derive(Clone, Debug, PartialEq, gpui_kit::Action)]
+#[action(namespace = focal, no_json)]
+pub struct SetHeading(pub u8);
+
+/// What the bottom bar shows about the document and the caret.
+pub(crate) struct BarState {
+    pub file_name: SharedString,
+    /// The caret line's heading level, 0 for a paragraph.
+    pub heading: u8,
+    pub words: usize,
+    pub selected_words: usize,
+    pub minutes: usize,
+}
 
 /// Replaces a misspelled word, chosen from the spelling menu.
 #[derive(Clone, Debug, PartialEq, gpui_kit::Action)]
@@ -171,6 +197,16 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-s", Save, context),
         KeyBinding::new("cmd-b", Bold, context),
         KeyBinding::new("cmd-i", Italic, context),
+        KeyBinding::new("cmd-shift-x", Strikethrough, context),
+        KeyBinding::new("cmd-e", InlineCode, context),
+        KeyBinding::new("cmd-k", InsertLink, context),
+        KeyBinding::new("cmd-0", SetHeading(0), context),
+        KeyBinding::new("cmd-1", SetHeading(1), context),
+        KeyBinding::new("cmd-2", SetHeading(2), context),
+        KeyBinding::new("cmd-3", SetHeading(3), context),
+        KeyBinding::new("cmd-4", SetHeading(4), context),
+        KeyBinding::new("cmd-5", SetHeading(5), context),
+        KeyBinding::new("cmd-6", SetHeading(6), context),
         KeyBinding::new("cmd-d", ToggleFocusMode, context),
         KeyBinding::new("cmd-w", CloseWindow, context),
         KeyBinding::new("cmd-q", Quit, None),
@@ -262,6 +298,8 @@ pub struct Editor {
     reveal_frames: u8,
     pub(crate) painted: Rc<RefCell<Vec<PaintedRow>>>,
     focus_mode: bool,
+    /// The word count of a text version, for the bottom bar.
+    word_count: Cell<Option<(u64, usize)>>,
     conflict: bool,
     error: Option<String>,
     trace: bool,
@@ -311,6 +349,7 @@ impl Editor {
             reveal_cell: Cell::new(false),
             painted: Rc::default(),
             focus_mode: false,
+            word_count: Cell::new(None),
             conflict: false,
             error: None,
             trace: std::env::var_os("FOCAL_TRACE").is_some(),
@@ -947,6 +986,102 @@ impl Editor {
     fn italic(&mut self, _: &Italic, _: &mut Window, cx: &mut Context<Self>) {
         let change = editing::toggle_wrap(self.text(), &self.selection, "_");
         self.apply(change, cx);
+    }
+
+    fn strikethrough(&mut self, _: &Strikethrough, _: &mut Window, cx: &mut Context<Self>) {
+        let change = editing::toggle_wrap(self.text(), &self.selection, "~~");
+        self.apply(change, cx);
+    }
+
+    fn inline_code(&mut self, _: &InlineCode, _: &mut Window, cx: &mut Context<Self>) {
+        let change = editing::toggle_wrap(self.text(), &self.selection, "`");
+        self.apply(change, cx);
+    }
+
+    fn insert_link(&mut self, _: &InsertLink, _: &mut Window, cx: &mut Context<Self>) {
+        let change = editing::insert_link(self.text(), &self.selection);
+        self.apply(change, cx);
+    }
+
+    fn set_heading(&mut self, action: &SetHeading, _: &mut Window, cx: &mut Context<Self>) {
+        let lines = &self.snapshot.analysis.lines;
+        let change = editing::set_heading(self.text(), lines, &self.selection, action.0);
+        self.apply(change, cx);
+    }
+
+    fn toggle_prefix(&mut self, prefix: editing::BlockPrefix, cx: &mut Context<Self>) {
+        let lines = &self.snapshot.analysis.lines;
+        let change = editing::toggle_prefix(self.text(), lines, &self.selection, prefix);
+        self.apply(change, cx);
+    }
+
+    fn toggle_bullets(&mut self, _: &ToggleBullets, _: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_prefix(editing::BlockPrefix::Bullet, cx);
+    }
+
+    fn toggle_numbers(&mut self, _: &ToggleNumbers, _: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_prefix(editing::BlockPrefix::Numbered, cx);
+    }
+
+    fn toggle_task(&mut self, _: &ToggleTask, _: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_prefix(editing::BlockPrefix::Task, cx);
+    }
+
+    fn toggle_quote(&mut self, _: &ToggleQuote, _: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_prefix(editing::BlockPrefix::Quote, cx);
+    }
+
+    fn insert_block(&mut self, block: editing::Block, cx: &mut Context<Self>) {
+        let lines = &self.snapshot.analysis.lines;
+        let change = editing::insert_block(self.text(), lines, &self.selection, block);
+        self.apply(change, cx);
+    }
+
+    /// Inserts a table and starts editing its first cell.
+    fn insert_table(&mut self, _: &InsertTable, window: &mut Window, cx: &mut Context<Self>) {
+        self.insert_block(editing::Block::Table, cx);
+        if let Some(table) = self.snapshot.analysis.table_at(self.head()) {
+            self.edit_cell(table, 0, 0, window, cx);
+        }
+    }
+
+    fn insert_code_block(&mut self, _: &InsertCodeBlock, _: &mut Window, cx: &mut Context<Self>) {
+        self.insert_block(editing::Block::CodeBlock, cx);
+    }
+
+    fn insert_math(&mut self, _: &InsertMath, _: &mut Window, cx: &mut Context<Self>) {
+        self.insert_block(editing::Block::Math, cx);
+    }
+
+    pub(crate) const fn focus_mode(&self) -> bool {
+        self.focus_mode
+    }
+
+    pub(crate) fn bar_state(&self) -> BarState {
+        let analysis = &self.snapshot.analysis;
+        let line = analysis.lines.line_of(self.head());
+        let heading = match analysis.info(line).kind {
+            LineKind::Heading(level) => level,
+            _ => 0,
+        };
+        let version = self.snapshot.version;
+        let words = match self.word_count.get() {
+            Some((cached, words)) if Some(cached) == version => words,
+            _ => {
+                let words = word_count(self.text());
+                if let Some(version) = version {
+                    self.word_count.set(Some((version, words)));
+                }
+                words
+            }
+        };
+        BarState {
+            file_name: self.title().into(),
+            heading,
+            words,
+            selected_words: word_count(&self.text()[self.selection.clone()]),
+            minutes: reading_minutes(words),
+        }
     }
 
     fn toggle_focus_mode(&mut self, _: &ToggleFocusMode, _: &mut Window, cx: &mut Context<Self>) {
@@ -2276,6 +2411,17 @@ impl Render for Editor {
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::bold))
             .on_action(cx.listener(Self::italic))
+            .on_action(cx.listener(Self::strikethrough))
+            .on_action(cx.listener(Self::inline_code))
+            .on_action(cx.listener(Self::insert_link))
+            .on_action(cx.listener(Self::set_heading))
+            .on_action(cx.listener(Self::toggle_bullets))
+            .on_action(cx.listener(Self::toggle_numbers))
+            .on_action(cx.listener(Self::toggle_task))
+            .on_action(cx.listener(Self::toggle_quote))
+            .on_action(cx.listener(Self::insert_table))
+            .on_action(cx.listener(Self::insert_code_block))
+            .on_action(cx.listener(Self::insert_math))
             .on_action(cx.listener(Self::toggle_focus_mode))
             .on_action(cx.listener(Self::show_character_palette))
             .on_action(cx.listener(Self::close_window))
