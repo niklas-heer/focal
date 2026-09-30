@@ -2,7 +2,23 @@
 
 A focused, native Markdown editor for macOS that you open from the terminal.
 
-> **Status:** design phase. There is no application code yet. The next step is Milestone 0, a throwaway spike that settles the text engine. See [the design](docs/design.md).
+> **Status:** design phase. On `main`, the plan is Swift and AppKit, with Milestone 0 settling the text engine. See [the design](docs/design.md).
+>
+> **This branch (`rust-gpui`)** is a working spike of the same app in Rust with [GPUI](https://gpui.rs), Zed's GPU-accelerated UI framework. It is an alternative under evaluation, not the agreed direction. See [the spike findings](docs/gpui-spike.md).
+
+## Try the GPUI spike
+
+Requires macOS, [mise](https://mise.jdx.dev) and rustup (the toolchain is pinned in `rust-toolchain.toml`).
+
+```sh
+mise run run -- examples/showcase.md   # open the showcase and wait for the window to close
+mise run install                       # put `focal` on PATH (~/.cargo/bin)
+focal notes.md                         # then use it from any terminal
+mise run check                         # formatting, Clippy and tests
+mise run stress                        # timings on a 5,000-line document
+```
+
+Set `FOCAL_TRACE=1` to print parse and restyle times for every change.
 
 ## The goal
 
@@ -35,6 +51,7 @@ focal --wait msg.md     # block until closed, usable as $EDITOR
 ## Documentation
 
 - [Design](docs/design.md): goals, architecture and milestones.
+- [GPUI spike findings](docs/gpui-spike.md): what the Rust and GPUI version does, measurements and trade-offs against AppKit.
 - [Decision records](decisions/): lasting choices and why they were made (managed with [vrdx](https://github.com/niklas-heer/vrdx)).
 - [AGENTS.md](AGENTS.md): guidance for coding agents.
 
