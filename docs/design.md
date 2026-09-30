@@ -56,15 +56,15 @@ Principles, in priority order:
 | `focal --wait file.md` | Blocks until the window closes, so Focal works as `$EDITOR`. |
 | `focal file.md` (already open) | Brings the existing window to the front. |
 
-Today `focal` is the app itself: it relaunches in the background unless `--wait` is given. Proposed for distribution (M6): `Focal.app` contains the binary; a second `focal` call forwards the request to the running instance over a local socket instead of starting another process. The Homebrew cask in `niklas-heer/homebrew-tap` links it onto `PATH`, as with Keywink.
+Built in M6: `Focal.app` contains the binary, `Contents/MacOS/focal`. Every `focal` call hands its request to the running instance over a Unix socket in `$TMPDIR` (one per binary, so a development build never reaches the installed app), starting the instance in the background if none runs; `--wait` holds the connection until the window closes. Finder's Open With and the Dock reach the same instance. The Homebrew cask (template in `packaging/focal.rb`) also links `focal` onto `PATH`.
 
-**Agreed (2026-09-30):** the app can install the command itself, for installs that do not come through Homebrew. A menu item ("Install Command Line Tool…") puts `focal` on `PATH`, so a file opens quickly from the terminal. Proposed details: a symbolic link from `/usr/local/bin/focal` to the binary inside `Focal.app`, asking for an administrator password only when that folder is not writable, and an "Uninstall" counterpart.
+**Agreed (2026-09-30):** the app can install the command itself, for installs that do not come through Homebrew. A menu item ("Install Command Line Tool…") puts `focal` on `PATH`, so a file opens quickly from the terminal. Built in M6: a symbolic link from `/usr/local/bin/focal` to the binary inside `Focal.app`, asking for an administrator password only when that folder is not writable; a link to another Focal is replaced, any other file is left alone and reported; "Uninstall Command Line Tool…" removes only Focal's link.
 
 ### Updates
 
 **Agreed (2026-09-30):** Focal updates itself. A setting turns automatic update checks on or off. When a newer version exists, Focal asks whether to download it ("A new version of Focal is available. Do you want to download it?") and never installs without that consent.
 
-Proposed details: Sparkle 2, as in Keywink and Spokn, with an appcast published per GitHub release and signed with the existing Sparkle key; Sparkle's standard prompt provides the question, release notes and "Skip This Version". Focal loads `Sparkle.framework` from the app bundle through `objc2`. Homebrew installs mark the cask `auto_updates true`, so Homebrew does not fight Sparkle.
+Built in M6: Sparkle 2.10, as in Keywink and Spokn, with an appcast attached to each GitHub release and signed with the shared Sparkle key; Sparkle's standard prompt asks "A new version of Focal is available! … Would you like to download it now?" and offers release notes and "Skip This Version". Focal loads `Sparkle.framework` from the app bundle through `objc2`, the one place `unsafe` code is allowed ([decision](../decisions/2026-09-30_225003772_update-focal-with-sparkle-through-objc2.md), proposed). The settings switch drives Sparkle's automatic checks; "Check for Updates…" is in the Focal menu. Homebrew installs mark the cask `auto_updates true`, so Homebrew does not fight Sparkle. The release steps are in [`RELEASE.md`](../RELEASE.md).
 
 ### Documents
 
@@ -204,7 +204,7 @@ Built in M3: a settings window (⌘,) with the prose typeface (Quattro, Duo or M
 | **M3 — Chrome** | Done: bottom bar with word count, focus mode by sentence or paragraph with typewriter scrolling, folder mode with a live sidebar and a ⌘P quick switcher, a settings window, a menu bar, and formatting shortcuts. |
 | **M4 — Extras** | Alerts, front matter, footnotes, highlight, images, math and wiki links. |
 | **M5 — Mermaid** | Lazy renderer, cache and island. |
-| **M6 — Distribution** | `Focal.app` bundle, single-instance forwarding for the `focal` command, "Install Command Line Tool…", automatic updates with a setting and a download prompt, signing, notarization, Homebrew cask, release process. |
+| **M6 — Distribution** | Done: `Focal.app` bundle with an icon and Markdown document types, one running instance that `focal` forwards to (with `--wait`), Finder's Open With, "Install Command Line Tool…", Sparkle updates with a setting and a download prompt, About panel, Developer ID signing, and a release script with notarization and a Homebrew cask template. The first public release is still to be published. |
 
 Each milestone gets its own implementation plan before work starts.
 

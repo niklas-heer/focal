@@ -2,16 +2,17 @@
 
 A focused, native Markdown editor for macOS that you open from the terminal.
 
-> **Status:** early. Focal is built in Rust with [GPUI](https://gpui.rs), Zed's GPU-accelerated UI framework. Milestone 1 is done: lists, checkboxes and quotes are drawn and edited properly, files reload live, code blocks are highlighted and VoiceOver can read the document. Milestone 2 made tables grids you edit in place. Milestone 3 added the chrome: the bottom formatting bar, focus mode with typewriter scrolling, folder mode with a sidebar and a quick switcher, settings and a menu bar. The Markdown extras (alerts, images, math, wiki links) are next. See [the design](docs/design.md).
+> **Status:** early. Focal is built in Rust with [GPUI](https://gpui.rs), Zed's GPU-accelerated UI framework. Milestone 1 is done: lists, checkboxes and quotes are drawn and edited properly, files reload live, code blocks are highlighted and VoiceOver can read the document. Milestone 2 made tables grids you edit in place. Milestone 3 added the chrome: the bottom formatting bar, focus mode with typewriter scrolling, folder mode with a sidebar and a quick switcher, settings and a menu bar. Milestone 6 made it an app: `Focal.app` installs its own `focal` command, keeps one instance that `focal` hands files to, opens Markdown files from Finder, and updates itself through Sparkle. The first public release and the Markdown extras (alerts, images, math, wiki links) are next. See [the design](docs/design.md).
 
 ## Try it
 
 Requires macOS, [mise](https://mise.jdx.dev) and rustup (the toolchain is pinned in `rust-toolchain.toml`).
 
 ```sh
-mise run run -- examples/showcase.md   # open the showcase and wait for the window to close
-mise run install                       # put `focal` on PATH (~/.cargo/bin)
-focal notes.md                         # then use it from any terminal
+mise run install-app                   # build Focal.app and copy it to /Applications
+                                       # then Focal › Install Command Line Tool… puts `focal` on PATH
+focal notes.md                         # open a file from any terminal
+mise run run -- examples/showcase.md   # run a development build and wait for the window to close
 mise run check                         # formatting, Clippy and tests
 mise run stress                        # timings on a 5,000-line document
 ```
