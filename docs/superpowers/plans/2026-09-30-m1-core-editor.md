@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make Focal's editor daily-usable for prose and notes: lists, task lists and quotes drawn and edited correctly, the caret never inside hidden syntax, live reload through FSEvents, and a cheap accessibility tree, all covered by UI integration tests.
+**Goal:** Make Focal's editor daily-usable for prose and notes: lists, task lists and quotes drawn and edited correctly, the caret never inside hidden syntax, live reload through FSEvents, a cheap accessibility tree and syntax-highlighted code blocks, all covered by tests.
 
 **Architecture:** `focal-core` gains a *line prefix* model: for every line, the container levels in front of its content (quote bars, list levels, the list marker) and where its content starts. The display map covers only the content; the app draws the prefix as real GPUI elements in columns beside the content, so wrapped lines hang under their text (the approach of Zed's Markdown renderer, which lays out list items as a marker column beside the content). The prefix is atomic for the caret and is edited through Markdown-aware commands. UI behavior is tested with GPUI Kit's headless test harness.
 
@@ -1052,7 +1052,152 @@ git commit -m "perf(a11y): build accessibility nodes once per document version"
 
 ---
 
-### Task 8: Showcase, documentation and milestone check
+### Task 8: Syntax highlighting in code blocks
+
+Niklas asked on 2026-09-30 to keep code highlighting in this milestone.
+
+**Files:**
+- Modify: `crates/focal/Cargo.toml` (GPUI Kit tree-sitter language features)
+- Create: `crates/focal/src/highlight.rs`
+- Modify: `crates/focal/src/editor.rs` (code line runs), `crates/focal/src/main.rs` (`mod highlight;`)
+
+**Interfaces:**
+- Consumes: `Analysis::code_blocks` (`CodeBlock { lines, language }`), `Analysis::content_range`.
+- Produces:
+  - `highlight::language_name(fence: &str) -> Option<&'static str>` — maps a fence's info string (`rs`, `rust`, `py`, `sh`, …) to a grammar name, `None` when unsupported.
+  - `highlight::highlight_block(language: &str, lines: &[&str], dark: bool) -> Vec<Vec<(Range<usize>, HighlightStyle)>>` — styles per line, as byte ranges within each line.
+  - `Editor` caches block highlights by `(language, content hash, dark)`.
+
+- [ ] **Step 1: Enable the grammars**
+
+In `crates/focal/Cargo.toml`, add these features to `gpui-kit` (both in `[dependencies]` and `[dev-dependencies]`): `"tree-sitter-bash", "tree-sitter-c", "tree-sitter-cpp", "tree-sitter-css", "tree-sitter-diff", "tree-sitter-go", "tree-sitter-html", "tree-sitter-java", "tree-sitter-javascript", "tree-sitter-kotlin", "tree-sitter-lua", "tree-sitter-make", "tree-sitter-php", "tree-sitter-python", "tree-sitter-ruby", "tree-sitter-rust", "tree-sitter-sql", "tree-sitter-swift", "tree-sitter-toml", "tree-sitter-tsx", "tree-sitter-typescript", "tree-sitter-yaml", "tree-sitter-zig"`.
+
+- [ ] **Step 2: Write the failing tests**
+
+Create `crates/focal/src/highlight.rs` with the functions returning empty results, and these tests:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_common_fence_names() {
+        assert_eq!(language_name("rs"), Some("rust"));
+        assert_eq!(language_name("Python"), Some("python"));
+        assert_eq!(language_name("sh"), Some("bash"));
+        assert_eq!(language_name("yml"), Some("yaml"));
+        assert_eq!(language_name("rust,ignore"), Some("rust"));
+        assert_eq!(language_name("klingon"), None);
+    }
+
+    #[test]
+    fn highlights_keywords_per_line() {
+        let styles = highlight_block("rust", &["fn main() {", "    let x = 1;", "}"], true);
+        assert_eq!(styles.len(), 3);
+        assert!(styles[0].iter().any(|(range, _)| *range == (0..2)), "`fn` is styled: {:?}", styles[0]);
+        assert!(styles[1].iter().any(|(range, _)| *range == (4..7)), "`let` is styled: {:?}", styles[1]);
+    }
+}
+```
+
+Run: `cargo test -p focal highlight`
+Expected: FAIL (empty results).
+
+- [ ] **Step 3: Implement**
+
+```rust
+//! Syntax highlighting for fenced code blocks, through GPUI Kit's tree-sitter
+//! highlighter (the grammars are Cargo features of `gpui-kit`).
+
+use std::ops::Range;
+
+use gpui_kit::HighlightStyle;
+use gpui_kit::component::Rope;
+use gpui_kit::component::highlighter::{HighlightTheme, SyntaxHighlighter};
+
+/// The grammar for a code fence's info string.
+pub fn language_name(fence: &str) -> Option<&'static str> {
+    let name = fence.split([',', ' ', '{']).next()?.trim().to_ascii_lowercase();
+    Some(match name.as_str() {
+        "rust" | "rs" => "rust",
+        "python" | "py" => "python",
+        "javascript" | "js" | "mjs" | "cjs" | "jsx" => "javascript",
+        "typescript" | "ts" => "typescript",
+        "tsx" => "tsx",
+        "go" | "golang" => "go",
+        "bash" | "sh" | "shell" | "zsh" | "console" => "bash",
+        "c" | "h" => "c",
+        "cpp" | "c++" | "cc" | "hpp" => "cpp",
+        "css" => "css",
+        "diff" | "patch" => "diff",
+        "html" | "xml" | "svg" => "html",
+        "java" => "java",
+        "kotlin" | "kt" => "kotlin",
+        "lua" => "lua",
+        "make" | "makefile" => "make",
+        "php" => "php",
+        "ruby" | "rb" => "ruby",
+        "sql" => "sql",
+        "swift" => "swift",
+        "toml" => "toml",
+        "yaml" | "yml" => "yaml",
+        "zig" => "zig",
+        _ => return None,
+    })
+}
+
+/// Highlights a code block as a whole (so multi-line strings and comments are
+/// right) and returns each line's styles as byte ranges within that line.
+pub fn highlight_block(language: &str, lines: &[&str], dark: bool) -> Vec<Vec<(Range<usize>, HighlightStyle)>> {
+    let code = lines.join("\n");
+    let mut highlighter = SyntaxHighlighter::new(language);
+    highlighter.update(None, &Rope::from_str(&code), None);
+    let theme = if dark { HighlightTheme::default_dark() } else { HighlightTheme::default_light() };
+    let styles = highlighter.styles(&(0..code.len()), &*theme);
+    let mut starts = Vec::with_capacity(lines.len());
+    let mut offset = 0;
+    for line in lines {
+        starts.push(offset);
+        offset += line.len() + 1;
+    }
+    let mut per_line = vec![Vec::new(); lines.len()];
+    for (range, style) in styles {
+        for (index, start) in starts.iter().enumerate() {
+            let end = start + lines[index].len();
+            let clipped = range.start.max(*start)..range.end.min(end);
+            if clipped.start < clipped.end {
+                per_line[index].push((clipped.start - start..clipped.end - start, style));
+            }
+        }
+    }
+    per_line
+}
+```
+
+(If `Rope`, `SyntaxHighlighter` or `HighlightTheme` live under different paths in `gpui-kit` 0.7.0, import them from where `gpui_kit::component` re-exports them; the API is `SyntaxHighlighter::new(lang)`, `update(None, &rope, None)`, `styles(&range, &*theme)`.)
+
+- [ ] **Step 4: Run the tests**
+
+Run: `cargo test -p focal highlight`
+Expected: PASS.
+
+- [ ] **Step 5: Use it for code lines**
+
+In `editor.rs`, add a field `highlights: RefCell<HashMap<(String, u64, bool), Rc<Vec<Vec<(Range<usize>, HighlightStyle)>>>>>`. In `render_line`, for `LineKind::Code` lines whose `info.code_block` has a language that `language_name` knows: collect the block's content lines (`analysis.content_range(l)` for the block's lines between the fences), hash them with `DefaultHasher`, look up or compute `highlight_block`, and build the line's `TextRun`s from the styles (mono font, `style.color` or the base text color, bold/italic from `font_weight`/`font_style`) instead of `text_runs`. Clear the cache when it passes 2,000 entries.
+
+- [ ] **Step 6: Check by hand and commit**
+
+Open `examples/showcase.md`: the Rust block is colored in dark and light mode, and typing inside it recolors only that block.
+
+```bash
+git add crates/focal/Cargo.toml Cargo.lock crates/focal/src/highlight.rs crates/focal/src/editor.rs crates/focal/src/main.rs
+git commit -m "feat(render): highlight code blocks with tree-sitter"
+```
+
+---
+
+### Task 9: Showcase, documentation and milestone check
 
 **Files:**
 - Modify: `examples/showcase.md` (nested lists, ordered widths, a list in a quote, a quote in a list)
@@ -1085,7 +1230,7 @@ Add a "Lists in depth" section to `examples/showcase.md`:
 
 - [ ] **Step 2: Update the design**
 
-In section 8, change the M1 row's outcome to what shipped, and move "code highlighting" to the M4 row (`Alerts, front matter, footnotes, highlight, images, math, wiki links and code highlighting through GPUI Kit's tree-sitter highlighter`). Mark section 4's "Line layout" as Agreed with a sentence noting that prefix levels are drawn as columns beside the content.
+In section 8, change the M1 row's outcome to what shipped (including code highlighting through GPUI Kit's tree-sitter highlighter). Mark section 4's "Line layout" as Agreed with a sentence noting that prefix levels are drawn as columns beside the content.
 
 - [ ] **Step 3: Full check and manual pass**
 
