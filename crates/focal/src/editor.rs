@@ -10,10 +10,12 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use focal_core::analysis::{InlineStyle, LineKind, Replacement};
+use focal_core::display::{Run, mark_runs, prose_ranges};
 use focal_core::{
     Analysis, Buffer, Caret, EditKind, LineView, analyze, editing, line_view, range_view,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::native_menu::NativeMenu;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     App, Bounds, ClipboardItem, Context, CursorStyle, ElementInputHandler, EntityInputHandler,
@@ -25,6 +27,7 @@ use gpui_kit::{
 };
 
 use crate::document::{self, Document, Stamp};
+use crate::spell::SpellChecker;
 use crate::theme::{BOLD_PROSE_FONT, MONO_FONT, PROSE_FONT, Theme};
 
 actions!(
@@ -74,7 +77,30 @@ actions!(
     ]
 );
 
+/// Replaces a misspelled word, chosen from the spelling menu.
+#[derive(Clone, Debug, PartialEq, gpui_kit::Action)]
+#[action(namespace = focal, no_json)]
+pub struct ReplaceWord {
+    range: Range<usize>,
+    word: String,
+    replacement: String,
+}
+
+#[derive(Clone, Debug, PartialEq, gpui_kit::Action)]
+#[action(namespace = focal, no_json)]
+pub struct IgnoreSpelling {
+    word: String,
+}
+
+#[derive(Clone, Debug, PartialEq, gpui_kit::Action)]
+#[action(namespace = focal, no_json)]
+pub struct LearnSpelling {
+    word: String,
+}
+
 const CONTEXT: &str = "FocalEditor";
+/// Distinct line texts whose spelling results are kept.
+const SPELL_CACHE_LIMIT: usize = 20_000;
 const TEXT_SIZE: f32 = 18.;
 const COLUMN_WIDTH: f32 = 720.;
 const AUTOSAVE_DELAY: Duration = Duration::from_millis(400);
@@ -191,6 +217,9 @@ pub struct Editor {
     conflict: bool,
     error: Option<String>,
     trace: bool,
+    spell: RefCell<SpellChecker>,
+    /// Misspelled display ranges per line text.
+    spell_cache: RefCell<std::collections::HashMap<String, Rc<[Range<usize>]>>>,
     save_task: Option<Task<()>>,
     _poll_task: Task<()>,
 }
@@ -233,6 +262,8 @@ impl Editor {
             conflict: false,
             error: None,
             trace: std::env::var_os("FOCAL_TRACE").is_some(),
+            spell: RefCell::new(SpellChecker::new()),
+            spell_cache: RefCell::default(),
             save_task: None,
             _poll_task: poll,
         };
@@ -1104,6 +1135,125 @@ impl Editor {
         );
     }
 
+    // ---- Spelling -----------------------------------------------------------
+
+    /// Misspelled words of a line, as display ranges. Only prose is checked;
+    /// with `hide_at_caret`, the word being typed is left alone.
+    fn misspelled(
+        &self,
+        line: usize,
+        view: &LineView,
+        kind: &LineKind,
+        hide_at_caret: bool,
+    ) -> Vec<Range<usize>> {
+        if !matches!(kind, LineKind::Text | LineKind::Heading(_)) || view.text.trim().is_empty() {
+            return Vec::new();
+        }
+        let found = {
+            let mut cache = self.spell_cache.borrow_mut();
+            if cache.len() > SPELL_CACHE_LIMIT {
+                cache.clear();
+            }
+            cache
+                .entry(view.text.clone())
+                .or_insert_with(|| self.spell.borrow().misspellings(&view.text).into())
+                .clone()
+        };
+        let prose = prose_ranges(view);
+        let head = self.head();
+        let line_range = self.snapshot.analysis.lines.range(line);
+        let caret = (hide_at_caret && line_range.start <= head && head <= line_range.end)
+            .then(|| view.map.to_display(head));
+        found
+            .iter()
+            .filter(|word| {
+                prose
+                    .iter()
+                    .any(|p| p.start <= word.start && word.end <= p.end)
+            })
+            .filter(|word| caret.is_none_or(|at| at < word.start || at > word.end))
+            .cloned()
+            .collect()
+    }
+
+    fn on_right_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        window.focus(&self.focus_handle, cx);
+        let Some(Hit::Text { offset, .. }) = self.hit_test(event.position) else {
+            return;
+        };
+        let line = self.snapshot.analysis.lines.line_of(offset);
+        let view = self.snapshot.views[line].clone();
+        let kind = self.snapshot.analysis.info(line).kind.clone();
+        let at = view.map.to_display(offset);
+        let words = self.misspelled(line, &view, &kind, false);
+        let Some(word) = words.iter().find(|w| w.start <= at && at <= w.end).cloned() else {
+            return;
+        };
+        let source = view.map.to_source(word.start)..view.map.to_source(word.end);
+        let text = self.text()[source.clone()].to_owned();
+        self.selection = source.clone();
+        self.reversed = false;
+        self.after_selection(cx);
+
+        let guesses = self.spell.borrow().guesses(&view.text, word);
+        let mut menu = NativeMenu::new();
+        for guess in guesses.iter().take(6) {
+            menu = menu.menu(
+                guess.clone(),
+                Box::new(ReplaceWord {
+                    range: source.clone(),
+                    word: text.clone(),
+                    replacement: guess.clone(),
+                }),
+            );
+        }
+        if guesses.is_empty() {
+            menu = menu.menu_with_disabled(
+                "No Guesses Found",
+                true,
+                Box::new(IgnoreSpelling { word: text.clone() }),
+            );
+        }
+        menu.separator()
+            .menu(
+                "Ignore Spelling",
+                Box::new(IgnoreSpelling { word: text.clone() }),
+            )
+            .menu("Learn Spelling", Box::new(LearnSpelling { word: text }))
+            .show(event.position, window, cx);
+    }
+
+    fn replace_word(&mut self, action: &ReplaceWord, _: &mut Window, cx: &mut Context<Self>) {
+        if self.text().get(action.range.clone()) != Some(action.word.as_str()) {
+            return;
+        }
+        let end = action.range.start + action.replacement.len();
+        self.edit(
+            action.range.clone(),
+            &action.replacement,
+            end..end,
+            EditKind::Other,
+            cx,
+        );
+    }
+
+    fn ignore_spelling(&mut self, action: &IgnoreSpelling, _: &mut Window, cx: &mut Context<Self>) {
+        self.spell.borrow_mut().ignore(&action.word);
+        self.spell_cache.borrow_mut().clear();
+        cx.notify();
+    }
+
+    fn learn_spelling(&mut self, action: &LearnSpelling, _: &mut Window, cx: &mut Context<Self>) {
+        self.spell.borrow().learn(&action.word);
+        self.spell_cache.borrow_mut().clear();
+        cx.notify();
+    }
+
     // ---- UTF-16 for the platform input handler ------------------------------
 
     fn offset_to_utf16(&self, offset: usize) -> usize {
@@ -1202,8 +1352,10 @@ impl Editor {
         ) {
             base = theme.marker;
         }
+        let misspelled = self.misspelled(line, &view, &info.kind, true);
+        let marked = mark_runs(&view.runs, &misspelled, InlineStyle::MISSPELLED);
         let runs = text_runs(
-            &view,
+            &marked,
             family,
             weight,
             base,
@@ -1348,7 +1500,7 @@ impl Editor {
                         FontWeight::NORMAL
                     };
                     StyledText::new(view.text.clone()).with_runs(text_runs(
-                        &view, PROSE_FONT, weight, theme.text, theme, None, false,
+                        &view.runs, PROSE_FONT, weight, theme.text, theme, None, false,
                     ))
                 });
                 div()
@@ -1541,7 +1693,7 @@ fn paint_selection(
 
 #[allow(clippy::too_many_arguments)]
 fn text_runs(
-    view: &LineView,
+    runs: &[Run],
     family: &str,
     weight: FontWeight,
     base: Hsla,
@@ -1550,8 +1702,7 @@ fn text_runs(
     dimmed: bool,
 ) -> Vec<TextRun> {
     let fade = |color: Hsla| if dimmed { color.opacity(0.3) } else { color };
-    view.runs
-        .iter()
+    runs.iter()
         .map(|run| {
             let style = run.style;
             let mono = style.contains(InlineStyle::CODE)
@@ -1608,11 +1759,19 @@ fn text_runs(
                 font,
                 color: fade(color),
                 background_color: background,
-                underline: style.contains(InlineStyle::LINK).then(|| UnderlineStyle {
-                    color: Some(theme.link.opacity(0.35)),
-                    thickness: px(1.),
-                    wavy: false,
-                }),
+                underline: if style.contains(InlineStyle::MISSPELLED) {
+                    Some(UnderlineStyle {
+                        color: Some(theme.misspelled),
+                        thickness: px(1.5),
+                        wavy: true,
+                    })
+                } else {
+                    style.contains(InlineStyle::LINK).then(|| UnderlineStyle {
+                        color: Some(theme.link.opacity(0.35)),
+                        thickness: px(1.),
+                        wavy: false,
+                    })
+                },
                 strikethrough: strike.then(|| StrikethroughStyle {
                     color: Some(fade(color)),
                     thickness: px(1.),
@@ -1828,7 +1987,11 @@ impl Render for Editor {
             .on_action(cx.listener(Self::show_character_palette))
             .on_action(cx.listener(Self::close_window))
             .on_action(cx.listener(Self::quit))
+            .on_action(cx.listener(Self::replace_word))
+            .on_action(cx.listener(Self::ignore_spelling))
+            .on_action(cx.listener(Self::learn_spelling))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+            .on_mouse_down(MouseButton::Right, cx.listener(Self::on_right_mouse_down))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))

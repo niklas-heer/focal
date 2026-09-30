@@ -229,6 +229,70 @@ pub fn range_view(
     view
 }
 
+/// Display ranges of plain prose, where spelling is checked: everything except
+/// code, math, HTML, revealed markers and replacements such as bullets.
+pub fn prose_ranges(view: &LineView) -> Vec<Range<usize>> {
+    let excluded = InlineStyle::CODE
+        | InlineStyle::MATH
+        | InlineStyle::HTML
+        | InlineStyle::MARKER
+        | InlineStyle::LABEL
+        | InlineStyle::FOOTNOTE;
+    let replaced: Vec<Range<usize>> = view
+        .map
+        .segments
+        .iter()
+        .filter(|segment| segment.kind == SegmentKind::Replaced)
+        .map(|segment| segment.display.clone())
+        .collect();
+    let mut ranges: Vec<Range<usize>> = Vec::new();
+    let mut start = 0;
+    for run in &view.runs {
+        let range = start..start + run.len;
+        start = range.end;
+        let is_replaced = replaced
+            .iter()
+            .any(|r| r.start <= range.start && range.end <= r.end);
+        if run.style.0 & excluded.0 != 0 || is_replaced {
+            continue;
+        }
+        match ranges.last_mut() {
+            Some(last) if last.end == range.start => last.end = range.end,
+            _ => ranges.push(range),
+        }
+    }
+    ranges
+}
+
+/// Adds `style` to the parts of `runs` inside `ranges` (display offsets),
+/// splitting runs at range edges.
+pub fn mark_runs(runs: &[Run], ranges: &[Range<usize>], style: InlineStyle) -> Vec<Run> {
+    let mut marked = Vec::new();
+    let mut start = 0;
+    for run in runs {
+        let end = start + run.len;
+        let mut cuts = vec![start, end];
+        for range in ranges {
+            for point in [range.start, range.end] {
+                if start < point && point < end {
+                    cuts.push(point);
+                }
+            }
+        }
+        cuts.sort_unstable();
+        cuts.dedup();
+        for pair in cuts.windows(2) {
+            let inside = ranges
+                .iter()
+                .any(|r| r.start <= pair[0] && pair[1] <= r.end);
+            let piece_style = if inside { run.style | style } else { run.style };
+            push_run(&mut marked, pair[1] - pair[0], piece_style);
+        }
+        start = end;
+    }
+    marked
+}
+
 fn push_text(
     view: &mut LineView,
     text: &str,
@@ -356,6 +420,56 @@ mod tests {
         let analysis = analyze(text);
         let cell = analysis.tables[0].rows[0][1].clone();
         assert_eq!(range_view(&analysis, text, 0, cell, None).text, "b");
+    }
+
+    #[test]
+    fn prose_excludes_code_and_revealed_markers() {
+        let text = "See `x_y` and **bold** here";
+        let analysis = analyze(text);
+        let caret = Caret::new(&analysis, 16..16, 16);
+        let view = line_view(&analysis, text, 0, Some(&caret));
+        let prose: Vec<&str> = prose_ranges(&view)
+            .into_iter()
+            .map(|r| &view.text[r])
+            .collect();
+        assert_eq!(prose, ["See ", " and ", "bold", " here"]);
+    }
+
+    #[test]
+    #[allow(clippy::single_range_in_vec_init)] // one misspelled word
+    fn marks_split_runs_at_range_edges() {
+        let runs = [
+            Run {
+                len: 4,
+                style: InlineStyle::NONE,
+            },
+            Run {
+                len: 6,
+                style: InlineStyle::STRONG,
+            },
+        ];
+        let marked = mark_runs(&runs, &[2..6], InlineStyle::MISSPELLED);
+        assert_eq!(
+            marked,
+            [
+                Run {
+                    len: 2,
+                    style: InlineStyle::NONE
+                },
+                Run {
+                    len: 2,
+                    style: InlineStyle::MISSPELLED
+                },
+                Run {
+                    len: 2,
+                    style: InlineStyle::STRONG | InlineStyle::MISSPELLED
+                },
+                Run {
+                    len: 4,
+                    style: InlineStyle::STRONG
+                },
+            ]
+        );
     }
 
     #[test]

@@ -3,6 +3,7 @@
 
 mod document;
 mod editor;
+mod spell;
 mod theme;
 
 use std::borrow::Cow;

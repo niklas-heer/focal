@@ -15,7 +15,7 @@ use crate::lines::LineIndex;
 
 /// A set of inline styles applied to a run of text.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub struct InlineStyle(u32);
+pub struct InlineStyle(pub(crate) u32);
 
 impl InlineStyle {
     pub const NONE: Self = Self(0);
@@ -39,6 +39,8 @@ impl InlineStyle {
     pub const ALERT_TITLE: Self = Self(1 << 14);
     /// A quiet label, such as a code block's language.
     pub const LABEL: Self = Self(1 << 15);
+    /// A word the spell checker does not know.
+    pub const MISSPELLED: Self = Self(1 << 16);
 
     pub const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0 && other.0 != 0

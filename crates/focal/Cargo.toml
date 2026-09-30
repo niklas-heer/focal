@@ -11,6 +11,10 @@ license.workspace = true
 anyhow = "1.0.104"
 focal-core.workspace = true
 gpui-kit = { version = "=0.7.0", default-features = false, features = ["component"] }
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSSpellChecker"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSRange", "NSString"] }
+unicode-segmentation.workspace = true
 
 [lints]
 workspace = true
