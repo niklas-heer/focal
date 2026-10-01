@@ -2024,6 +2024,7 @@ dependencies = [
  "serde_json",
  "svgbob",
  "unicode-segmentation",
+ "wavedrom",
 ]
 
 [[package]]
@@ -2087,7 +2088,7 @@ dependencies = [
  "memmap2",
  "slotmap",
  "tinyvec",
- "ttf-parser",
+ "ttf-parser 0.25.1",
 ]
 
 [[package]]
@@ -2779,7 +2780,7 @@ dependencies = [
  "strum",
  "taffy",
  "thiserror 2.0.21",
- "ttf-parser",
+ "ttf-parser 0.25.1",
  "url",
  "usvg 0.46.0",
  "uuid",
@@ -6837,7 +6838,7 @@ dependencies = [
  "core_maths",
  "log",
  "smallvec",
- "ttf-parser",
+ "ttf-parser 0.25.1",
  "unicode-bidi-mirroring",
  "unicode-ccc",
  "unicode-properties",
@@ -8505,6 +8506,12 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "ttf-parser"
+version = "0.19.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49d64318d8311fc2668e48b63969f4343e0a85c4a109aa8460d6672e364b8bd1"
+
+[[package]]
+name = "ttf-parser"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
@@ -8943,6 +8950,17 @@ dependencies = [
  "js-sys",
  "wasm-bindgen",
  "web-sys",
+]
+
+[[package]]
+name = "wavedrom"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4cdec24b0f243cc78dea82157f66c80a17c63aab54cfdac25140b4c5346a7e22"
+dependencies = [
+ "json5",
+ "serde",
+ "ttf-parser 0.19.2",
 ]
 
 [[package]]

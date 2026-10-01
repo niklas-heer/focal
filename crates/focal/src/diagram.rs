@@ -32,10 +32,22 @@ pub fn render(
             pikchr::Pikchr::render(source, None, pikchr::PikchrFlags::default())
                 .map(|drawn| drawn.rendered().to_owned())
         }
+        DiagramLanguage::WaveDrom => {
+            let mut svg = Vec::new();
+            wavedrom::render_json5(source, &mut svg)
+                .map_err(|error| format!("{error:?}"))
+                .map(|()| String::from_utf8_lossy(&svg).into_owned())
+        }
+        DiagramLanguage::GeoJson => crate::maps::geojson(source, palette),
+        DiagramLanguage::TopoJson => crate::maps::topojson(source, palette),
         other => Err(format!("{} diagrams are not drawn yet.", other.name())),
     }))
     .unwrap_or_else(|_| Err(format!("{} could not draw this.", language.name())))?;
-    if language == DiagramLanguage::Mermaid {
+    if matches!(
+        language,
+        DiagramLanguage::Mermaid | DiagramLanguage::GeoJson | DiagramLanguage::TopoJson
+    ) {
+        // Drawn in Focal's palette already.
         Ok(drawn)
     } else {
         Ok(recolor(&with_view_box(&drawn), palette))
@@ -49,12 +61,11 @@ pub const fn can_draw(language: DiagramLanguage) -> bool {
         DiagramLanguage::Mermaid
         | DiagramLanguage::Graphviz
         | DiagramLanguage::Svgbob
-        | DiagramLanguage::Pikchr => true,
-        DiagramLanguage::WaveDrom
-        | DiagramLanguage::PlantUml
-        | DiagramLanguage::D2
+        | DiagramLanguage::Pikchr
+        | DiagramLanguage::WaveDrom
         | DiagramLanguage::GeoJson
-        | DiagramLanguage::TopoJson => false,
+        | DiagramLanguage::TopoJson => true,
+        DiagramLanguage::PlantUml | DiagramLanguage::D2 => false,
     }
 }
 
@@ -364,5 +375,29 @@ mod tests {
         let svg =
             r#"<svg viewBox="0 0 1 1"><style>.a14 { font-family: Times, serif; }</style></svg>"#;
         assert!(!recolor(svg, &palette()).contains("Times"));
+    }
+
+    #[test]
+    fn wavedrom_and_maps_draw() {
+        for (language, source) in [
+            (
+                DiagramLanguage::WaveDrom,
+                r#"{ signal: [ { name: "clk", wave: "p...." }, { name: "data", wave: "x.=.x", data: ["a"] } ] }"#,
+            ),
+            (
+                DiagramLanguage::GeoJson,
+                r#"{"type":"Point","coordinates":[1,2]}"#,
+            ),
+            (
+                DiagramLanguage::TopoJson,
+                r#"{"type":"Topology","objects":{"a":{"type":"LineString","arcs":[0]}},"arcs":[[[0,0],[1,1]]]}"#,
+            ),
+        ] {
+            assert!(can_draw(language), "{language:?}");
+            let svg = render(language, source, &palette())
+                .unwrap_or_else(|e| panic!("{language:?}: {e}"));
+            assert!(svg_size(&svg).is_some(), "{language:?}: {svg}");
+        }
+        assert!(render(DiagramLanguage::WaveDrom, "{ signal: [", &palette()).is_err());
     }
 }

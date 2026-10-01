@@ -16,6 +16,7 @@ imagesize = "0.15.0"
 layout-rs = "0.1.3"
 merman = { version = "0.7.0", features = ["render"] }
 pikchr = "0.1.4"
+wavedrom = "0.1.0"
 # 0.7.4 and later pin `futures` 0.3.30 through `sauron`, which GPUI outgrew.
 svgbob = "=0.7.2"
 # Pictures of math and diagrams for Copy as HTML; the SVG renderer GPUI uses.

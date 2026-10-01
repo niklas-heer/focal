@@ -16,6 +16,7 @@ mod highlight;
 mod instance;
 mod islands;
 mod mac;
+mod maps;
 mod math;
 mod menus;
 mod prefix;
