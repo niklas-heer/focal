@@ -27,5 +27,6 @@ cask "focal" do
     "~/Library/Caches/com.niklasheer.focal",
     "~/Library/HTTPStorages/com.niklasheer.focal",
     "~/Library/Preferences/com.niklasheer.focal.plist",
+    "~/Library/WebKit/com.niklasheer.focal",
   ]
 end

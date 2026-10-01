@@ -18,7 +18,7 @@ The primary use is opening one file to read or review it, often a file in a Git 
 Principles, in priority order:
 
 1. **The file is the document.** The text on disk is the source of truth. Opening and saving a file without editing it produces identical bytes. Focal changes how Markdown looks, not what it says.
-2. **Native first.** Native Rust with GPUI, Zed's GPU-accelerated UI framework, using macOS services such as the system spell checker through `objc2` bindings. No web views, except an isolated Mermaid renderer (section 7). (Not needed so far: Mermaid renders natively since M5.)
+2. **Native first.** Native Rust with GPUI, Zed's GPU-accelerated UI framework, using macOS services such as the system spell checker through `objc2` bindings. No web views in the editor (Mermaid renders natively since M5); only printing lays out its pages in a WebKit view that is never shown (M12).
 3. **Quiet by default.** Chrome appears only when asked for: the formatting bar at the bottom edge, the file list on a shortcut, focus mode on a toggle.
 4. **Correct Markdown.** CommonMark and GitHub-flavored Markdown are rendered the way GitHub renders them, as far as the parser allows.
 5. **Stable while editing.** Rendering must never flicker, jump or lose styling while scrolling, typing or clicking. The Electron prototype failed here; the GPUI spike and Milestone 0 tested it first.
@@ -76,6 +76,8 @@ Built in M6: Sparkle 2.10, as in Keywink and Spokn, with an appcast attached to 
 - **Find and replace** (M7): ⌘F opens a find bar seeded with the selected text; matches ignore case (character by character, without full case folding), are highlighted as you type and follow edits. Return and ⇧Return, or ⌘G and ⇧⌘G, step through them and wrap; ⌘G still works after the bar closes. ⌥⌘F adds a replacement field: Replace changes the selected match only when one is selected, Replace All is one undo step.
 - **Go to Heading** (M8): ⇧⌘O lists the headings, indented by level; typing narrows them and Return moves there, with ⌘[ to come back.
 - **Export and copy** (M8): ⇧⌘E writes a standalone HTML page in Focal's typography (light and dark) with math and Mermaid diagrams as SVG, wiki links to the files they open, and relative images kept working when the page is saved elsewhere. ⌥⇧⌘C puts the selection (or the document) on the pasteboard as HTML and as Markdown text. Raw HTML in the document is exported as written.
+- **Print and PDF** (M12): Print… (⌥⌘P; ⌘P stays the quick switcher) and Export as PDF… set the same page as Export as HTML for paper: light whatever the appearance, A4 or Letter with margins, headings kept with their text, folded callouts open, in the iA Writer typefaces. WebKit lays it out in a web view that is never shown and AppKit prints it; Print… shows the print panel with a preview, Export as PDF… writes the file without asking ([decision](../decisions/2026-10-01_194827966_print-and-export-pdf-through-webkit.md), proposed).
+- **Spelling, grammar and correction** (M12): macOS's checker underlines misspelled words in red and what its grammar checker has a suggestion for in green, in prose only, never under the caret; right-click offers guesses, or the grammar note and its corrections. A finished misspelled word is corrected like other Mac apps do, as its own undo step, while macOS's "Correct spelling automatically" and Focal's setting are on. Each line is checked in the language it is written in. Apple's grammar checker is rule-based: it catches "a apple" but not "This are a test".
 - **Exact round-trip.** The trailing newline and all whitespace are preserved. Files keep their encoding (UTF-8 with or without BOM, UTF-16, or Windows-1252 for other bytes) and line endings (LF, CRLF or classic Mac CR); the bar names anything other than plain UTF-8, and a character the encoding cannot hold makes the file UTF-8, with a note.
 
 ### Folder mode
@@ -172,6 +174,7 @@ Milestone 0 compared TextKit 1 and TextKit 2 in a throwaway AppKit spike ([findi
 - Dims everything except the current sentence or paragraph; the unit is a setting. In a list, a sentence ends with its item. List markers, checkboxes and highlights dim with their text.
 - Typewriter scrolling keeps the current line vertically centered (a setting, on by default), except while a table cell is edited.
 - Hides the sidebar and the bar.
+- Built in M12: syntax markers, checkboxes, quote bars and rules dim in the bright paragraph too, as in iA Writer, and so does the title bar.
 
 ### Typography and themes (Proposed)
 
@@ -182,7 +185,7 @@ Milestone 0 compared TextKit 1 and TextKit 2 in a throwaway AppKit spike ([findi
 
 ### Settings (Proposed)
 
-Kept deliberately small: prose font, text size, column width, focus unit, typewriter scrolling, and whether to check for updates automatically (Agreed, see [Updates](#updates)).
+Kept deliberately small: prose font, text size, column width, focus unit, typewriter scrolling, whether to check for updates automatically (Agreed, see [Updates](#updates)), grammar checking and automatic correction (M12), and which optional diagram tools are installed (M12, with how to install them).
 
 Built in M3: a settings window (⌘,) with the prose typeface (Quattro, Duo or Mono), text size (16, 18, 21 or 24 pt), column width (about 60, 70 or 85 characters), focus unit and typewriter scrolling, applied at once and saved to `~/Library/Application Support/Focal/settings.json`. The updates setting comes with M6.
 
@@ -254,7 +257,7 @@ Raw HTML: CommonMark and GFM pass HTML through untouched, as blocks and inline; 
 | `pikchr` | Fossil, Kroki | Built (M10), natively. |
 | `wavedrom` | Kroki, hardware docs | Built (M10), natively (`wavedrom`). |
 | `geojson`, `topojson` | GitHub | Built (M10): an outline map, no tiles or network. |
-| `vega`, `vega-lite` | Kroki, Jupyter | Built (M11): Vega itself in QuickJS, as math (`scripts/vega`); text widths are estimated without a canvas. |
+| `vega`, `vega-lite` | Kroki, Jupyter | Built (M11): Vega itself in QuickJS, as math (`scripts/vega`); text is measured in Helvetica Neue's own advances (M12), since QuickJS has no canvas. |
 | `stl` | GitHub | Built (M11): a shaded still from an angle above (ASCII STL). |
 
 ## 8. Milestones (Proposed)
@@ -273,6 +276,7 @@ Raw HTML: CommonMark and GFM pass HTML through untouched, as blocks and inline; 
 | **M9 — Dialects** | Done: math in every notation, callouts in every style, TOML and JSON front matter, Pandoc and Markdown Extra extensions, Obsidian syntax, emoji shortcodes, tables of contents, README-style HTML, and any encoding; see section 7a. |
 | **M10 — Diagrams** | Done: Graphviz, Svgbob, Pikchr, WaveDrom, GeoJSON and TopoJSON natively, D2 and PlantUML through their tools, all Mermaid types; every drawing in Focal's palette; see section 7a. |
 | **M11 — Completeness** | Done: folding callouts and `<details>`, Vega and Vega-Lite, STL, PlantUML's dark mode, WaveDrom in the dark, centered HTML, and export that renders callouts in one pass (footnotes and references reach into them; folding callouts export as `<details>`). |
+| **M12 — Writing and output** | Done: grammar checking and automatic correction, Print… and Export as PDF…, HTML tables drawn as grids, folds remembered per file, Vega text measured, focus mode dimming syntax and chrome, the diagram tools in Settings, and CI on macOS with Dependabot and a Claude fix workflow. |
 
 Each milestone gets its own implementation plan before work starts.
 
@@ -288,10 +292,12 @@ Each milestone gets its own implementation plan before work starts.
 ## 10. Open questions
 
 - Math typesetting without a web view: MathJax in QuickJS is built and proposed (see the decision); Niklas to confirm.
-- Grammar checking, autocorrect and Writing Tools: wanted, and reachable through `objc2`?
-- How to follow GPUI upgrades: `gpui-kit` pins `gpui-pre` exactly.
+- Apple's Writing Tools (Proofread, Rewrite, Summarize): not built. GPUI's text view does not adopt the AppKit protocols Writing Tools needs, so it takes `unsafe` additions to GPUI's `NSView` class, either for the Services-menu panel (`NSServicesMenuRequestor`) or for inline rewriting (`NSWritingToolsCoordinator`); Niklas to decide whether that is worth it.
+- Updates: Sparkle stays proposed; Rust-native updaters (`cargo-packager-updater`, Velopack) were compared on 2026-10-01 and lack Sparkle's prompt, delta updates and Homebrew livecheck.
+- ~~Grammar checking and autocorrect~~ Built in M12 through `NSSpellChecker` (section 3, Documents).
+- ~~How to follow GPUI upgrades~~ Decided 2026-10-01: Dependabot proposes GPUI Kit updates in their own pull request and Claude fixes a failing one ([decision](../decisions/2026-10-01_195014376_check-on-macos-runners-and-let-claude-fix-dependency-updates.md), setup proposed).
 - ~~Encodings other than UTF-8: refuse, or detect and preserve?~~ Decided 2026-10-01 with the compatibility goal (section 7a): detect and preserve (M9).
-- Architecture: Apple Silicon only, or universal binaries (Intel)?
-- Whether focus mode should also dim syntax markers and chrome colors, as iA Writer does.
-- Printing and PDF export: wanted, and in which milestone? Until decided, an exported HTML page (M8) can be printed or saved as PDF from a browser.
-- Name collision check for "Focal" before any public release.
+- ~~Architecture: Apple Silicon only, or universal binaries (Intel)?~~ Decided 2026-10-01: Apple Silicon only ([decision](../decisions/2026-10-01_212449150_build-for-apple-silicon-only.md)).
+- ~~Whether focus mode should also dim syntax markers and chrome colors~~ Decided 2026-10-01: yes, built in M12.
+- ~~Printing and PDF export~~ Decided 2026-10-01: both, built in M12 (section 3, Documents).
+- ~~Name collision check for "Focal"~~ Done 2026-10-01: no same-category product named Focal (an App Store planner "Focal" and the Markdown editor "Focused" are the closest; trademarks not screened). Niklas keeps the name.
