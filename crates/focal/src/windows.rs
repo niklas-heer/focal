@@ -6,13 +6,22 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use gpui_kit::{
-    AnyWindowHandle, App, AppContext as _, Bounds, Global, TitlebarOptions, WeakEntity,
-    WindowBounds, WindowId, WindowOptions, point, px, size,
+    AnyWindowHandle, App, AppContext as _, Bounds, Global, KeyBinding, PathPromptOptions,
+    TitlebarOptions, WeakEntity, WindowBounds, WindowId, WindowOptions, actions, point, px, size,
 };
 
 use crate::document::Document;
 use crate::instance::{Request, Responder};
 use crate::workspace::Workspace;
+
+actions!(focal, [NewWindow, OpenFiles]);
+
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("cmd-n", NewWindow, None),
+        KeyBinding::new("cmd-o", OpenFiles, None),
+    ]);
+}
 
 #[derive(Default)]
 struct Windows {
@@ -36,6 +45,62 @@ pub fn init(cx: &mut App) {
         }
     })
     .detach();
+    cx.on_action(|_: &NewWindow, cx| open(Request::default(), None, cx));
+    cx.on_action(|_: &OpenFiles, cx| open_panel(cx));
+    cx.on_action(|_: &crate::editor::Quit, cx| quit(cx));
+}
+
+/// Asks for files or folders to open, each in its window.
+fn open_panel(cx: &mut App) {
+    let chosen = cx.prompt_for_paths(PathPromptOptions {
+        files: true,
+        directories: true,
+        multiple: true,
+        prompt: Some("Open".into()),
+    });
+    cx.spawn(async move |cx| {
+        if let Ok(Ok(Some(paths))) = chosen.await {
+            cx.update(|cx| {
+                for path in paths {
+                    let request = Request {
+                        path: Some(path),
+                        ..Request::default()
+                    };
+                    open(request, None, cx);
+                }
+            });
+        }
+    })
+    .detach();
+}
+
+/// Saves every document and quits, first asking when untitled documents
+/// have unsaved text.
+pub fn quit(cx: &mut App) {
+    let workspaces: Vec<_> = cx
+        .global::<Windows>()
+        .open
+        .iter()
+        .filter_map(|(_, workspace)| workspace.upgrade())
+        .collect();
+    let mut unsaved = 0;
+    for workspace in workspaces {
+        let editor = workspace.read(cx).editor().clone();
+        editor.update(cx, |editor, cx| {
+            editor.save_before_quit(cx);
+            unsaved += usize::from(editor.asks_before_closing());
+        });
+    }
+    if unsaved == 0 {
+        cx.quit();
+        return;
+    }
+    cx.spawn(async move |cx| {
+        if crate::mac::confirm_discard(unsaved) {
+            cx.update(|cx| cx.quit());
+        }
+    })
+    .detach();
 }
 
 /// Opens what `request` asks for, or brings forward the window showing it.
@@ -48,7 +113,7 @@ pub fn open(request: Request, mut responder: Option<Responder>, cx: &mut App) {
     let shown = path.as_deref().and_then(|path| showing(path, cx));
     let handle = match shown {
         Some(handle) => Ok(handle),
-        None => open_window(path, untitled, cx),
+        None => open_window(path.clone(), untitled, cx),
     };
     let handle = match handle {
         Ok(handle) => handle,
@@ -65,6 +130,9 @@ pub fn open(request: Request, mut responder: Option<Responder>, cx: &mut App) {
     cx.activate(true);
     if let Some(responder) = &mut responder {
         responder.opened();
+    }
+    if let Some(path) = &path {
+        crate::recent::note(path, cx);
     }
     if wait && let Some(responder) = responder {
         let windows = cx.global_mut::<Windows>();

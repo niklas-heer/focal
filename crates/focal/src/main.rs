@@ -17,6 +17,7 @@ mod mac;
 mod math;
 mod menus;
 mod prefix;
+mod recent;
 mod settings;
 mod spell;
 mod switcher;
@@ -39,7 +40,6 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, Result, bail};
 use gpui_kit::App;
 
-use crate::editor::Quit;
 use crate::instance::Request;
 
 const USAGE: &str = "\
@@ -205,12 +205,13 @@ fn run_app(launch: Launch) {
         workspace::bind_keys(cx);
         switcher::bind_keys(cx);
         find_bar::bind_keys(cx);
+        windows::bind_keys(cx);
         settings::init(cx);
         windows::init(cx);
         cli_install::init(cx);
         updates::init(cx);
-        cx.on_action(|_: &Quit, cx| cx.quit());
-        menus::set_menus(cx);
+        recent::init(cx);
+        menus::init(cx);
         serve(cx);
         cx.spawn(async move |cx| {
             while let Ok(urls) = urls_rx.recv().await {

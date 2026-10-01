@@ -13,6 +13,7 @@ use crate::find_bar::{Find, FindAndReplace, FindNext, FindPrevious};
 use crate::settings::OpenSettings;
 use crate::switcher::QuickOpen;
 use crate::updates::{CheckForUpdates, OpenReleases};
+use crate::windows::{NewWindow, OpenFiles};
 use crate::workspace::{GoBack, ToggleSidebar};
 
 actions!(focal, [AboutFocal]);
@@ -29,8 +30,13 @@ pub fn update_item(cx: &App) -> (&'static str, MenuItem) {
     }
 }
 
-pub fn set_menus(cx: &mut App) {
+pub fn init(cx: &mut App) {
     cx.on_action(|_: &AboutFocal, _| crate::mac::about_panel());
+    set_menus(cx);
+}
+
+/// Builds the menu bar, again whenever Open Recent changes.
+pub fn set_menus(cx: &mut App) {
     cx.set_menus(vec![
         Menu::new("Focal").items([
             MenuItem::action("About Focal", AboutFocal),
@@ -44,6 +50,10 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::action("Quit Focal", Quit),
         ]),
         Menu::new("File").items([
+            MenuItem::action("New", NewWindow),
+            MenuItem::action("Open…", OpenFiles),
+            MenuItem::submenu(crate::recent::menu(cx)),
+            MenuItem::separator(),
             MenuItem::action("Save", Save),
             MenuItem::action("Close Window", CloseWindow),
         ]),

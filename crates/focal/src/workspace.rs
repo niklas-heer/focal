@@ -392,10 +392,6 @@ impl Workspace {
         )
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by tests until folder mode")
-    )]
     pub fn editor(&self) -> &Entity<Editor> {
         &self.editor
     }

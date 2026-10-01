@@ -1196,3 +1196,42 @@ fn replace_all_through_the_find_bar(cx: &mut TestAppContext) {
     act(cx, window, |window, cx| window.click("replace-all", cx));
     editor.read_with(cx, |e, _| assert_eq!(e.text(), "dog, dog, dog"));
 }
+
+// ---- New, Open and closing untitled text ---------------------------------------
+
+#[gpui_kit::test]
+fn new_opens_an_untitled_window(cx: &mut TestAppContext) {
+    let (window, _) = open_workspace(cx, "text");
+    cx.update(|cx| {
+        crate::windows::init(cx);
+        crate::windows::bind_keys(cx);
+    });
+    act(cx, window, |window, cx| window.press("cmd-n", cx));
+    cx.run_until_parked();
+    assert_eq!(cx.update(|cx| cx.windows().len()), 2);
+}
+
+#[gpui_kit::test]
+fn edited_untitled_text_is_not_closed_without_asking(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "");
+    editor.read_with(cx, |e, _| assert!(!e.asks_before_closing()));
+    act(cx, window, |window, cx| window.input("draft", cx));
+    editor.read_with(cx, |e, _| assert!(e.asks_before_closing()));
+    act(cx, window, |window, cx| window.press("cmd-w", cx));
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|cx| cx.windows().len()),
+        1,
+        "the window stays until the question is answered"
+    );
+}
+
+#[gpui_kit::test]
+fn emptied_untitled_text_closes_without_asking(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "");
+    act(cx, window, |window, cx| {
+        window.input("x", cx);
+        window.press("backspace", cx);
+    });
+    editor.read_with(cx, |e, _| assert!(!e.asks_before_closing()));
+}

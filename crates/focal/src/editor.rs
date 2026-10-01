@@ -37,6 +37,7 @@ use gpui_kit::{
 
 use crate::accessibility::{A11yDocument, A11ySource, RunIds};
 use crate::document::{self, Document, Stamp};
+use crate::mac::SaveAnswer;
 use crate::settings::{FocusUnit, Settings};
 use crate::spell::SpellChecker;
 use crate::theme::{BOLD_PROSE_FONT, DIMMED, MONO_FONT, PROSE_FONT, Theme, Typography};
@@ -406,9 +407,9 @@ impl Editor {
         cx: &mut Context<Self>,
     ) -> Self {
         let weak = cx.entity().downgrade();
-        window.on_window_should_close(cx, move |_, cx| {
-            weak.update(cx, |this, cx| this.save_now(cx)).ok();
-            true
+        window.on_window_should_close(cx, move |window, cx| {
+            weak.update(cx, |this, cx| this.may_close(window, cx))
+                .unwrap_or(true)
         });
         cx.observe_window_appearance(window, |_, _, cx| cx.notify())
             .detach();
@@ -1612,9 +1613,18 @@ impl Editor {
     }
 
     fn save(&mut self, _: &Save, window: &mut Window, cx: &mut Context<Self>) {
+        self.save_as(false, window, cx);
+    }
+
+    /// Saves, asking where for an untitled document, then closes the window
+    /// when `close`.
+    fn save_as(&mut self, close: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.document.path.is_some() {
             self.conflict = false;
             self.save_now(cx);
+            if close {
+                window.remove_window();
+            }
             return;
         }
         let directory = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -1622,10 +1632,14 @@ impl Editor {
         cx.spawn_in(window, async move |this, cx| {
             if let Ok(Ok(Some(path))) = chosen.await {
                 this.update_in(cx, |this, window, cx| {
-                    this.document.path = Some(path);
+                    this.document.path = Some(path.clone());
                     this.watch_document(cx);
                     this.save_now(cx);
                     window.set_window_title(&this.title());
+                    crate::recent::note(&path, cx);
+                    if close {
+                        window.remove_window();
+                    }
                 })
                 .ok();
             }
@@ -1633,14 +1647,43 @@ impl Editor {
         .detach();
     }
 
-    fn close_window(&mut self, _: &CloseWindow, window: &mut Window, cx: &mut Context<Self>) {
-        self.save_now(cx);
-        window.remove_window();
+    /// Whether closing would lose text: an untitled document with unsaved
+    /// edits that leave some text.
+    pub(crate) fn asks_before_closing(&self) -> bool {
+        self.document.path.is_none() && self.dirty() && !self.text().is_empty()
     }
 
-    fn quit(&mut self, _: &Quit, _: &mut Window, cx: &mut Context<Self>) {
+    /// Saves, then tells whether the window may close now. Untitled text
+    /// with unsaved edits asks first (Save…, Cancel, Don't Save) and closes
+    /// the window itself once answered.
+    fn may_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.asks_before_closing() {
+            self.save_now(cx);
+            return true;
+        }
+        let title = self.title();
+        cx.spawn_in(window, async move |this, cx| {
+            match crate::mac::ask_to_save(&title) {
+                SaveAnswer::Save => this
+                    .update_in(cx, |this, window, cx| this.save_as(true, window, cx))
+                    .ok(),
+                SaveAnswer::DontSave => cx.update(|window, _| window.remove_window()).ok(),
+                SaveAnswer::Cancel => None,
+            };
+        })
+        .detach();
+        false
+    }
+
+    fn close_window(&mut self, _: &CloseWindow, window: &mut Window, cx: &mut Context<Self>) {
+        if self.may_close(window, cx) {
+            window.remove_window();
+        }
+    }
+
+    /// Saves what can be saved, as the app quits.
+    pub(crate) fn save_before_quit(&mut self, cx: &mut Context<Self>) {
         self.save_now(cx);
-        cx.quit();
     }
 
     // ---- Find --------------------------------------------------------------
@@ -3194,7 +3237,6 @@ impl Render for Editor {
             .on_action(cx.listener(Self::toggle_focus_mode))
             .on_action(cx.listener(Self::show_character_palette))
             .on_action(cx.listener(Self::close_window))
-            .on_action(cx.listener(Self::quit))
             .on_action(cx.listener(Self::replace_word))
             .on_action(cx.listener(Self::ignore_spelling))
             .on_action(cx.listener(Self::learn_spelling))
