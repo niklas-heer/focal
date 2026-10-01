@@ -202,8 +202,9 @@ pub enum Replacement {
     Label(String),
     /// Inline math written in Unicode.
     Math(String),
-    /// An emoji for its shortcode, such as 🎉 for `:tada:`.
-    Emoji(String),
+    /// Text standing in for the source in the text's own style: an emoji
+    /// for its shortcode (🎉 for `:tada:`), or raised or lowered characters.
+    Plain(String),
 }
 
 impl Replacement {
@@ -216,7 +217,7 @@ impl Replacement {
 
     pub fn text(&self) -> String {
         match self {
-            Self::Callout(_, text) | Self::Label(text) | Self::Math(text) | Self::Emoji(text) => {
+            Self::Callout(_, text) | Self::Label(text) | Self::Math(text) | Self::Plain(text) => {
                 text.clone()
             }
         }
@@ -225,7 +226,7 @@ impl Replacement {
     pub const fn style(&self) -> InlineStyle {
         match self {
             Self::Callout(..) => InlineStyle::ALERT_TITLE,
-            Self::Emoji(_) => InlineStyle::NONE,
+            Self::Plain(_) => InlineStyle::NONE,
             Self::Label(_) => InlineStyle::LABEL,
             Self::Math(_) => InlineStyle::MATH,
         }
@@ -1415,7 +1416,7 @@ fn format_element(
         found.hide(
             content,
             Reveal::Touching(whole.clone()),
-            Some(Replacement::Math(moved)),
+            Some(Replacement::Plain(moved)),
         );
     }
     found.hide(open, Reveal::Touching(whole.clone()), None);
@@ -1482,7 +1483,7 @@ fn apply_inline_extras(
                 markers.push(Marker {
                     range: shortcode.clone(),
                     reveal: Reveal::Touching(shortcode),
-                    replacement: Some(Replacement::Emoji(emoji.to_owned())),
+                    replacement: Some(Replacement::Plain(emoji.to_owned())),
                 });
             }
         }
@@ -1515,7 +1516,7 @@ fn apply_inline_extras(
                 markers.push(Marker {
                     range: inner,
                     reveal: Reveal::Touching(outer),
-                    replacement: Some(Replacement::Math(raised)),
+                    replacement: Some(Replacement::Plain(raised)),
                 });
             }
         }
@@ -2078,6 +2079,14 @@ mod tests {
             .filter_map(|m| m.replacement.as_ref().map(Replacement::text))
             .collect();
         assert_eq!(replacements, ["²", "ᵗʰ"]);
+        assert!(
+            analysis
+                .markers
+                .iter()
+                .filter_map(|m| m.replacement.as_ref())
+                .all(|r| r.style() == InlineStyle::NONE),
+            "raised text keeps the text's style"
+        );
         assert!(marker_texts(text, &analysis).contains(&"^"));
     }
 

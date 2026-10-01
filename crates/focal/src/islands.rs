@@ -394,6 +394,7 @@ impl Editor {
                     .test_support()
                     .aria_label(image.alt.clone())
                     .py(px(6.))
+                    .when(image.centered, |d| d.flex().justify_center())
                     .child(
                         img(path.clone())
                             .map(|image| {

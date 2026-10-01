@@ -35,6 +35,20 @@ pub fn outline(text: &str) -> Vec<Heading> {
                     heading.title.push_str(&text);
                 }
             }
+            // `<h1 align="center">Title</h1>` lines in HTML blocks.
+            Event::Html(html) if open.is_none() => {
+                let mut at = range.start;
+                for line in html.split_inclusive('\n') {
+                    if let Some((level, element)) = crate::html_inline::heading(line) {
+                        headings.push(Heading {
+                            level,
+                            title: line[element.content.clone()].to_owned(),
+                            offset: at + element.content.start,
+                        });
+                    }
+                    at += line.len();
+                }
+            }
             Event::SoftBreak | Event::HardBreak => {
                 if let Some(heading) = &mut open {
                     heading.title.push(' ');
@@ -107,5 +121,13 @@ mod tests {
     #[test]
     fn math_in_any_notation_reads_in_titles() {
         assert_eq!(titles("## Area \\(r^2\\)\n"), [(2, "Area r^2".into())]);
+    }
+
+    #[test]
+    fn headings_written_as_html_count() {
+        let text = "<p align=\"center\">\n<h1 align=\"center\">Focal</h1>\n</p>\n\n## Next\n";
+        assert_eq!(titles(text), [(1, "Focal".into()), (2, "Next".into())]);
+        let first = &outline(text)[0];
+        assert_eq!(&text[first.offset..first.offset + 5], "Focal");
     }
 }

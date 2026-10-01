@@ -100,6 +100,8 @@ pub struct ImageRef {
     pub wiki: bool,
     /// The width asked for, in points.
     pub width: Option<u32>,
+    /// Inside a centered HTML wrapper, `<p align="center">` and the like.
+    pub centered: bool,
 }
 
 /// The image on `line` if nothing else is (beyond quote or list markers).
@@ -117,6 +119,14 @@ pub fn block_image(analysis: &Analysis, text: &str, line: usize) -> Option<Image
             destination: image.destination.clone(),
             wiki: image.wiki,
             width: image.width,
+            centered: line > 0 && {
+                let above = text[analysis.lines.range(line - 1)]
+                    .trim()
+                    .to_ascii_lowercase();
+                above == "<center>"
+                    || ((above.starts_with("<p ") || above.starts_with("<div "))
+                        && above.contains("align=\"center\""))
+            },
         })
 }
 
@@ -229,6 +239,7 @@ mod tests {
                 destination: "cat%20one.png".into(),
                 wiki: false,
                 width: None,
+                centered: false,
             })
         );
         assert_eq!(block_image(&analysis, text, 1), None, "inside text");
@@ -322,5 +333,13 @@ mod tests {
         let text = "[TOC]\n\n[[_TOC_]]\n\n[[toc]]\n\n* TOC\n{:toc}\n\n```\n[TOC]\n```\n";
         let found = toc_blocks(&analyze(text), text);
         assert_eq!(found, [0..1, 2..3, 4..5, 6..8]);
+    }
+
+    #[test]
+    fn images_in_a_centered_wrapper_are_centered() {
+        let text = "<p align=\"center\">\n  <img src=\"logo.png\">\n</p>\n\n![a](b.png)\n";
+        let analysis = analyze(text);
+        assert!(block_image(&analysis, text, 1).unwrap().centered);
+        assert!(!block_image(&analysis, text, 4).unwrap().centered);
     }
 }
