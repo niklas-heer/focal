@@ -36,7 +36,7 @@ pub fn render(
             let mut svg = Vec::new();
             wavedrom::render_json5(source, &mut svg)
                 .map_err(|error| format!("{error:?}"))
-                .map(|()| String::from_utf8_lossy(&svg).into_owned())
+                .map(|()| wavedrom_fills(&String::from_utf8_lossy(&svg), palette))
         }
         DiagramLanguage::GeoJson => crate::maps::geojson(source, palette),
         DiagramLanguage::TopoJson => crate::maps::topojson(source, palette),
@@ -94,6 +94,39 @@ fn d2_polish(svg: &str) -> String {
         out.replace_range(fill..close, "none");
     }
     out
+}
+
+/// WaveDrom's pastel data-field colors.
+const WAVEDROM_FILLS: [&str; 7] = [
+    "#F7F7A1", "#F9D49F", "#ADDEFF", "#ACD5B6", "#A4ABE1", "#E8A8F0", "#FBDADA",
+];
+
+/// In the dark appearance, WaveDrom's pastel fills sink toward the page so
+/// light text stays readable on them.
+fn wavedrom_fills(svg: &str, palette: &Palette) -> String {
+    if !dark(palette) {
+        return svg.to_owned();
+    }
+    let mut out = svg.to_owned();
+    for pastel in WAVEDROM_FILLS {
+        out = replace_ignoring_case(&out, pastel, &blend(pastel, &palette.canvas, 0.7));
+    }
+    out
+}
+
+/// `from` moved `amount` of the way to `to`, both `#rrggbb`.
+fn blend(from: &str, to: &str, amount: f32) -> String {
+    let channel = |hex: &str, at: usize| {
+        f32::from(u8::from_str_radix(hex.get(at..at + 2).unwrap_or("00"), 16).unwrap_or(0))
+    };
+    let mix = |at| {
+        let value = channel(from, at) + (channel(to, at) - channel(from, at)) * amount;
+        // In 0..=255 by construction.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let value = value.round().clamp(0., 255.) as u8;
+        value
+    };
+    format!("#{:02x}{:02x}{:02x}", mix(1), mix(3), mix(5))
 }
 
 /// Runs the installed tool `name` on `source`.
@@ -565,5 +598,37 @@ mod corpus {
             )
             .collect();
         assert!(failed.is_empty(), "{failed:#?}");
+    }
+
+    #[test]
+    fn wavedrom_data_fields_darken_in_the_dark() {
+        let dark = Palette {
+            canvas: "#1a1a1a".into(),
+            surface: "#262626".into(),
+            text: "#dadad7".into(),
+            line: "#888888".into(),
+            series: vec![],
+        };
+        let source = r#"{ signal: [ { name: "bus", wave: "x.=3456789x", data: ["a","b","c","d","e","f","g","h"] } ] }"#;
+        let svg = render(DiagramLanguage::WaveDrom, source, &dark)
+            .unwrap()
+            .to_ascii_uppercase();
+        for pastel in WAVEDROM_FILLS {
+            assert!(!svg.contains(pastel), "{pastel} stays light");
+        }
+        let light = render(
+            DiagramLanguage::WaveDrom,
+            source,
+            &Palette {
+                canvas: "#ffffff".into(),
+                ..dark.clone()
+            },
+        )
+        .unwrap()
+        .to_ascii_uppercase();
+        assert!(
+            light.contains("#F7F7A1"),
+            "the light appearance keeps WaveDrom's colors"
+        );
     }
 }
