@@ -23,6 +23,7 @@ mod prefix;
 mod recent;
 mod settings;
 mod spell;
+mod stl;
 mod switcher;
 mod table_view;
 mod theme;

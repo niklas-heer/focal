@@ -46,6 +46,10 @@ pub fn render(
                 .map(|svg| d2_polish(&svg))
         }
         DiagramLanguage::PlantUml => tool("plantuml", &["-tsvg", "-pipe"], source),
+        DiagramLanguage::Stl => crate::stl::render(source, palette),
+        DiagramLanguage::Vega | DiagramLanguage::VegaLite => {
+            Err(format!("{} charts are not drawn yet.", language.name()))
+        }
     }))
     .unwrap_or_else(|_| Err(format!("{} could not draw this.", language.name())))?;
     if matches!(
@@ -54,6 +58,7 @@ pub fn render(
             | DiagramLanguage::GeoJson
             | DiagramLanguage::TopoJson
             | DiagramLanguage::D2
+            | DiagramLanguage::Stl
     ) {
         // Drawn in Focal's palette already.
         Ok(drawn)
@@ -72,7 +77,9 @@ pub fn can_draw(language: DiagramLanguage) -> bool {
         | DiagramLanguage::Pikchr
         | DiagramLanguage::WaveDrom
         | DiagramLanguage::GeoJson
-        | DiagramLanguage::TopoJson => true,
+        | DiagramLanguage::TopoJson
+        | DiagramLanguage::Stl => true,
+        DiagramLanguage::Vega | DiagramLanguage::VegaLite => false,
         DiagramLanguage::PlantUml => crate::tools::find("plantuml").is_some(),
         DiagramLanguage::D2 => crate::tools::find("d2").is_some(),
     }
@@ -115,7 +122,7 @@ fn wavedrom_fills(svg: &str, palette: &Palette) -> String {
 }
 
 /// `from` moved `amount` of the way to `to`, both `#rrggbb`.
-fn blend(from: &str, to: &str, amount: f32) -> String {
+pub(crate) fn blend(from: &str, to: &str, amount: f32) -> String {
     let channel = |hex: &str, at: usize| {
         f32::from(u8::from_str_radix(hex.get(at..at + 2).unwrap_or("00"), 16).unwrap_or(0))
     };

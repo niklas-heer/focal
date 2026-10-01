@@ -169,6 +169,10 @@ pub enum DiagramLanguage {
     D2,
     GeoJson,
     TopoJson,
+    /// A 3D model in ASCII STL.
+    Stl,
+    Vega,
+    VegaLite,
 }
 
 impl DiagramLanguage {
@@ -187,6 +191,9 @@ impl DiagramLanguage {
             "d2" => Self::D2,
             "geojson" => Self::GeoJson,
             "topojson" => Self::TopoJson,
+            "stl" => Self::Stl,
+            "vega" => Self::Vega,
+            "vega-lite" | "vegalite" => Self::VegaLite,
             _ => return None,
         })
     }
@@ -202,6 +209,9 @@ impl DiagramLanguage {
             Self::D2 => "D2",
             Self::GeoJson => "GeoJSON",
             Self::TopoJson => "TopoJSON",
+            Self::Stl => "STL",
+            Self::Vega => "Vega",
+            Self::VegaLite => "Vega-Lite",
         }
     }
 }
@@ -407,6 +417,9 @@ mod tests {
             ("d2 title=x", DiagramLanguage::D2),
             ("geojson", DiagramLanguage::GeoJson),
             ("topojson", DiagramLanguage::TopoJson),
+            ("stl", DiagramLanguage::Stl),
+            ("vega", DiagramLanguage::Vega),
+            ("vega-lite", DiagramLanguage::VegaLite),
         ] {
             assert_eq!(DiagramLanguage::from_info(info), Some(language), "{info}");
         }
