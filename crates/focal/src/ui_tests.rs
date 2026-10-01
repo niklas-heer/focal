@@ -1043,3 +1043,22 @@ fn display_math_is_an_island_with_a_preview_while_editing(cx: &mut TestAppContex
         );
     });
 }
+
+#[gpui_kit::test]
+fn a_mermaid_block_is_a_diagram_with_a_preview_while_editing(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "Intro\n\n```mermaid\nflowchart TD\n  A --> B\n```\n");
+    act(cx, window, |window, _| {
+        assert!(window.try_find(("diagram-island", 2usize)).is_some());
+    });
+    editor.update(cx, |e, cx| e.move_to(20, cx));
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find(("diagram-island", 2usize)).is_none(),
+            "the source shows"
+        );
+        assert!(
+            window.try_find(("diagram-preview", 2usize)).is_some(),
+            "with a preview"
+        );
+    });
+}

@@ -4,6 +4,7 @@
 mod accessibility;
 mod bar;
 mod cli_install;
+mod diagram;
 mod document;
 mod editor;
 mod folder;

@@ -12,6 +12,7 @@ anyhow = "1.0.104"
 async-channel = "2.5.0"
 focal-core.workspace = true
 imagesize = "0.15.0"
+merman = { version = "0.7.0", features = ["render"] }
 notify = "7.0.0"
 rquickjs = "0.14.0"
 serde = { version = "1.0.229", features = ["derive"] }

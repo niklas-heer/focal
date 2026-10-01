@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use focal_core::Analysis;
-use focal_core::blocks::{block_image, front_matter, math_blocks};
+use focal_core::blocks::{block_image, diagram_blocks, front_matter, math_blocks};
 use focal_core::links;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -18,8 +18,8 @@ use gpui_kit::{
 };
 
 use crate::editor::{Editor, Island, IslandKind, PaintedRow, Row};
-use crate::math;
 use crate::theme::Theme;
+use crate::{diagram, math};
 
 /// The islands of this version of the text.
 pub(crate) fn islands(analysis: &Analysis, text: &str) -> Vec<Island> {
@@ -29,6 +29,13 @@ pub(crate) fn islands(analysis: &Analysis, text: &str) -> Vec<Island> {
             kind: IslandKind::FrontMatter,
             start: matter.lines.start,
             end: matter.lines.end,
+        });
+    }
+    for block in diagram_blocks(analysis, text) {
+        islands.push(Island {
+            kind: IslandKind::Diagram,
+            start: block.lines.start,
+            end: block.lines.end,
         });
     }
     for block in math_blocks(analysis, text) {
@@ -61,6 +68,27 @@ pub(crate) enum Typeset {
     Pending,
     Svg(String),
     Error(String),
+}
+
+/// Focal's colors for a diagram in this appearance.
+fn palette(theme: &Theme) -> diagram::Palette {
+    let hex = |color: gpui_kit::Hsla| {
+        let rgb = color.to_rgb();
+        let blend = |c: f32, base: f32| c * rgb.a + base * (1. - rgb.a);
+        let base = theme.background.to_rgb();
+        format!(
+            "#{:02x}{:02x}{:02x}",
+            channel(blend(rgb.r, base.r)),
+            channel(blend(rgb.g, base.g)),
+            channel(blend(rgb.b, base.b))
+        )
+    };
+    diagram::Palette {
+        canvas: hex(theme.background),
+        surface: hex(theme.code_background),
+        text: hex(theme.text),
+        line: hex(theme.marker),
+    }
 }
 
 #[expect(
@@ -140,7 +168,12 @@ impl Editor {
     pub(crate) fn island_entry(&self, island: Island) -> usize {
         let line = match island.kind {
             IslandKind::FrontMatter if island.end - island.start > 2 => island.start + 1,
-            IslandKind::FrontMatter | IslandKind::Image | IslandKind::Math => island.start,
+            // A diagram opens at its first line of source, inside the fences.
+            IslandKind::Diagram if island.end - island.start > 1 => island.start + 1,
+            IslandKind::FrontMatter
+            | IslandKind::Image
+            | IslandKind::Math
+            | IslandKind::Diagram => island.start,
         };
         self.snapshot.analysis.lines.range(line).start
     }
@@ -170,6 +203,7 @@ impl Editor {
             IslandKind::FrontMatter => self.render_front_matter(theme),
             IslandKind::Image => self.render_image(island.start, "image-island", theme, cx),
             IslandKind::Math => self.render_math(island.start, "math-island", theme, cx),
+            IslandKind::Diagram => self.render_diagram(island.start, "diagram-island", theme, cx),
         };
         div()
             .relative()
@@ -400,6 +434,95 @@ impl Editor {
                 })
                 .detach();
                 frame.child(quiet(block.tex)).into_any_element()
+            }
+        }
+    }
+
+    /// The Mermaid diagram whose block starts on `line`, scaled to fit the
+    /// column; its source while it renders, and the parser's message if it
+    /// cannot be drawn.
+    pub(crate) fn render_diagram(
+        &self,
+        line: usize,
+        id: &'static str,
+        theme: &Theme,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let Some(block) = diagram_blocks(&self.snapshot.analysis, self.text())
+            .into_iter()
+            .find(|block| block.lines.start == line)
+        else {
+            return div().into_any_element();
+        };
+        let palette = palette(theme);
+        let key = (block.source.clone(), palette.clone());
+        let state = self.diagrams.borrow().get(&key).cloned();
+        let frame = div()
+            .id((id, line))
+            .test_support()
+            .aria_label("Mermaid diagram")
+            .w_full()
+            .py(px(8.))
+            .flex()
+            .justify_center()
+            .cursor_pointer();
+        let quiet = |text: String| {
+            div()
+                .text_size(px(self.typography.size * 0.8))
+                .text_color(theme.marker)
+                .child(text)
+        };
+        match state {
+            Some(Typeset::Svg(svg)) => match diagram::svg_size(&svg) {
+                Some((width, height)) => {
+                    let (width, height) =
+                        fit(width, height, self.typography.column, MAX_IMAGE_HEIGHT);
+                    let sharp = diagram::with_size(&svg, width * 2., height * 2.);
+                    frame
+                        .child(
+                            img(Arc::new(Image::from_bytes(
+                                ImageFormat::Svg,
+                                sharp.into_bytes(),
+                            )))
+                            .w(px(width))
+                            .h(px(height)),
+                        )
+                        .into_any_element()
+                }
+                None => frame
+                    .child(quiet("Mermaid diagram".into()))
+                    .into_any_element(),
+            },
+            Some(Typeset::Error(message)) => frame
+                .child(quiet(format!("Mermaid: {message}")))
+                .into_any_element(),
+            Some(Typeset::Pending) => frame
+                .child(quiet("Drawing the diagram…".into()))
+                .into_any_element(),
+            None => {
+                self.diagrams
+                    .borrow_mut()
+                    .insert(key.clone(), Typeset::Pending);
+                let task = cx
+                    .background_executor()
+                    .spawn(async move { diagram::render(&key.0, &key.1).map(|svg| (key, svg)) });
+                let source = block.source.clone();
+                let fallback = palette;
+                cx.spawn(async move |this, cx| {
+                    let (key, typeset) = match task.await {
+                        Ok((key, svg)) => (key, Typeset::Svg(svg)),
+                        Err(message) => ((source, fallback), Typeset::Error(message)),
+                    };
+                    this.update(cx, |this, cx| {
+                        this.diagrams.borrow_mut().insert(key, typeset);
+                        cx.notify();
+                    })
+                    .ok();
+                })
+                .detach();
+                frame
+                    .child(quiet("Drawing the diagram…".into()))
+                    .into_any_element()
             }
         }
     }

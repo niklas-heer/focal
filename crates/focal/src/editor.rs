@@ -11,7 +11,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use focal_core::analysis::{InlineStyle, LineKind};
-use focal_core::blocks::{block_image, math_blocks};
+use focal_core::blocks::{block_image, diagram_blocks, math_blocks};
 use focal_core::display::{Run, mark_runs, prose_ranges};
 use focal_core::links;
 use focal_core::text_stats::{reading_minutes, sentence_at, word_count};
@@ -261,6 +261,8 @@ pub(crate) enum IslandKind {
     Image,
     /// Display math alone on its lines.
     Math,
+    /// A fenced Mermaid code block.
+    Diagram,
 }
 
 /// Everything derived from the text and caret, rebuilt after each change.
@@ -364,6 +366,9 @@ pub struct Editor {
     save_task: Option<Task<()>>,
     /// Watches the file for changes on disk; dropping it stops watching.
     watch: Option<(notify::RecommendedWatcher, Task<()>)>,
+    /// Drawn Mermaid diagrams, by their source and palette.
+    pub(crate) diagrams:
+        RefCell<HashMap<(String, crate::diagram::Palette), crate::islands::Typeset>>,
     /// Typeset display math, by its TeX.
     pub(crate) math: RefCell<HashMap<String, crate::islands::Typeset>>,
     /// Remote images being downloaded, and those that failed, by URL.
@@ -445,6 +450,7 @@ impl Editor {
             grid: None,
             next_grid_session: 0,
             math: RefCell::default(),
+            diagrams: RefCell::default(),
             fetching_images: RefCell::default(),
             failed_images: RefCell::default(),
             pointer: Point::default(),
@@ -2242,10 +2248,23 @@ impl Editor {
                 let math = math_blocks(analysis, self.text())
                     .into_iter()
                     .find(|block| block.lines.end == line + 1);
+                let diagram = diagram_blocks(analysis, self.text())
+                    .into_iter()
+                    .find(|block| block.lines.end == line + 1);
                 if block_image(analysis, self.text(), line).is_some() {
                     div()
                         .child(text)
                         .child(self.render_image(line, "image-preview", &theme, cx))
+                        .into_any_element()
+                } else if let Some(block) = diagram {
+                    div()
+                        .child(text)
+                        .child(self.render_diagram(
+                            block.lines.start,
+                            "diagram-preview",
+                            &theme,
+                            cx,
+                        ))
                         .into_any_element()
                 } else if let Some(block) = math {
                     div()
