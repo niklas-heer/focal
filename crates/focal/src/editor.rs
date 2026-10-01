@@ -2686,6 +2686,9 @@ impl Editor {
         window: &Window,
         cx: &Context<Self>,
     ) -> gpui_kit::AnyElement {
+        // Focus mode dims the syntax around the words, even where it is bright.
+        let focused = theme.focused();
+        let theme = if self.focus_mode { &focused } else { theme };
         let analysis = &self.snapshot.analysis;
         let info = analysis.info(line).clone();
         let view = self.snapshot.views[line].clone();
@@ -2915,7 +2918,12 @@ impl Editor {
             content,
             &info.prefix,
             line,
-            &if prefix_dimmed { theme.faded() } else { *theme },
+            // Focus mode dims bullets, numbers and quote bars with the syntax.
+            &if prefix_dimmed || self.focus_mode {
+                theme.faded()
+            } else {
+                *theme
+            },
             line_height,
             on_toggle,
         )
@@ -3647,7 +3655,11 @@ impl Render for Editor {
                     .items_center()
                     .justify_center()
                     .text_size(px(12.))
-                    .text_color(theme.marker)
+                    .text_color(if self.focus_mode {
+                        theme.marker.opacity(DIMMED)
+                    } else {
+                        theme.marker
+                    })
                     .bg(theme.background)
                     .window_control_area(WindowControlArea::Drag)
                     .child(title),

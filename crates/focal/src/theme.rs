@@ -135,6 +135,18 @@ impl Theme {
     }
 
     /// The colors for text that focus mode dims.
+    /// Focus mode's colors around the words kept bright: syntax markers,
+    /// bullets, quote bars and rules dim, the words do not.
+    pub fn focused(self) -> Self {
+        Self {
+            marker: self.marker.opacity(DIMMED),
+            checkbox: self.checkbox.opacity(DIMMED),
+            quote_bar: self.quote_bar.opacity(DIMMED),
+            rule: self.rule.opacity(DIMMED),
+            ..self
+        }
+    }
+
     pub fn faded(self) -> Self {
         Self {
             text: self.text.opacity(DIMMED),
@@ -153,5 +165,19 @@ impl Theme {
             Alert::Warning => self.alerts[3],
             Alert::Caution => self.alerts[4],
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn focus_mode_dims_syntax_but_not_words() {
+        let theme = Theme::light();
+        let focused = theme.focused();
+        assert!(focused.marker.a < theme.marker.a);
+        assert!(focused.quote_bar.a < theme.quote_bar.a);
+        assert_eq!(focused.text, theme.text);
     }
 }
