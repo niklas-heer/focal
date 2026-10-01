@@ -14,7 +14,7 @@ use anyhow::Context as _;
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2_app_kit::{
-    NSApplication, NSPrintInfo, NSPrintJobSavingURL, NSPrintPanelOptions, NSPrintSaveJob,
+    NSApplication, NSPrintInfo, NSPrintJobSavingURL, NSPrintPanelOptions, NSPrintSaveJob, NSWindow,
 };
 use objc2_foundation::{NSCopying as _, NSPoint, NSRect, NSSize, NSString, NSURL};
 use objc2_web_kit::{WKWebView, WKWebViewConfiguration};
@@ -34,7 +34,13 @@ pub struct Job {
     web: Retained<WKWebView>,
     output: Output,
     title: String,
+    /// The window the print operation runs on, once it does.
+    window: Option<Retained<NSWindow>>,
+    /// Tells this job from a later one.
+    pub id: u64,
 }
+
+static JOBS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 impl Job {
     /// Starts loading `page`. Images may come from anywhere on disk, as
@@ -56,6 +62,8 @@ impl Job {
             web,
             output,
             title: title.to_owned(),
+            window: None,
+            id: JOBS.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         })
     }
 
@@ -67,7 +75,7 @@ impl Job {
 
     /// Prints the loaded page from the frontmost window: a PDF is written
     /// without asking, a printer is chosen in the print panel.
-    pub fn print(&self) -> anyhow::Result<()> {
+    pub fn print(&mut self) -> anyhow::Result<()> {
         let mtm = MainThreadMarker::new().context("printing runs on the main thread")?;
         let window = NSApplication::sharedApplication(mtm)
             .mainWindow()
@@ -120,6 +128,14 @@ impl Job {
                 std::ptr::null_mut(),
             );
         }
+        self.window = Some(window);
         Ok(())
+    }
+
+    /// Whether the print panel or progress sheet is still open.
+    pub fn sheet_open(&self) -> bool {
+        self.window
+            .as_ref()
+            .is_some_and(|window| window.attachedSheet().is_some())
     }
 }

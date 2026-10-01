@@ -160,6 +160,8 @@ pub struct LearnSpelling {
 pub(crate) const CONTEXT: &str = "FocalEditor";
 /// How long printing waits for a page and its images to load.
 const PRINT_LOAD_LIMIT: Duration = Duration::from_secs(20);
+/// How long a finished print keeps its web view, for WebKit to finish.
+const PRINT_GRACE: Duration = Duration::from_secs(10);
 /// Key bindings for the input of the table cell being edited.
 const CELL_CONTEXT: &str = "FocalCell > Input";
 /// Code blocks whose highlights are kept.
@@ -658,15 +660,13 @@ impl Editor {
                         })
                         .await?;
                 let job = crate::print::Job::load(&page, output, &title)?;
+                let id = job.id;
                 this.update(cx, |this, _| this.printing = Some(job))?;
                 let started = Instant::now();
-                let loading = |this: &Self| {
-                    this.printing
-                        .as_ref()
+                while this.read_with(cx, |this, _| {
+                    this.print_job(id)
                         .is_some_and(crate::print::Job::is_loading)
-                };
-                while this.read_with(cx, |this, _| loading(this))?
-                    && started.elapsed() < PRINT_LOAD_LIMIT
+                })? && started.elapsed() < PRINT_LOAD_LIMIT
                 {
                     cx.background_executor()
                         .timer(Duration::from_millis(50))
@@ -674,9 +674,27 @@ impl Editor {
                 }
                 this.update(cx, |this, _| {
                     this.printing
-                        .as_ref()
+                        .as_mut()
+                        .filter(|job| job.id == id)
                         .map_or(Ok(()), crate::print::Job::print)
-                })?
+                })??;
+                // The web view is let go once the print panel has closed and
+                // WebKit has had time to finish writing.
+                while this.read_with(cx, |this, _| {
+                    this.print_job(id)
+                        .is_some_and(crate::print::Job::sheet_open)
+                })? {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(500))
+                        .await;
+                }
+                cx.background_executor().timer(PRINT_GRACE).await;
+                this.update(cx, |this, _| {
+                    if this.print_job(id).is_some() {
+                        this.printing = None;
+                    }
+                })?;
+                Ok(())
             }
             .await;
             if let Err(error) = printed {
@@ -687,6 +705,11 @@ impl Editor {
             }
         })
         .detach();
+    }
+
+    /// The print job `id`, unless a later print replaced it.
+    fn print_job(&self, id: u64) -> Option<&crate::print::Job> {
+        self.printing.as_ref().filter(|job| job.id == id)
     }
 
     /// Copies the selection, or the whole document, as HTML and as text.
@@ -2737,8 +2760,8 @@ impl Editor {
         {
             return;
         }
-        // Asked directly: the checker corrects words its spelling check, set
-        // to another language, may let pass.
+        // The whole line goes along, so the word is judged in the language
+        // the line is written in.
         let Some(correction) = self.spell.borrow().correction(&view.text, word) else {
             return;
         };
