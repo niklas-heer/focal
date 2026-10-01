@@ -332,7 +332,17 @@ fn embedded<'a>(
                 id,
             })
         }
+        // Raw HTML from the document, with GitHub's tagfilter.
+        Event::Html(html) => Event::Html(filtered(html)),
+        Event::InlineHtml(html) => Event::InlineHtml(filtered(html)),
         other => other,
+    }
+}
+
+fn filtered(html: CowStr<'_>) -> CowStr<'_> {
+    match crate::html_inline::tagfilter(&html) {
+        std::borrow::Cow::Borrowed(_) => html,
+        std::borrow::Cow::Owned(safe) => safe.into(),
     }
 }
 
@@ -868,5 +878,25 @@ mod tests {
             "{html}"
         );
         assert!(!html.contains("[TOC]"), "{html}");
+    }
+
+    #[test]
+    fn raw_html_passes_through_with_githubs_tagfilter() {
+        let html =
+            plain("<script>alert(1)</script>\n\nText <b>ok</b> and <iframe src=x></iframe>\n");
+        assert!(
+            html.contains("&lt;script>") && html.contains("&lt;iframe"),
+            "{html}"
+        );
+        assert!(html.contains("<b>ok</b>"), "{html}");
+    }
+
+    #[test]
+    fn diagrams_keep_their_own_styles() {
+        let html = to_html("```mermaid\nA\n```\n", &mut |embed| match embed {
+            Embed::Diagram(_) => Some("<svg><style>.a{}</style></svg>".into()),
+            _ => None,
+        });
+        assert!(html.contains("<style>"), "{html}");
     }
 }

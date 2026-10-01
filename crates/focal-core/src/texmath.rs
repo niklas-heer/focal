@@ -375,7 +375,7 @@ pub(crate) fn superscript_of(c: char) -> Option<char> {
     })
 }
 
-fn subscript_of(c: char) -> Option<char> {
+pub(crate) fn subscript_of(c: char) -> Option<char> {
     Some(match c {
         '0' => '₀',
         '1' => '₁',

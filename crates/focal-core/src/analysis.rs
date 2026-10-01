@@ -1120,6 +1120,19 @@ impl<'a> Builder<'a> {
             &mut styles,
         );
         apply_inline_extras(self.text, &self.lines, &infos, &mut markers, &mut styles);
+        let mut links = self.links;
+        let mut images = self.images;
+        apply_html(
+            self.text,
+            &self.lines,
+            &mut infos,
+            &mut Found {
+                markers: &mut markers,
+                styles: &mut styles,
+                links: &mut links,
+                images: &mut images,
+            },
+        );
         let line_markers = bucket(&self.lines, count, markers.iter().map(|m| &m.range));
         let line_styles = bucket(&self.lines, count, styles.iter().map(|s| &s.range));
         Analysis {
@@ -1127,9 +1140,9 @@ impl<'a> Builder<'a> {
             infos,
             markers,
             styles,
-            links: self.links,
+            links,
             footnotes: self.footnotes,
-            images: self.images,
+            images,
             display_math: self.display_math,
             tables: self.tables,
             code_blocks: self.code_blocks,
@@ -1237,6 +1250,176 @@ fn apply_callouts(
             }
         }
     }
+}
+
+/// What a pass over the text adds to the analysis.
+struct Found<'f> {
+    markers: &'f mut Vec<Marker>,
+    styles: &'f mut Vec<StyleSpan>,
+    links: &'f mut Vec<Link>,
+    images: &'f mut Vec<Image>,
+}
+
+impl Found<'_> {
+    fn hide(&mut self, range: Range<usize>, reveal: Reveal, replacement: Option<Replacement>) {
+        if !range.is_empty() {
+            self.markers.push(Marker {
+                range,
+                reveal,
+                replacement,
+            });
+        }
+    }
+
+    fn style(&mut self, range: Range<usize>, style: InlineStyle) {
+        if !range.is_empty() {
+            self.styles.push(StyleSpan { range, style });
+        }
+    }
+
+    /// Takes the quiet raw-HTML style off `range`, which reads as content.
+    fn unquiet(&mut self, range: &Range<usize>) {
+        let mut kept = Vec::with_capacity(self.styles.len());
+        for span in self.styles.drain(..) {
+            let overlaps = span.range.start < range.end && range.start < span.range.end;
+            if !overlaps || !span.style.contains(InlineStyle::HTML) {
+                kept.push(span);
+                continue;
+            }
+            for part in [span.range.start..range.start, range.end..span.range.end] {
+                if part.start < part.end {
+                    kept.push(StyleSpan {
+                        range: part,
+                        style: span.style,
+                    });
+                }
+            }
+        }
+        *self.styles = kept;
+    }
+}
+
+/// Raw HTML as README files use it (see [`crate::html_inline`]): wrapper
+/// lines hide, an `<img>` alone on its line is an image, `<h1>` lines are
+/// headings, `<summary>` reads as a bold title, and formatting tags style
+/// their content with the tags hidden away from the caret.
+fn apply_html(text: &str, lines: &LineIndex, infos: &mut [LineInfo], found: &mut Found<'_>) {
+    use crate::html_inline::{breaks, elements, heading, image, is_wrapper};
+    for (line, info) in infos.iter_mut().enumerate() {
+        if !matches!(
+            info.kind,
+            LineKind::Text | LineKind::Html | LineKind::Heading(_)
+        ) {
+            continue;
+        }
+        let range = lines.range(line);
+        let source = &text[range.clone()];
+        let at = |r: Range<usize>| range.start + r.start..range.start + r.end;
+        let this_line = Reveal::Lines(line..line + 1);
+        if !source.contains('<') {
+            continue;
+        }
+        if is_wrapper(source) {
+            let start = range.start + (source.len() - source.trim_start().len());
+            found.hide(start..start + source.trim().len(), this_line, None);
+            continue;
+        }
+        if let Some((tag, src, alt, width)) = image(source) {
+            found.images.push(Image {
+                range: at(tag),
+                destination: src,
+                alt,
+                wiki: false,
+                width,
+            });
+            continue;
+        }
+        if let Some((level, element)) = heading(source) {
+            let (open, close) = (element.open, element.close);
+            info.kind = LineKind::Heading(level);
+            found.unquiet(&range);
+            found.hide(at(open), this_line.clone(), None);
+            found.hide(at(close), this_line, None);
+            continue;
+        }
+        let code = |found: &Found<'_>, offset: usize| {
+            found.styles.iter().any(|s| {
+                s.style.contains(InlineStyle::CODE)
+                    && s.range.start <= offset
+                    && offset < s.range.end
+            })
+        };
+        for element in elements(source) {
+            let (open, content, close) = (at(element.open), at(element.content), at(element.close));
+            if code(found, open.start) {
+                continue;
+            }
+            if info.kind == LineKind::Html {
+                // Formatted text in an HTML block (a `<summary>`) reads as text.
+                info.kind = LineKind::Text;
+                found.unquiet(&range);
+            }
+            let tags = (open, close);
+            format_element(text, &element.name, element.href, tags, content, found);
+        }
+        for br in breaks(source) {
+            let br = at(br);
+            found.hide(
+                br.clone(),
+                Reveal::Touching(br),
+                Some(Replacement::Label("↵".into())),
+            );
+        }
+    }
+}
+
+/// Styles a formatting element's content, hides its opening and closing
+/// tags away from the caret and records a link's destination.
+fn format_element(
+    text: &str,
+    name: &str,
+    href: Option<String>,
+    (open, close): (Range<usize>, Range<usize>),
+    content: Range<usize>,
+    found: &mut Found<'_>,
+) {
+    let whole = open.start..close.end;
+    let style = match name {
+        "b" | "strong" | "summary" => InlineStyle::STRONG,
+        "i" | "em" => InlineStyle::EMPHASIS,
+        "s" | "del" | "strike" => InlineStyle::STRIKETHROUGH,
+        "mark" => InlineStyle::HIGHLIGHT,
+        "kbd" | "code" => InlineStyle::CODE,
+        "a" => InlineStyle::LINK,
+        _ => InlineStyle::NONE,
+    };
+    found.style(content.clone(), style);
+    if let Some(href) = href {
+        found.links.push(Link {
+            range: whole.clone(),
+            destination: href,
+            wiki: false,
+        });
+    }
+    let shifted = match name {
+        "sup" => Some(crate::texmath::superscript_of as fn(char) -> Option<char>),
+        "sub" => Some(crate::texmath::subscript_of as fn(char) -> Option<char>),
+        _ => None,
+    };
+    if let Some(shift) = shifted
+        && let Some(moved) = text[content.clone()]
+            .chars()
+            .map(shift)
+            .collect::<Option<String>>()
+    {
+        found.hide(
+            content,
+            Reveal::Touching(whole.clone()),
+            Some(Replacement::Math(moved)),
+        );
+    }
+    found.hide(open, Reveal::Touching(whole.clone()), None);
+    found.hide(close, Reveal::Touching(whole), None);
 }
 
 /// Pandoc and Markdown Extra syntax `pulldown-cmark` does not read in
@@ -2010,5 +2193,71 @@ mod tests {
                 .iter()
                 .any(|l| l.wiki && l.destination == "Some Note")
         );
+    }
+
+    #[test]
+    fn inline_html_formats_its_content_and_hides_its_tags() {
+        let text = r#"Some <b>bold</b>, <kbd>K</kbd>, x<sup>2</sup>, a<br>b and <a href="https://x.y">link</a>."#;
+        let analysis = analyze(text);
+        assert_eq!(styled(text, &analysis, InlineStyle::STRONG), ["bold"]);
+        assert_eq!(styled(text, &analysis, InlineStyle::CODE), ["K"]);
+        assert!(styled(text, &analysis, InlineStyle::LINK).contains(&"link"));
+        assert!(
+            analysis
+                .links
+                .iter()
+                .any(|l| l.destination == "https://x.y")
+        );
+        let markers = marker_texts(text, &analysis);
+        for tag in ["<b>", "</b>", "<kbd>", "</kbd>", "<br>"] {
+            assert!(markers.contains(&tag), "{tag} in {markers:?}");
+        }
+        let replacements: Vec<String> = analysis
+            .markers
+            .iter()
+            .filter_map(|m| m.replacement.as_ref().map(Replacement::text))
+            .collect();
+        assert!(
+            replacements.contains(&"²".to_owned()) && replacements.contains(&"↵".to_owned()),
+            "{replacements:?}"
+        );
+    }
+
+    #[test]
+    fn readme_html_reads_as_its_content() {
+        let text = "<p align=\"center\">\n  <img src=\"logo.png\" alt=\"Logo\" width=\"120\">\n</p>\n<h1 align=\"center\">Focal</h1>\n\n<details>\n<summary>More</summary>\n\nHidden text\n\n</details>\n";
+        let analysis = analyze(text);
+        let logo = analysis
+            .images
+            .iter()
+            .find(|i| i.destination == "logo.png")
+            .expect("the logo is an image");
+        assert_eq!((logo.width, logo.alt.as_str()), (Some(120), "Logo"));
+        assert_eq!(analysis.infos[3].kind, LineKind::Heading(1));
+        let markers = marker_texts(text, &analysis);
+        for wrapper in [
+            "<p align=\"center\">",
+            "</p>",
+            "<details>",
+            "</details>",
+            "<summary>",
+            "</summary>",
+        ] {
+            assert!(markers.contains(&wrapper), "{wrapper} in {markers:?}");
+        }
+        assert!(styled(text, &analysis, InlineStyle::STRONG).contains(&"More"));
+        let quiet = styled(text, &analysis, InlineStyle::HTML);
+        assert!(
+            !quiet
+                .iter()
+                .any(|q| q.contains("Focal") || q.contains("More")),
+            "content reads as text: {quiet:?}"
+        );
+    }
+
+    #[test]
+    fn html_in_code_is_left_alone() {
+        let text = "`<b>code</b>`\n";
+        assert!(styled(text, &analyze(text), InlineStyle::STRONG).is_empty());
     }
 }

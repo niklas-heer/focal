@@ -17,6 +17,7 @@ pub mod editing;
 pub mod export;
 pub mod find;
 pub mod fuzzy;
+pub mod html_inline;
 mod lines;
 pub mod links;
 pub mod outline;
