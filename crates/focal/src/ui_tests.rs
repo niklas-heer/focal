@@ -1503,3 +1503,17 @@ fn a_table_of_contents_lists_the_headings_and_jumps(cx: &mut TestAppContext) {
     act(cx, window, |window, cx| window.press("cmd-[", cx));
     editor.read_with(cx, |e, _| assert_eq!(e.selection(), 0..0, "back"));
 }
+
+#[gpui_kit::test]
+fn graphviz_svgbob_and_pikchr_blocks_are_diagrams(cx: &mut TestAppContext) {
+    let text = "Intro\n\n```dot\ndigraph { a -> b }\n```\n\n```bob\n+--+\n|a |\n+--+\n```\n\n```pikchr\nbox \"x\"\n```\n";
+    let (window, _) = open_editor(cx, text);
+    act(cx, window, |window, _| {
+        for line in [2usize, 6, 12] {
+            assert!(
+                window.try_find(("diagram-island", line)).is_some(),
+                "line {line}"
+            );
+        }
+    });
+}

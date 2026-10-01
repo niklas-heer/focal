@@ -23,16 +23,147 @@ pub fn render(
     source: &str,
     palette: &Palette,
 ) -> Result<String, String> {
-    match language {
+    // Renderers written for other uses may panic on input they do not expect.
+    let drawn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match language {
         DiagramLanguage::Mermaid => mermaid(source, palette),
+        DiagramLanguage::Graphviz => graphviz(source),
+        DiagramLanguage::Svgbob => Ok(svgbob::to_svg(source)),
+        DiagramLanguage::Pikchr => {
+            pikchr::Pikchr::render(source, None, pikchr::PikchrFlags::default())
+                .map(|drawn| drawn.rendered().to_owned())
+        }
         other => Err(format!("{} diagrams are not drawn yet.", other.name())),
+    }))
+    .unwrap_or_else(|_| Err(format!("{} could not draw this.", language.name())))?;
+    if language == DiagramLanguage::Mermaid {
+        Ok(drawn)
+    } else {
+        Ok(recolor(&with_view_box(&drawn), palette))
     }
 }
 
 /// Whether Focal can draw `language` on this Mac; a block it cannot draw
 /// stays a code block.
 pub const fn can_draw(language: DiagramLanguage) -> bool {
-    matches!(language, DiagramLanguage::Mermaid)
+    match language {
+        DiagramLanguage::Mermaid
+        | DiagramLanguage::Graphviz
+        | DiagramLanguage::Svgbob
+        | DiagramLanguage::Pikchr => true,
+        DiagramLanguage::WaveDrom
+        | DiagramLanguage::PlantUml
+        | DiagramLanguage::D2
+        | DiagramLanguage::GeoJson
+        | DiagramLanguage::TopoJson => false,
+    }
+}
+
+/// Graphviz: the `dot` tool when it is installed, which reads all of DOT,
+/// otherwise `layout-rs`, which reads most of it.
+fn graphviz(source: &str) -> Result<String, String> {
+    if let Some(dot) = crate::tools::find("dot") {
+        let args = ["-Tsvg", "-Gbgcolor=transparent"];
+        return crate::tools::run(&dot, &args, source, crate::tools::TIMEOUT);
+    }
+    let graph = layout::gv::DotParser::new(source).process()?;
+    let mut builder = layout::gv::GraphBuilder::new();
+    builder.visit_graph(&graph);
+    let mut visual = builder.get();
+    let mut svg = layout::backends::svg::SVGWriter::new();
+    visual.do_it(false, false, false, &mut svg);
+    Ok(svg.finalize())
+}
+
+/// Gives an SVG with only a width and height a `viewBox`, so it scales.
+fn with_view_box(svg: &str) -> String {
+    let Some(tag) = root(svg) else {
+        return svg.to_owned();
+    };
+    if attribute(tag, "viewBox").is_some() {
+        return svg.to_owned();
+    }
+    let number =
+        |name| attribute(tag, name).and_then(|v| v.trim_end_matches("px").parse::<f32>().ok());
+    let (Some(width), Some(height)) = (number("width"), number("height")) else {
+        return svg.to_owned();
+    };
+    let at = svg.find("<svg").map_or(0, |at| at + 4);
+    format!(
+        "{} viewBox=\"0 0 {width} {height}\"{}",
+        &svg[..at],
+        &svg[at..]
+    )
+}
+
+/// A diagram drawn black on white, in `palette` instead: black becomes the
+/// text color, white the page, text without a color the text color, and
+/// fonts Focal's.
+fn recolor(svg: &str, palette: &Palette) -> String {
+    const BLACK: &[&str] = &[
+        "#000000ff",
+        "#000000",
+        "rgb(0,0,0)",
+        "rgb(0, 0, 0)",
+        "black",
+    ];
+    const WHITE: &[&str] = &[
+        "#ffffffff",
+        "#ffffff",
+        "rgb(255,255,255)",
+        "rgb(255, 255, 255)",
+        "white",
+    ];
+    let mut out = svg.to_owned();
+    for (names, color) in [(BLACK, &palette.text), (WHITE, &palette.canvas)] {
+        for name in names {
+            out = replace_ignoring_case(&out, name, color);
+        }
+    }
+    // Short hex forms, only as whole attribute or property values.
+    for (short, color) in [("#000", &palette.text), ("#fff", &palette.canvas)] {
+        for (before, after) in [("\"", "\""), (":", ";"), (":", "\""), (": ", ";")] {
+            out = replace_ignoring_case(
+                &out,
+                &format!("{before}{short}{after}"),
+                &format!("{before}{color}{after}"),
+            );
+        }
+    }
+    let monospace = out.contains("monospace") || out.contains("Mono");
+    let font = if monospace {
+        "iA Writer Mono S, Menlo, monospace"
+    } else {
+        "Helvetica Neue, Helvetica, Arial, sans-serif"
+    };
+    // Fonts named in class rules outrank the rule below; name ours there.
+    for serif in ["Times New Roman", "Times, serif", "Times"] {
+        out = out.replace(serif, font);
+    }
+    let style = format!(
+        "<style>text{{fill:{};font-family:{font};}}</style>",
+        palette.text
+    );
+    match out
+        .find("<svg")
+        .and_then(|at| out[at..].find('>').map(|end| at + end + 1))
+    {
+        Some(at) => format!("{}{style}{}", &out[..at], &out[at..]),
+        None => out,
+    }
+}
+
+fn replace_ignoring_case(text: &str, from: &str, to: &str) -> String {
+    let lower = text.to_ascii_lowercase();
+    let from = from.to_ascii_lowercase();
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    for (found, _) in lower.match_indices(&from) {
+        out.push_str(&text[at..found]);
+        out.push_str(to);
+        at = found + from.len();
+    }
+    out.push_str(&text[at..]);
+    out
 }
 
 fn mermaid(source: &str, palette: &Palette) -> Result<String, String> {
@@ -176,5 +307,62 @@ mod tests {
             sized.contains(r#"<rect width="5" height="5"/>"#),
             "inner sizes stay"
         );
+    }
+
+    #[test]
+    fn recoloring_replaces_black_and_white_and_colors_text() {
+        let svg = r##"<svg viewBox="0 0 10 10"><style>.a { stroke: black; fill: white; }</style><rect stroke="#000000ff" fill="#FFFFFF"/><path style="fill:rgb(0,0,0);stroke:#000"/><text>x</text></svg>"##;
+        let out = recolor(svg, &palette()).to_lowercase();
+        for gone in [
+            "black",
+            "white",
+            "#000000",
+            "#ffffff",
+            "rgb(0,0,0)",
+            "#000\"",
+        ] {
+            assert!(!out.contains(gone), "{gone} in {out}");
+        }
+        assert!(out.contains(&palette().text.to_lowercase()), "{out}");
+        assert!(
+            out.contains("text{fill:"),
+            "text gets the text color: {out}"
+        );
+    }
+
+    #[test]
+    fn graphviz_svgbob_and_pikchr_draw() {
+        for (language, source) in [
+            (
+                DiagramLanguage::Graphviz,
+                "digraph { rankdir=LR; a -> b -> c; }",
+            ),
+            (
+                DiagramLanguage::Svgbob,
+                "+---+    +---+\n| a |--->| b |\n+---+    +---+\n",
+            ),
+            (
+                DiagramLanguage::Pikchr,
+                "box \"Hello\"; arrow; circle \"World\"",
+            ),
+        ] {
+            assert!(can_draw(language), "{language:?}");
+            let svg = render(language, source, &palette())
+                .unwrap_or_else(|e| panic!("{language:?}: {e}"));
+            assert!(svg_size(&svg).is_some(), "{language:?} has a size: {svg}");
+        }
+    }
+
+    #[test]
+    fn broken_graphviz_and_pikchr_say_why() {
+        assert!(render(DiagramLanguage::Graphviz, "digraph { a -> ", &palette()).is_err());
+        assert!(render(DiagramLanguage::Pikchr, "box \"unclosed", &palette()).is_err());
+    }
+
+    #[test]
+    fn serif_fonts_become_focals() {
+        let svg =
+            r#"<svg viewBox="0 0 1 1"><style>.a14 { font-family: Times, serif; }</style></svg>"#;
+        assert!(!recolor(svg, &palette()).contains("Times"));
     }
 }

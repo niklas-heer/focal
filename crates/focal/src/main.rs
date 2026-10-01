@@ -25,6 +25,7 @@ mod spell;
 mod switcher;
 mod table_view;
 mod theme;
+mod tools;
 #[cfg(test)]
 mod ui_tests;
 mod updates;
