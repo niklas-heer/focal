@@ -8,7 +8,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-pulldown-cmark.workspace = true
+pulldown-cmark = { workspace = true, features = ["html"] }
 unicode-segmentation.workspace = true
 unicode-width = "0.2.2"
 
