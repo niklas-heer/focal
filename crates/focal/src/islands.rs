@@ -5,6 +5,7 @@
 use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use focal_core::Analysis;
 use focal_core::blocks::{block_image, front_matter, math_blocks};
@@ -69,6 +70,24 @@ pub(crate) enum Typeset {
 )]
 fn channel(value: f32) -> u8 {
     (value.clamp(0., 1.) * 255.).round() as u8
+}
+
+/// Tall images are scaled down to this height, so one never fills the window.
+const MAX_IMAGE_HEIGHT: f32 = 560.;
+
+/// The size to draw an image of `width` × `height` pixels (one pixel a
+/// point): scaled down, keeping its shape, to fit `max_width` × `max_height`.
+fn fit(width: f32, height: f32, max_width: f32, max_height: f32) -> (f32, f32) {
+    let scale = (max_width / width).min(max_height / height).min(1.);
+    (width * scale, height * scale)
+}
+
+/// How long a failed download waits before the next try.
+const RETRY_AFTER: Duration = Duration::from_mins(1);
+
+/// Whether a download that failed at `failed` may be tried again.
+fn retry_due(failed: Instant, now: Instant) -> bool {
+    now.duration_since(failed) >= RETRY_AFTER
 }
 
 /// Where an image's pixels come from.
@@ -208,10 +227,24 @@ impl Editor {
                     .aria_label(image.alt.clone())
                     .py(px(6.))
                     .child(
-                        img(path)
-                            .max_w_full()
+                        img(path.clone())
+                            .map(|image| {
+                                // GPUI sizes an image to its pixels; size it to fit instead.
+                                match imagesize::size(&path) {
+                                    Ok(size) => {
+                                        let (width, height) = fit(
+                                            size.width as f32,
+                                            size.height as f32,
+                                            self.typography.column,
+                                            MAX_IMAGE_HEIGHT,
+                                        );
+                                        image.w(px(width)).h(px(height))
+                                    }
+                                    Err(_) => image.max_w_full(),
+                                }
+                            })
                             .rounded(px(6.))
-                            .object_fit(ObjectFit::ScaleDown)
+                            .object_fit(ObjectFit::Contain)
                             .with_fallback(move || {
                                 div()
                                     .text_color(marker)
@@ -239,8 +272,12 @@ impl Editor {
             if path.exists() {
                 return Picture::Ready(path);
             }
-            if self.failed_images.borrow().contains(destination) {
-                return Picture::Missing;
+            let failed = self.failed_images.borrow().get(destination).copied();
+            if let Some(failed) = failed {
+                if !retry_due(failed, Instant::now()) {
+                    return Picture::Missing;
+                }
+                self.failed_images.borrow_mut().remove(destination);
             }
             if self
                 .fetching_images
@@ -263,7 +300,7 @@ impl Editor {
                     this.update(cx, |this, cx| {
                         this.fetching_images.borrow_mut().remove(&url);
                         if !fetched {
-                            this.failed_images.borrow_mut().insert(url);
+                            this.failed_images.borrow_mut().insert(url, Instant::now());
                         }
                         cx.notify();
                     })
@@ -394,5 +431,38 @@ impl Editor {
                     .child(div().text_color(theme.text.opacity(0.75)).child(value))
             }))
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use super::{fit, retry_due};
+
+    #[test]
+    fn images_fit_the_column_and_the_height_cap_keeping_their_shape() {
+        assert_eq!(
+            fit(400., 300., 720., 560.),
+            (400., 300.),
+            "small images keep their size"
+        );
+        assert_eq!(
+            fit(1440., 900., 720., 560.),
+            (720., 450.),
+            "wide images fit the column"
+        );
+        assert_eq!(
+            fit(600., 2400., 720., 560.),
+            (140., 560.),
+            "tall images fit the cap"
+        );
+    }
+
+    #[test]
+    fn a_failed_download_is_retried_after_a_while() {
+        let failed = Instant::now();
+        assert!(!retry_due(failed, failed + Duration::from_secs(5)));
+        assert!(retry_due(failed, failed + Duration::from_secs(61)));
     }
 }

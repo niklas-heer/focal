@@ -368,7 +368,7 @@ pub struct Editor {
     pub(crate) math: RefCell<HashMap<String, crate::islands::Typeset>>,
     /// Remote images being downloaded, and those that failed, by URL.
     pub(crate) fetching_images: RefCell<std::collections::HashSet<String>>,
-    pub(crate) failed_images: RefCell<std::collections::HashSet<String>>,
+    pub(crate) failed_images: RefCell<HashMap<String, Instant>>,
     /// The pointer's last position, where a footnote preview appears.
     pointer: Point<Pixels>,
     /// The editor's bounds in the window, from the last frame.
