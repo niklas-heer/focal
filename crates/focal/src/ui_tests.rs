@@ -19,6 +19,7 @@ pub fn open_workspace(cx: &mut TestAppContext, text: &str) -> (AnyWindowHandle, 
         gpui_kit::init(cx);
         editor::bind_keys(cx);
         crate::workspace::bind_keys(cx);
+        crate::find_bar::bind_keys(cx);
         // Tests never read or write the user's settings file.
         cx.set_global(Settings::default());
         let bounds = Bounds {
@@ -1061,4 +1062,137 @@ fn a_mermaid_block_is_a_diagram_with_a_preview_while_editing(cx: &mut TestAppCon
             "with a preview"
         );
     });
+}
+
+// ---- Find and replace ----------------------------------------------------------
+
+fn find(cx: &mut TestAppContext, editor: &Entity<Editor>, query: &str) {
+    let query = Some(query.to_owned());
+    editor.update(cx, |e, cx| e.set_query(query, cx));
+}
+
+#[gpui_kit::test]
+fn searching_selects_the_first_match_after_the_caret(cx: &mut TestAppContext) {
+    let (_, editor) = open_editor(cx, "cat one\nCat two\ncat three");
+    editor.update(cx, |e, cx| e.move_to(3, cx));
+    find(cx, &editor, "cat");
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.selection(), 8..11);
+        assert_eq!(e.find_status(), Some((Some(1), 3)));
+    });
+}
+
+#[gpui_kit::test]
+fn next_and_previous_wrap_around(cx: &mut TestAppContext) {
+    let (_, editor) = open_editor(cx, "cat one\ncat two");
+    find(cx, &editor, "cat");
+    editor.update(cx, |e, cx| e.find_step(true, cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 8..11));
+    editor.update(cx, |e, cx| e.find_step(true, cx));
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.selection(), 0..3, "wraps to the first");
+    });
+    editor.update(cx, |e, cx| e.find_step(false, cx));
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.selection(), 8..11, "wraps to the last");
+    });
+}
+
+#[gpui_kit::test]
+fn matches_follow_edits(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "cat one");
+    find(cx, &editor, "cat");
+    act(cx, window, |window, cx| {
+        window.press("cmd-down", cx);
+        window.input(" cat", cx);
+    });
+    editor.read_with(cx, |e, _| assert_eq!(e.find_status(), Some((None, 2))));
+}
+
+#[gpui_kit::test]
+fn replace_with_the_caret_elsewhere_only_moves_to_a_match(cx: &mut TestAppContext) {
+    let (_, editor) = open_editor(cx, "a cat and a cat");
+    find(cx, &editor, "cat");
+    editor.update(cx, |e, cx| e.move_to(5, cx));
+    editor.update(cx, |e, cx| e.replace_current("dog", cx));
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.text(), "a cat and a cat", "nothing replaced");
+        assert_eq!(e.selection(), 12..15);
+    });
+    editor.update(cx, |e, cx| e.replace_current("dog", cx));
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.text(), "a cat and a dog");
+        assert_eq!(e.selection(), 2..5, "the next match is selected");
+    });
+}
+
+#[gpui_kit::test]
+fn replace_all_is_one_undo_step(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "cat, Cat, cat");
+    find(cx, &editor, "cat");
+    editor.update(cx, |e, cx| e.replace_all("dog", cx));
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.text(), "dog, dog, dog");
+        assert_eq!(e.find_status(), Some((None, 0)));
+    });
+    act(cx, window, |window, cx| window.press("cmd-z", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.text(), "cat, Cat, cat"));
+}
+
+#[gpui_kit::test]
+fn the_find_bar_searches_as_you_type_and_return_finds_the_next(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "cat one\ncat two\ncat three");
+    act(cx, window, |window, cx| window.press("cmd-f", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("find-bar").is_some());
+    });
+    act(cx, window, |window, cx| window.input("cat", cx));
+    act(cx, window, |_, _| {});
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 0..3));
+    act(cx, window, |window, cx| window.press("enter", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 8..11));
+    act(cx, window, |window, cx| window.press("shift-enter", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 0..3));
+}
+
+#[gpui_kit::test]
+fn escape_closes_the_find_bar_and_find_next_still_works(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "one two one two");
+    act(cx, window, |window, cx| window.press("cmd-f", cx));
+    act(cx, window, |window, cx| window.input("two", cx));
+    act(cx, window, |_, _| {});
+    act(cx, window, |window, cx| window.press("escape", cx));
+    act(cx, window, |window, cx| {
+        assert!(window.try_find("find-bar").is_none());
+        assert!(
+            editor.read(cx).focus_handle.is_focused(window),
+            "the editor has focus"
+        );
+    });
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.selection(), 4..7, "the match stays selected");
+        assert_eq!(e.find_status(), None, "matches are no longer highlighted");
+    });
+    act(cx, window, |window, cx| window.press("cmd-g", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 12..15));
+}
+
+#[gpui_kit::test]
+fn the_find_bar_starts_with_the_selected_text(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "one two one two");
+    editor.update(cx, |e, cx| e.select(4..7, cx));
+    act(cx, window, |window, cx| window.press("cmd-f", cx));
+    act(cx, window, |window, cx| window.press("enter", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 12..15));
+}
+
+#[gpui_kit::test]
+fn replace_all_through_the_find_bar(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "cat, Cat, cat");
+    act(cx, window, |window, cx| window.press("cmd-alt-f", cx));
+    act(cx, window, |window, cx| window.input("cat", cx));
+    act(cx, window, |window, cx| window.click("replace-field", cx));
+    act(cx, window, |window, cx| window.input("dog", cx));
+    act(cx, window, |window, cx| window.click("replace-all", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.text(), "dog, dog, dog"));
 }

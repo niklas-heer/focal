@@ -9,6 +9,7 @@ use crate::editor::{
     Italic, OpenLink, Paste, Quit, Redo, Save, SelectAll, SetHeading, Strikethrough, ToggleBullets,
     ToggleFocusMode, ToggleNumbers, ToggleQuote, ToggleTask, Undo,
 };
+use crate::find_bar::{Find, FindAndReplace, FindNext, FindPrevious};
 use crate::settings::OpenSettings;
 use crate::switcher::QuickOpen;
 use crate::updates::{CheckForUpdates, OpenReleases};
@@ -54,6 +55,13 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::os_action("Copy", Copy, OsAction::Copy),
             MenuItem::os_action("Paste", Paste, OsAction::Paste),
             MenuItem::os_action("Select All", SelectAll, OsAction::SelectAll),
+            MenuItem::separator(),
+            MenuItem::submenu(Menu::new("Find").items([
+                MenuItem::action("Find…", Find),
+                MenuItem::action("Find and Replace…", FindAndReplace),
+                MenuItem::action("Find Next", FindNext),
+                MenuItem::action("Find Previous", FindPrevious),
+            ])),
         ]),
         Menu::new("Format").items([
             MenuItem::action("Bold", Bold),

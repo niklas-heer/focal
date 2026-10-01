@@ -7,6 +7,7 @@ mod cli_install;
 mod diagram;
 mod document;
 mod editor;
+mod find_bar;
 mod folder;
 mod grid;
 mod highlight;
@@ -203,6 +204,7 @@ fn run_app(launch: Launch) {
         editor::bind_keys(cx);
         workspace::bind_keys(cx);
         switcher::bind_keys(cx);
+        find_bar::bind_keys(cx);
         settings::init(cx);
         windows::init(cx);
         cli_install::init(cx);

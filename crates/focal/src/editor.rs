@@ -13,11 +13,11 @@ use std::time::{Duration, Instant};
 use focal_core::analysis::{InlineStyle, LineKind};
 use focal_core::blocks::{block_image, diagram_blocks, math_blocks};
 use focal_core::display::{Run, mark_runs, prose_ranges};
-use focal_core::links;
 use focal_core::text_stats::{reading_minutes, sentence_at, word_count};
 use focal_core::{
     Analysis, Bias, Buffer, Caret, EditKind, LineView, analyze, editing, line_view, range_view,
 };
+use focal_core::{find, links};
 use gpui_kit::accesskit::{ActionData, TextSelection};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::native_menu::NativeMenu;
@@ -390,6 +390,12 @@ pub struct Editor {
     pub(crate) next_grid_session: u64,
     /// A table shown as Markdown source until the caret leaves it.
     pub(crate) table_source: Option<usize>,
+    /// What the find bar searches for.
+    query: Option<String>,
+    /// The query's matches in the current text, and the text version and
+    /// query they were found for.
+    found: Rc<[Range<usize>]>,
+    found_for: Option<(u64, String)>,
 }
 
 impl Editor {
@@ -462,6 +468,9 @@ impl Editor {
             link_root: None,
             link_files: Rc::from([]),
             table_source: None,
+            query: None,
+            found: Rc::default(),
+            found_for: None,
         };
         // A single file's wiki links resolve among the files beside it.
         if let Some(dir) = editor
@@ -897,6 +906,8 @@ impl Editor {
                 changed,
             );
         }
+        self.find_matches(version);
+        let text = self.buffer.text();
         let table_cells = rendered_table_cells(&analysis, text);
         // The accessibility nodes depend on the text and the rows only, not on
         // the caret, so keep them across caret moves.
@@ -1630,6 +1641,95 @@ impl Editor {
     fn quit(&mut self, _: &Quit, _: &mut Window, cx: &mut Context<Self>) {
         self.save_now(cx);
         cx.quit();
+    }
+
+    // ---- Find --------------------------------------------------------------
+
+    /// Finds the query's matches again when the text or the query changed.
+    fn find_matches(&mut self, version: u64) {
+        let Some(query) = &self.query else {
+            self.found = Rc::default();
+            self.found_for = None;
+            return;
+        };
+        if self.found_for.as_ref() != Some(&(version, query.clone())) {
+            self.found = find::find_all(self.buffer.text(), query).into();
+            self.found_for = Some((version, query.clone()));
+        }
+    }
+
+    /// Searches for `query` (or stops searching with `None`), selecting the
+    /// first match at or after the selection.
+    pub(crate) fn set_query(&mut self, query: Option<String>, cx: &mut Context<Self>) {
+        let query = query.filter(|query| !query.is_empty());
+        if query == self.query {
+            return;
+        }
+        self.query = query;
+        self.find_matches(self.buffer.version());
+        match find::next_match(&self.found, self.selection.start) {
+            Some(ix) => self.select(self.found[ix].clone(), cx),
+            None => cx.notify(),
+        }
+    }
+
+    /// Selects the next match, or the previous one, wrapping around.
+    pub(crate) fn find_step(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let found = if forward {
+            find::next_match(&self.found, self.selection.end)
+        } else {
+            find::previous_match(&self.found, self.selection.start)
+        };
+        if let Some(ix) = found {
+            self.select(self.found[ix].clone(), cx);
+        }
+    }
+
+    /// Selects the next or previous match of `query` without highlighting
+    /// the others, as ⌘G does with the find bar closed.
+    pub(crate) fn find_again(&mut self, query: String, forward: bool, cx: &mut Context<Self>) {
+        self.query = Some(query);
+        self.find_matches(self.buffer.version());
+        self.find_step(forward, cx);
+        self.query = None;
+        self.find_matches(self.buffer.version());
+        cx.notify();
+    }
+
+    /// The selected text, when it fits on one line, to search for.
+    pub(crate) fn selected_line_text(&self) -> Option<String> {
+        let text = &self.text()[self.selection.clone()];
+        (!text.is_empty() && !text.contains('\n')).then(|| text.to_owned())
+    }
+
+    /// Replaces the selected match and selects the next one. With no match
+    /// selected, only moves to the next match, so a stray selection is never
+    /// replaced.
+    pub(crate) fn replace_current(&mut self, replacement: &str, cx: &mut Context<Self>) {
+        if !self.found.contains(&self.selection) {
+            self.find_step(true, cx);
+            return;
+        }
+        let range = self.selection.clone();
+        let end = range.start + replacement.len();
+        self.edit(range, replacement, end..end, EditKind::Other, cx);
+        if let Some(ix) = find::next_match(&self.found, end) {
+            self.select(self.found[ix].clone(), cx);
+        }
+    }
+
+    /// Replaces every match, as one undo step.
+    pub(crate) fn replace_all(&mut self, replacement: &str, cx: &mut Context<Self>) {
+        if let Some(change) = find::replace_all(&self.found, self.text(), replacement) {
+            self.apply(change, cx);
+        }
+    }
+
+    /// While searching: which match is selected, and how many there are.
+    pub(crate) fn find_status(&self) -> Option<(Option<usize>, usize)> {
+        self.query.as_ref()?;
+        let current = self.found.iter().position(|m| *m == self.selection);
+        Some((current, self.found.len()))
     }
 
     // ---- Files -----------------------------------------------------------
@@ -2410,6 +2510,8 @@ impl Editor {
         let paint_layout = layout.clone();
         let paint_view = view.clone();
         let selection_color = theme.selection;
+        let found_color = theme.found;
+        let found = self.found_on(&line_range);
         let caret_color = theme.caret;
         let _ = (window, cx);
 
@@ -2447,6 +2549,16 @@ impl Editor {
                     let selection = selection.clone();
                     let line_range = line_range.clone();
                     move |_, (), window, _| {
+                        for found in &found {
+                            paint_selection(
+                                &layout,
+                                &view,
+                                found,
+                                &line_range,
+                                found_color,
+                                window,
+                            );
+                        }
                         paint_selection(
                             &layout,
                             &view,
@@ -2524,6 +2636,16 @@ impl Editor {
             line_height,
             on_toggle,
         )
+    }
+
+    /// The matches that touch `line`.
+    fn found_on(&self, line: &Range<usize>) -> Vec<Range<usize>> {
+        let first = self.found.partition_point(|m| m.end < line.start);
+        self.found[first..]
+            .iter()
+            .take_while(|m| m.start <= line.end)
+            .cloned()
+            .collect()
     }
 
     fn render_banner(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<gpui_kit::AnyElement> {

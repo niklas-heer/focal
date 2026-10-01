@@ -15,6 +15,7 @@ use gpui_kit::{
 use crate::bar;
 use crate::document::Document;
 use crate::editor::{Editor, EditorEvent};
+use crate::find_bar::{Find, FindAndReplace, FindBar, FindBarEvent, FindNext, FindPrevious};
 use crate::folder;
 use crate::instance::Request;
 use crate::switcher::{QuickOpen, Switcher, SwitcherEvent};
@@ -66,6 +67,9 @@ pub struct Workspace {
     /// Where followed links and jumps came from, for "back": the file and
     /// the selection in it.
     history: Vec<(Option<PathBuf>, std::ops::Range<usize>)>,
+    find_bar: Option<(Entity<FindBar>, gpui_kit::Subscription)>,
+    /// The find bar's query when it closed, for ⌘G.
+    last_query: Option<String>,
 }
 
 impl Workspace {
@@ -87,6 +91,8 @@ impl Workspace {
             switcher: None,
             editor_events: events,
             history: Vec::new(),
+            find_bar: None,
+            last_query: None,
         }
     }
 
@@ -233,6 +239,10 @@ impl Workspace {
         self.editor = cx.new(|cx| Editor::new(document, text, window, cx));
         self.editor_events = cx.subscribe_in(&self.editor, window, Self::editor_event);
         self.share_files(cx);
+        if let Some((bar, _)) = &self.find_bar {
+            let editor = self.editor.clone();
+            bar.update(cx, |bar, cx| bar.set_editor(editor, cx));
+        }
         window.set_window_title(&title);
         let handle = self.editor.read(cx).focus_handle(cx);
         window.focus(&handle, cx);
@@ -254,6 +264,57 @@ impl Workspace {
         });
         self.switcher = Some((switcher, subscription));
         cx.notify();
+    }
+
+    /// Opens the find bar, or focuses it, seeded with the selected text or
+    /// the last query.
+    fn open_find_bar(&mut self, replacing: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((bar, _)) = &self.find_bar {
+            bar.update(cx, |bar, cx| bar.show(replacing, window, cx));
+            return;
+        }
+        let seed = self
+            .editor
+            .read(cx)
+            .selected_line_text()
+            .or_else(|| self.last_query.clone());
+        let editor = self.editor.clone();
+        let bar = cx.new(|cx| FindBar::new(editor, seed, replacing, window, cx));
+        let subscription = cx.subscribe_in(&bar, window, |this, bar, event, window, cx| {
+            let FindBarEvent::Dismiss = event;
+            this.last_query = Some(bar.read(cx).query(cx)).filter(|q| !q.is_empty());
+            this.find_bar = None;
+            this.editor
+                .update(cx, |editor, cx| editor.set_query(None, cx));
+            let handle = this.editor.read(cx).focus_handle(cx);
+            window.focus(&handle, cx);
+            cx.notify();
+        });
+        self.find_bar = Some((bar, subscription));
+        cx.notify();
+    }
+
+    fn find(&mut self, _: &Find, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_find_bar(false, window, cx);
+    }
+
+    fn find_and_replace(
+        &mut self,
+        _: &FindAndReplace,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_find_bar(true, window, cx);
+    }
+
+    /// The next or previous match, with or without the find bar.
+    fn find_step(&mut self, forward: bool, cx: &mut Context<Self>) {
+        if let Some((bar, _)) = &self.find_bar {
+            bar.update(cx, |bar, cx| bar.step(forward, cx));
+        } else if let Some(query) = self.last_query.clone() {
+            self.editor
+                .update(cx, |editor, cx| editor.find_again(query, forward, cx));
+        }
     }
 
     fn toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
@@ -463,8 +524,22 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::go_back))
             .on_action(cx.listener(Self::quick_open))
+            .on_action(cx.listener(Self::find))
+            .on_action(cx.listener(Self::find_and_replace))
+            .on_action(cx.listener(|this, _: &FindNext, _, cx| this.find_step(true, cx)))
+            .on_action(cx.listener(|this, _: &FindPrevious, _, cx| this.find_step(false, cx)))
             .children(sidebar)
             .child(main)
+            .when_some(self.find_bar.as_ref(), |d, (bar, _)| {
+                d.child(
+                    div()
+                        .absolute()
+                        .top(px(40.))
+                        .right(px(16.))
+                        .max_w(px(380.))
+                        .child(bar.clone()),
+                )
+            })
             .when_some(self.switcher.as_ref(), |d, (switcher, _)| {
                 d.child(
                     div()
