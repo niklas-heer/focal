@@ -45,6 +45,11 @@ pub fn render(
             tool("d2", &["--theme", theme, "--pad", "10", "-", "-"], source)
                 .map(|svg| d2_polish(&svg))
         }
+        DiagramLanguage::PlantUml if dark(palette) => {
+            // PlantUML's own dark mode, on Focal's page.
+            tool("plantuml", &["-tsvg", "-pipe", "-darkmode"], source)
+                .map(|svg| svg.replace("background:#1B1B1B;", ""))
+        }
         DiagramLanguage::PlantUml => tool("plantuml", &["-tsvg", "-pipe"], source),
         DiagramLanguage::Stl => crate::stl::render(source, palette),
         DiagramLanguage::Vega => crate::vega::draw(source, false),
@@ -58,7 +63,8 @@ pub fn render(
             | DiagramLanguage::TopoJson
             | DiagramLanguage::D2
             | DiagramLanguage::Stl
-    ) {
+    ) || (language == DiagramLanguage::PlantUml && dark(palette))
+    {
         // Drawn in Focal's palette already.
         Ok(drawn)
     } else {
@@ -534,6 +540,21 @@ mod tests {
             let svg = render(DiagramLanguage::D2, "a -> b: hello", &palette()).unwrap();
             assert!(svg_size(&svg).is_some(), "{svg}");
             assert!(render(DiagramLanguage::D2, "a -> {", &palette()).is_err());
+        }
+        if can_draw(DiagramLanguage::PlantUml) {
+            let source = "@startuml\nAlice -> Bob: Hello\n@enduml";
+            let svg = render(DiagramLanguage::PlantUml, source, &palette()).unwrap();
+            assert!(svg_size(&svg).is_some(), "{svg}");
+            assert!(!svg.contains("background:#1B1B1B"), "on Focal's page");
+            let broken = render(
+                DiagramLanguage::PlantUml,
+                "@startuml\nthis is not -> -> uml\n@enduml",
+                &palette(),
+            );
+            assert!(
+                broken.is_err() || broken.is_ok_and(|svg| svg.contains("Syntax Error")),
+                "says why"
+            );
         }
     }
 
