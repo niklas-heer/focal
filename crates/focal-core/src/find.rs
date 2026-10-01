@@ -112,7 +112,8 @@ mod tests {
         for range in find_all(text, "i") {
             assert!(text.is_char_boundary(range.start) && text.is_char_boundary(range.end));
         }
-        assert_eq!(find_all(text, "is"), [10..12]);
+        let found = find_all(text, "is");
+        assert_eq!((found.len(), found.first()), (1, Some(&(10..12))));
     }
 
     #[test]
@@ -122,7 +123,8 @@ mod tests {
 
     #[test]
     fn matches_do_not_overlap() {
-        assert_eq!(find_all("aaa", "aa"), [0..2]);
+        assert_eq!(find_all("aaa", "aa").first(), Some(&(0..2)));
+        assert_eq!(find_all("aaa", "aa").len(), 1);
     }
 
     #[test]
