@@ -366,7 +366,7 @@ impl Analysis {
     }
 }
 
-const fn options() -> Options {
+pub(crate) const fn options() -> Options {
     Options::ENABLE_TABLES
         .union(Options::ENABLE_FOOTNOTES)
         .union(Options::ENABLE_STRIKETHROUGH)
