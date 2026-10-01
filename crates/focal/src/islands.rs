@@ -118,7 +118,7 @@ fn quiet(text: String, size: f32, theme: &Theme) -> impl IntoElement {
 }
 
 /// Focal's colors for a diagram in this appearance.
-fn palette(theme: &Theme) -> diagram::Palette {
+pub(crate) fn palette(theme: &Theme) -> diagram::Palette {
     let hex = |color: gpui_kit::Hsla| {
         let rgb = color.to_rgb();
         let blend = |c: f32, base: f32| c * rgb.a + base * (1. - rgb.a);

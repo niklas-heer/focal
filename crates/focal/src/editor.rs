@@ -103,6 +103,8 @@ actions!(
         InsertCodeBlock,
         InsertMath,
         OpenLink,
+        ExportHtml,
+        CopyHtml,
     ]
 );
 
@@ -214,6 +216,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-shift-x", Strikethrough, context),
         KeyBinding::new("cmd-e", InlineCode, context),
         KeyBinding::new("cmd-k", InsertLink, context),
+        KeyBinding::new("cmd-shift-e", ExportHtml, context),
+        KeyBinding::new("cmd-alt-shift-c", CopyHtml, context),
         KeyBinding::new("cmd-enter", OpenLink, context),
         KeyBinding::new("cmd-0", SetHeading(0), context),
         KeyBinding::new("cmd-1", SetHeading(1), context),
@@ -385,7 +389,7 @@ pub struct Editor {
     footnote_preview: Option<(usize, SharedString)>,
     /// The folder wiki links resolve in, and its Markdown files relative to it.
     link_root: Option<PathBuf>,
-    link_files: Rc<[PathBuf]>,
+    link_files: std::sync::Arc<[PathBuf]>,
     /// The table cell being edited, if any.
     pub(crate) grid: Option<crate::grid::GridSession>,
     pub(crate) next_grid_session: u64,
@@ -472,7 +476,7 @@ impl Editor {
             frame: Rc::default(),
             footnote_preview: None,
             link_root: None,
-            link_files: Rc::from([]),
+            link_files: std::sync::Arc::from([]),
             table_source: None,
             pixel_scale: 1.,
             query: None,
@@ -517,7 +521,7 @@ impl Editor {
     pub(crate) fn set_link_files(
         &mut self,
         root: PathBuf,
-        files: Rc<[PathBuf]>,
+        files: std::sync::Arc<[PathBuf]>,
         cx: &mut Context<Self>,
     ) {
         self.link_root = Some(root);
@@ -526,13 +530,72 @@ impl Editor {
     }
 
     fn wiki_file(&self, destination: &str) -> Option<PathBuf> {
-        let root = self.link_root.as_ref()?;
-        let (name, _) = links::wiki_target(destination);
-        let document = self
-            .path()
-            .and_then(|path| path.strip_prefix(root).ok())
-            .unwrap_or(std::path::Path::new(""));
-        links::resolve_wiki(&name, document, &self.link_files).map(|file| root.join(file))
+        self.sources().wiki_file(destination)
+    }
+
+    /// Where this document's links and images lead from, for export.
+    fn sources(&self) -> crate::export::Sources {
+        crate::export::Sources {
+            document: self.document.path.clone(),
+            link_root: self.link_root.clone(),
+            link_files: self.link_files.clone(),
+        }
+    }
+
+    /// Asks where, then writes the document as a standalone HTML page.
+    fn export_html(&mut self, _: &ExportHtml, _: &mut Window, cx: &mut Context<Self>) {
+        let path = self.path();
+        let folder = path.and_then(std::path::Path::parent).map_or_else(
+            || std::env::current_dir().unwrap_or_default(),
+            PathBuf::from,
+        );
+        let stem = path.and_then(std::path::Path::file_stem).map_or_else(
+            || "Untitled".to_owned(),
+            |s| s.to_string_lossy().into_owned(),
+        );
+        let chosen = cx.prompt_for_new_path(&folder, Some(&format!("{stem}.html")));
+        let text = self.text().to_owned();
+        // The first heading names the page, or else the file.
+        let title = focal_core::outline::outline(&text)
+            .into_iter()
+            .next()
+            .map_or(stem, |heading| heading.title);
+        let sources = self.sources();
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(path))) = chosen.await else {
+                return;
+            };
+            let written = cx
+                .background_executor()
+                .spawn(async move { crate::export::write_page(&text, &title, &sources, &path) })
+                .await;
+            if let Err(error) = written {
+                this.update(cx, |this, cx| {
+                    this.show_error(format!("Could not export: {error:#}"), cx);
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    /// Copies the selection, or the whole document, as HTML and as text.
+    fn copy_html(&mut self, _: &CopyHtml, _: &mut Window, cx: &mut Context<Self>) {
+        let text = if self.selection.is_empty() {
+            self.text().to_owned()
+        } else {
+            self.text()[self.selection.clone()].to_owned()
+        };
+        let sources = self.sources();
+        let plain = text.clone();
+        let html = cx
+            .background_executor()
+            .spawn(async move { crate::export::html(&text, &sources, None) });
+        cx.spawn(async move |_, cx| {
+            let html = html.await;
+            cx.update(|_| crate::mac::copy_html(&html, &plain));
+        })
+        .detach();
     }
 
     /// Draws wiki links that lead nowhere yet in the marker color with a
@@ -1821,7 +1884,7 @@ impl Editor {
         let version = self.buffer.version();
         match self.document.save(self.buffer.text(), version) {
             Ok(()) => self.error = None,
-            Err(error) => self.error = Some(format!("{error:#}")),
+            Err(error) => self.error = Some(format!("Could not save: {error:#}")),
         }
         cx.notify();
     }
@@ -1902,7 +1965,7 @@ impl Editor {
         match document::read(&path) {
             Ok(text) => self.load_theirs(&text, Stamp::of(&path), cx),
             Err(error) => {
-                self.error = Some(format!("{error:#}"));
+                self.error = Some(format!("Could not reload: {error:#}"));
                 cx.notify();
             }
         }
@@ -2740,7 +2803,10 @@ impl Editor {
         }
         self.error.as_ref().map(|error| {
             banner(theme)
-                .child(format!("Could not save: {error}"))
+                .id("error-banner")
+                .test_support()
+                .aria_label(error.clone())
+                .child(error.clone())
                 .into_any_element()
         })
     }
@@ -3253,6 +3319,8 @@ impl Render for Editor {
             .on_action(cx.listener(Self::inline_code))
             .on_action(cx.listener(Self::insert_link))
             .on_action(cx.listener(Self::open_link))
+            .on_action(cx.listener(Self::export_html))
+            .on_action(cx.listener(Self::copy_html))
             .on_action(cx.listener(Self::set_heading))
             .on_action(cx.listener(Self::toggle_bullets))
             .on_action(cx.listener(Self::toggle_numbers))

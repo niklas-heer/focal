@@ -13,6 +13,8 @@ pub enum Embed<'a> {
     Diagram(&'a str),
     /// A wiki link's target name; the answer is the link's `href`.
     WikiLink(&'a str),
+    /// An image's source; the answer replaces it.
+    Image(&'a str),
 }
 
 /// `text` as an HTML fragment. `render` turns embeds into HTML (or an
@@ -82,6 +84,20 @@ pub fn to_html(text: &str, render: &mut dyn FnMut(Embed<'_>) -> Option<String>) 
                 events.push(Event::Start(Tag::Link {
                     link_type,
                     dest_url: href.into(),
+                    title,
+                    id,
+                }));
+            }
+            Event::Start(Tag::Image {
+                link_type,
+                dest_url,
+                title,
+                id,
+            }) => {
+                let source = render(Embed::Image(&dest_url)).map_or(dest_url, CowStr::from);
+                events.push(Event::Start(Tag::Image {
+                    link_type,
+                    dest_url: source,
                     title,
                     id,
                 }));
@@ -232,7 +248,7 @@ mod tests {
                     Embed::InlineMath(_) => "<svg>inline</svg>".into(),
                     Embed::DisplayMath(_) => "<svg>display</svg>".into(),
                     Embed::Diagram(_) => "<svg>diagram</svg>".into(),
-                    Embed::WikiLink(_) => return None,
+                    Embed::WikiLink(_) | Embed::Image(_) => return None,
                 })
             },
         );
@@ -292,5 +308,18 @@ mod tests {
             "{page}"
         );
         assert!(page.contains("<p>x</p>"), "{page}");
+    }
+
+    #[test]
+    fn image_sources_can_be_rewritten() {
+        let html = to_html(
+            "![a](pic.png) ![b](https://x/y.png)\n",
+            &mut |embed| match embed {
+                Embed::Image("pic.png") => Some("file:///notes/pic.png".into()),
+                _ => None,
+            },
+        );
+        assert!(html.contains(r#"src="file:///notes/pic.png""#), "{html}");
+        assert!(html.contains(r#"src="https://x/y.png""#), "{html}");
     }
 }

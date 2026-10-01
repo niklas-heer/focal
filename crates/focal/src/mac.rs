@@ -3,7 +3,7 @@
 use objc2::MainThreadMarker;
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSAlertStyle, NSAppearance,
-    NSApplication,
+    NSApplication, NSPasteboard,
 };
 use objc2_foundation::NSString;
 
@@ -118,6 +118,25 @@ pub fn confirm_discard(count: usize) -> bool {
     alert.addButtonWithTitle(&NSString::from_str("Cancel"));
     alert.addButtonWithTitle(&NSString::from_str("Discard and Quit"));
     alert.runModal() == NSAlertSecondButtonReturn
+}
+
+/// Puts `html` and its `plain` text on the general pasteboard, so rich text
+/// editors paste the HTML and others the text. Tests (off AppKit's main
+/// thread) leave the pasteboard alone.
+pub fn copy_html(html: &str, plain: &str) {
+    if MainThreadMarker::new().is_none() {
+        return;
+    }
+    let pasteboard = NSPasteboard::generalPasteboard();
+    pasteboard.clearContents();
+    pasteboard.setString_forType(
+        &NSString::from_str(html),
+        &NSString::from_str("public.html"),
+    );
+    pasteboard.setString_forType(
+        &NSString::from_str(plain),
+        &NSString::from_str("public.utf8-plain-text"),
+    );
 }
 
 /// The standard About panel, with the bundle's name, version and icon.

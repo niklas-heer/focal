@@ -784,8 +784,13 @@ fn a_larger_text_size_makes_lines_taller(cx: &mut TestAppContext) {
 fn a_folder_whose_newest_file_is_not_utf8_opens_a_savable_untitled(cx: &mut TestAppContext) {
     let root = crate::folder::tests::temp_folder("latin1");
     std::fs::write(root.join("latin1.md"), b"caf\xe9").unwrap();
-    let (_, workspace) = open_folder(cx, &root);
+    let (window, workspace) = open_folder(cx, &root);
     assert_eq!(current_title(cx, &workspace), "Untitled.md");
+    act(cx, window, |window, _| {
+        let banner = window.find("error-banner");
+        let label = banner.label().unwrap_or_default();
+        assert!(label.starts_with("Could not open"), "{label}");
+    });
     workspace.read_with(cx, |w, cx| {
         let editor = w.editor().read(cx);
         assert_eq!(editor.path(), Some(root.join("Untitled.md").as_path()));

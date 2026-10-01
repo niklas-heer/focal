@@ -7,6 +7,7 @@ mod cli_install;
 mod diagram;
 mod document;
 mod editor;
+mod export;
 mod find_bar;
 mod folder;
 mod grid;

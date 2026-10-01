@@ -160,7 +160,7 @@ impl Workspace {
         // the reason shown.
         let (opened, failure) = match newest.map(Document::open) {
             Some(Ok(opened)) => (Some(opened), None),
-            Some(Err(error)) => (None, Some(format!("{error:#}"))),
+            Some(Err(error)) => (None, Some(format!("Could not open: {error:#}"))),
             None => (None, None),
         };
         let (document, text) = opened

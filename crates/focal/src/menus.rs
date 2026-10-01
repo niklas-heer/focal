@@ -5,9 +5,9 @@ use gpui_kit::{App, Menu, MenuItem, OsAction, actions};
 
 use crate::cli_install::{InstallCommand, UninstallCommand};
 use crate::editor::{
-    Bold, CloseWindow, Copy, Cut, InlineCode, InsertCodeBlock, InsertLink, InsertMath, InsertTable,
-    Italic, OpenLink, Paste, Quit, Redo, Save, SelectAll, SetHeading, Strikethrough, ToggleBullets,
-    ToggleFocusMode, ToggleNumbers, ToggleQuote, ToggleTask, Undo,
+    Bold, CloseWindow, Copy, CopyHtml, Cut, ExportHtml, InlineCode, InsertCodeBlock, InsertLink,
+    InsertMath, InsertTable, Italic, OpenLink, Paste, Quit, Redo, Save, SelectAll, SetHeading,
+    Strikethrough, ToggleBullets, ToggleFocusMode, ToggleNumbers, ToggleQuote, ToggleTask, Undo,
 };
 use crate::find_bar::{Find, FindAndReplace, FindNext, FindPrevious};
 use crate::settings::OpenSettings;
@@ -55,6 +55,7 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::submenu(crate::recent::menu(cx)),
             MenuItem::separator(),
             MenuItem::action("Save", Save),
+            MenuItem::action("Export as HTML…", ExportHtml),
             MenuItem::action("Close Window", CloseWindow),
         ]),
         Menu::new("Edit").items([
@@ -63,6 +64,7 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::separator(),
             MenuItem::os_action("Cut", Cut, OsAction::Cut),
             MenuItem::os_action("Copy", Copy, OsAction::Copy),
+            MenuItem::action("Copy as HTML", CopyHtml),
             MenuItem::os_action("Paste", Paste, OsAction::Paste),
             MenuItem::os_action("Select All", SelectAll, OsAction::SelectAll),
             MenuItem::separator(),

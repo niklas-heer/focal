@@ -34,11 +34,11 @@ impl Engine {
         })
     }
 
-    fn typeset(&self, tex: &str) -> Result<String, String> {
+    fn typeset(&self, tex: &str, display: bool) -> Result<String, String> {
         self.context.with(|ctx| {
             let render: Function = ctx.globals().get("focalMath").map_err(|e| e.to_string())?;
             render
-                .call::<_, String>((tex, true))
+                .call::<_, String>((tex, display))
                 .map_err(|error| match error {
                     // MathJax throws its own error objects, which carry a message.
                     rquickjs::Error::Exception => ctx
@@ -52,17 +52,20 @@ impl Engine {
     }
 }
 
-fn worker() -> &'static mpsc::Sender<(String, Reply)> {
-    static WORKER: OnceLock<mpsc::Sender<(String, Reply)>> = OnceLock::new();
+/// A formula, whether it is display math, and where the result goes.
+type Job = (String, bool, Reply);
+
+fn worker() -> &'static mpsc::Sender<Job> {
+    static WORKER: OnceLock<mpsc::Sender<Job>> = OnceLock::new();
     WORKER.get_or_init(|| {
-        let (jobs, queue) = mpsc::channel::<(String, Reply)>();
+        let (jobs, queue) = mpsc::channel::<Job>();
         let spawned = std::thread::Builder::new()
             .name("focal-math".into())
             .spawn(move || {
                 let engine = Engine::new();
-                for (tex, reply) in queue {
+                for (tex, display, reply) in queue {
                     let result = match &engine {
-                        Ok(engine) => engine.typeset(&tex),
+                        Ok(engine) => engine.typeset(&tex, display),
                         Err(error) => Err(error.clone()),
                     };
                     let _ = reply.send(result);
@@ -79,8 +82,13 @@ fn worker() -> &'static mpsc::Sender<(String, Reply)> {
 /// thread; blocks until it is done, so call it from a background task. The
 /// worker never touches GPUI, which keeps UI tests deterministic.
 pub fn typeset(tex: &str) -> Result<String, String> {
+    typeset_as(tex, true)
+}
+
+/// Like [`typeset`], as display math or, with `display` false, inline.
+pub fn typeset_as(tex: &str, display: bool) -> Result<String, String> {
     let (reply, result) = mpsc::channel();
-    let _ = worker().send((tex.to_owned(), reply));
+    let _ = worker().send((tex.to_owned(), display, reply));
     result
         .recv()
         .unwrap_or_else(|_| Err("the typesetter stopped".into()))
