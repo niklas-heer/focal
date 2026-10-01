@@ -92,6 +92,13 @@ impl A11yDocument {
                     let cells = source.table_cells.get(table).map_or(&[][..], Vec::as_slice);
                     document.add_table(table, cells);
                 }
+                // An island is read as its source lines.
+                Row::Island(island) => {
+                    let lines = texts.iter().enumerate().take(island.end).skip(island.start);
+                    for (line, text) in lines {
+                        document.add_line(line, text);
+                    }
+                }
             }
         }
         document

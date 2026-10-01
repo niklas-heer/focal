@@ -241,6 +241,21 @@ pub fn bind_keys(cx: &mut App) {
 pub(crate) enum Row {
     Line(usize),
     Table(usize),
+    Island(Island),
+}
+
+/// A block drawn in place of its source lines while the caret is elsewhere.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct Island {
+    pub kind: IslandKind,
+    /// Its source lines, `start..end`.
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum IslandKind {
+    FrontMatter,
 }
 
 /// Everything derived from the text and caret, rebuilt after each change.
@@ -296,6 +311,7 @@ enum Vertical {
 enum Hit {
     Text { offset: usize },
     Table(usize),
+    Island(Island),
 }
 
 #[allow(clippy::struct_excessive_bools)]
@@ -445,6 +461,12 @@ impl Editor {
             editor.link_files = files.into();
         }
         editor.refresh();
+        // A document opens at its body, past any front matter.
+        let body = editor.body_start();
+        if body > 0 {
+            editor.selection = body..body;
+            editor.refresh();
+        }
         editor.watch_document(cx);
         editor
     }
@@ -747,6 +769,46 @@ impl Editor {
         })
     }
 
+    /// The rows of the list: lines, tables and islands, and each line's row.
+    fn rows(
+        &self,
+        analysis: &Analysis,
+        text: &str,
+        line_count: usize,
+        head: usize,
+    ) -> (Vec<Row>, Vec<usize>) {
+        let islands = crate::islands::islands(analysis, text);
+        let head_line = analysis.lines.line_of(head);
+        let mut rows = Vec::with_capacity(line_count);
+        let mut line_rows = Vec::with_capacity(line_count);
+        let mut line = 0;
+        while line < line_count {
+            if let Some(island) = islands.iter().find(|island| island.start == line)
+                && !(island.start..island.end).contains(&head_line)
+            {
+                for _ in island.start..island.end {
+                    line_rows.push(rows.len());
+                }
+                rows.push(Row::Island(*island));
+                line = island.end;
+            } else if let LineKind::Table(table) = analysis.info(line).kind
+                && self.table_source != Some(table)
+            {
+                let lines = analysis.tables[table].lines.clone();
+                for _ in lines.clone() {
+                    line_rows.push(rows.len());
+                }
+                rows.push(Row::Table(table));
+                line = lines.end;
+            } else {
+                line_rows.push(rows.len());
+                rows.push(Row::Line(line));
+                line += 1;
+            }
+        }
+        (rows, line_rows)
+    }
+
     fn refresh(&mut self) {
         let started = Instant::now();
         let version = self.buffer.version();
@@ -770,25 +832,7 @@ impl Editor {
             .map(|line| Rc::new(line_view(&analysis, text, line, Some(&caret))))
             .collect();
 
-        let mut rows = Vec::with_capacity(views.len());
-        let mut line_rows = Vec::with_capacity(views.len());
-        let mut line = 0;
-        while line < views.len() {
-            if let LineKind::Table(table) = analysis.info(line).kind
-                && self.table_source != Some(table)
-            {
-                let lines = analysis.tables[table].lines.clone();
-                for _ in lines.clone() {
-                    line_rows.push(rows.len());
-                }
-                rows.push(Row::Table(table));
-                line = lines.end;
-            } else {
-                line_rows.push(rows.len());
-                rows.push(Row::Line(line));
-                line += 1;
-            }
-        }
+        let (rows, line_rows) = self.rows(&analysis, text, views.len(), head);
 
         let focus = self.focus(&analysis, text);
         let keys: Vec<u64> = rows
@@ -808,6 +852,11 @@ impl Editor {
                     }
                     Row::Table(table) => {
                         text[analysis.tables[table].range.clone()].hash(&mut hasher);
+                    }
+                    Row::Island(island) => {
+                        let start = analysis.lines.range(island.start).start;
+                        let end = analysis.lines.range(island.end - 1).end;
+                        text[start..end].hash(&mut hasher);
                     }
                 }
                 hasher.finish()
@@ -1689,6 +1738,7 @@ impl Editor {
             })?;
         match row.row {
             Row::Table(table) => Some(Hit::Table(table)),
+            Row::Island(island) => Some(Hit::Island(island)),
             Row::Line(_) => {
                 let (layout, view) = (row.layout.as_ref()?, row.view.as_ref()?);
                 let display = display_index(layout, position);
@@ -1750,6 +1800,15 @@ impl Editor {
         if let Some(&Row::Table(table)) = target_row {
             return Vertical::Table(table);
         }
+        // Into an island: onto its last line from below, its first from above.
+        if let Some(&Row::Island(island)) = target_row {
+            let line = if direction < 0 {
+                island.end - 1
+            } else {
+                island.start
+            };
+            return Vertical::To(self.snapshot.analysis.lines.range(line).start);
+        }
         match find(target) {
             Some((layout, view)) => {
                 let bounds = layout.bounds();
@@ -1804,6 +1863,11 @@ impl Editor {
         let offset = match hit {
             Hit::Table(table) => {
                 self.edit_cell(table, 0, 0, window, cx);
+                return;
+            }
+            Hit::Island(island) => {
+                let entry = self.island_entry(island);
+                self.move_to(entry, cx);
                 return;
             }
             Hit::Text { offset } => offset,
@@ -2159,6 +2223,7 @@ impl Editor {
         let content = match row {
             Row::Line(line) => self.render_line(line, &theme, window, cx),
             Row::Table(table) => self.render_table(table, &theme, window, cx),
+            Row::Island(island) => self.render_island(island, &theme, cx),
         };
         div()
             .w_full()
@@ -2840,7 +2905,7 @@ impl EntityInputHandler for Editor {
     ) -> Option<usize> {
         match self.hit_test(point)? {
             Hit::Text { offset, .. } => Some(self.offset_to_utf16(offset)),
-            Hit::Table(_) => None,
+            Hit::Table(_) | Hit::Island(_) => None,
         }
     }
 }

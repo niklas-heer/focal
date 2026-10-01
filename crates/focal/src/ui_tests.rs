@@ -939,3 +939,39 @@ fn hovering_a_footnote_previews_it(cx: &mut TestAppContext) {
         assert_eq!(e.selection(), 16..16, "no jump without a note");
     });
 }
+
+const MATTER: &str = "---\ntitle: x\n---\n\nBody\n";
+
+#[gpui_kit::test]
+fn front_matter_is_collapsed_with_the_caret_in_the_body(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, MATTER);
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 18..18, "at the body"));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("front-matter").is_some());
+    });
+    act(cx, window, |window, cx| {
+        window.press("up", cx);
+        window.press("up", cx);
+    });
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.selection(), 13..13, "on its last line");
+    });
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find("front-matter").is_none(),
+            "the source shows"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn clicking_front_matter_shows_its_source(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, MATTER);
+    act(cx, window, |window, cx| window.click("front-matter", cx));
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.selection(), 4..4, "at the first field");
+    });
+    act(cx, window, |window, _| {
+        assert!(window.try_find("front-matter").is_none());
+    });
+}

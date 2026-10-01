@@ -10,6 +10,7 @@ mod folder;
 mod grid;
 mod highlight;
 mod instance;
+mod islands;
 mod mac;
 mod menus;
 mod prefix;
