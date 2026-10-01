@@ -37,7 +37,12 @@ pub(crate) fn islands(analysis: &Analysis, text: &str) -> Vec<Island> {
             end: block.lines.end,
         });
     }
-    for line in 0..analysis.line_count() {
+    // Only lines that hold an image can be image islands.
+    for line in analysis
+        .images
+        .iter()
+        .map(|image| analysis.lines.line_of(image.range.start))
+    {
         if block_image(analysis, text, line).is_some() {
             islands.push(Island {
                 kind: IslandKind::Image,
