@@ -14,6 +14,15 @@ use crate::settings::Settings;
 use crate::workspace::Workspace;
 
 pub fn open_workspace(cx: &mut TestAppContext, text: &str) -> (AnyWindowHandle, Entity<Workspace>) {
+    open_document(cx, Document::untitled(), text)
+}
+
+/// A window showing `document`, whose text is `text`.
+pub fn open_document(
+    cx: &mut TestAppContext,
+    document: Document,
+    text: &str,
+) -> (AnyWindowHandle, Entity<Workspace>) {
     let text = text.to_owned();
     cx.update(|cx| {
         gpui_kit::init(cx);
@@ -31,7 +40,7 @@ pub fn open_workspace(cx: &mut TestAppContext, text: &str) -> (AnyWindowHandle, 
             ..WindowOptions::default()
         };
         gpui_kit::open_window(options, cx, |window, cx| {
-            let workspace = cx.new(|cx| Workspace::new(Document::untitled(), text, window, cx));
+            let workspace = cx.new(|cx| Workspace::new(document, text, window, cx));
             Workspace::focus_editor(&workspace, window, cx);
             workspace
         })
@@ -1234,4 +1243,28 @@ fn emptied_untitled_text_closes_without_asking(cx: &mut TestAppContext) {
         window.press("backspace", cx);
     });
     editor.read_with(cx, |e, _| assert!(!e.asks_before_closing()));
+}
+
+#[gpui_kit::test]
+fn edits_that_conflict_with_the_disk_are_not_closed_without_asking(cx: &mut TestAppContext) {
+    let dir = std::env::temp_dir().join(format!("focal-conflict-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("note.md");
+    std::fs::write(&path, "mine").unwrap();
+    let (document, text) = Document::open(path.clone()).unwrap();
+    let (window, workspace) = open_document(cx, document, &text);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    act(cx, window, |window, cx| {
+        window.press("cmd-down", cx);
+        window.input(" and more", cx);
+    });
+    // Another program writes the file before Focal saved the edit.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(&path, "theirs").unwrap();
+    editor.update(cx, |e, cx| e.check_disk(cx));
+    editor.read_with(cx, |e, _| assert!(e.asks_before_closing()));
+    act(cx, window, |window, cx| window.press("cmd-w", cx));
+    cx.run_until_parked();
+    assert_eq!(cx.update(|cx| cx.windows().len()), 1, "the window stays");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "theirs");
 }

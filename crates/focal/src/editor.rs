@@ -37,7 +37,7 @@ use gpui_kit::{
 
 use crate::accessibility::{A11yDocument, A11ySource, RunIds};
 use crate::document::{self, Document, Stamp};
-use crate::mac::SaveAnswer;
+use crate::mac::{CloseQuestion, SaveAnswer};
 use crate::settings::{FocusUnit, Settings};
 use crate::spell::SpellChecker;
 use crate::theme::{BOLD_PROSE_FONT, DIMMED, MONO_FONT, PROSE_FONT, Theme, Typography};
@@ -1647,25 +1647,45 @@ impl Editor {
         .detach();
     }
 
-    /// Whether closing would lose text: an untitled document with unsaved
-    /// edits that leave some text.
-    pub(crate) fn asks_before_closing(&self) -> bool {
-        self.document.path.is_none() && self.dirty() && !self.text().is_empty()
+    /// Why closing would lose text, if it would: an untitled document with
+    /// unsaved edits that leave some text, or edits made while the file
+    /// changed on disk (which are not saved over it without asking).
+    fn close_question(&self) -> Option<CloseQuestion> {
+        if !self.dirty() {
+            None
+        } else if self.conflict {
+            Some(CloseQuestion::Conflict)
+        } else if self.document.path.is_none() && !self.text().is_empty() {
+            Some(CloseQuestion::Untitled)
+        } else {
+            None
+        }
     }
 
-    /// Saves, then tells whether the window may close now. Untitled text
-    /// with unsaved edits asks first (Save…, Cancel, Don't Save) and closes
-    /// the window itself once answered.
+    pub(crate) fn asks_before_closing(&self) -> bool {
+        self.close_question().is_some()
+    }
+
+    /// Saves, then tells whether the window may close now. Text that would
+    /// be lost (see [`Self::close_question`]) asks first and closes the window
+    /// itself once answered.
     fn may_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if !self.asks_before_closing() {
+        let Some(question) = self.close_question() else {
             self.save_now(cx);
             return true;
-        }
+        };
         let title = self.title();
         cx.spawn_in(window, async move |this, cx| {
-            match crate::mac::ask_to_save(&title) {
+            match crate::mac::ask_on_close(question, &title) {
                 SaveAnswer::Save => this
-                    .update_in(cx, |this, window, cx| this.save_as(true, window, cx))
+                    .update_in(cx, |this, window, cx| {
+                        if question == CloseQuestion::Conflict {
+                            this.keep_mine(cx);
+                            window.remove_window();
+                        } else {
+                            this.save_as(true, window, cx);
+                        }
+                    })
                     .ok(),
                 SaveAnswer::DontSave => cx.update(|window, _| window.remove_window()).ok(),
                 SaveAnswer::Cancel => None,
@@ -1827,7 +1847,7 @@ impl Editor {
 
     /// Reloads the file when it changed on disk. With unsaved local edits,
     /// it asks instead of choosing a side.
-    fn check_disk(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn check_disk(&mut self, cx: &mut Context<Self>) {
         let Some(path) = self.document.path.clone() else {
             return;
         };
