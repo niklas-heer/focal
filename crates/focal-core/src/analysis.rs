@@ -184,13 +184,15 @@ pub enum Reveal {
 pub enum Replacement {
     AlertTitle(Alert),
     Label(String),
+    /// Inline math written in Unicode.
+    Math(String),
 }
 
 impl Replacement {
     pub fn text(&self) -> String {
         match self {
             Self::AlertTitle(alert) => format!("{} {}", alert.icon(), alert.title()),
-            Self::Label(label) => label.clone(),
+            Self::Label(label) | Self::Math(label) => label.clone(),
         }
     }
 
@@ -198,6 +200,7 @@ impl Replacement {
         match self {
             Self::AlertTitle(_) => InlineStyle::ALERT_TITLE,
             Self::Label(_) => InlineStyle::LABEL,
+            Self::Math(_) => InlineStyle::MATH,
         }
     }
 }
@@ -544,7 +547,21 @@ impl<'a> Builder<'a> {
                     .count();
                 self.wrap(range, ticks, ticks, InlineStyle::CODE);
             }
-            Event::InlineMath(_) => self.wrap(range, 1, 1, InlineStyle::MATH),
+            Event::InlineMath(tex) => {
+                self.wrap(range, 1, 1, InlineStyle::MATH);
+                // Away from the caret, the TeX reads as Unicode where it can.
+                let inner = range.start + 1..range.end - 1;
+                if let Some(text) = crate::texmath::tex_to_unicode(tex)
+                    && text != tex.as_ref()
+                    && !inner.is_empty()
+                {
+                    self.markers.push(Marker {
+                        range: inner,
+                        reveal: Reveal::Touching(range.clone()),
+                        replacement: Some(Replacement::Math(text)),
+                    });
+                }
+            }
             Event::DisplayMath(tex) => {
                 self.wrap(range, 2, 2, InlineStyle::MATH);
                 self.display_math.push((range.clone(), tex.to_string()));
@@ -1125,6 +1142,22 @@ mod tests {
         let text = "a ==mark== and $x$\n";
         let analysis = analyze(text);
         assert_eq!(marker_texts(text, &analysis), ["==", "==", "$", "$"]);
+    }
+
+    #[test]
+    fn inline_math_reads_as_unicode_away_from_the_caret() {
+        use crate::display::{Caret, line_view};
+        let text = "Euler: $e^{i\\pi} + 1 = 0$ and $\\begin{x}$.\n";
+        let analysis = analyze(text);
+        assert_eq!(
+            line_view(&analysis, text, 0, None).text,
+            "Euler: e^(iπ) + 1 = 0 and \\begin{x}."
+        );
+        let caret = Caret::new(&analysis, 9..9, 9);
+        assert_eq!(
+            line_view(&analysis, text, 0, Some(&caret)).text,
+            "Euler: $e^{i\\pi} + 1 = 0$ and \\begin{x}."
+        );
     }
 
     #[test]

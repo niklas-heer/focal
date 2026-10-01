@@ -17,6 +17,7 @@ pub mod fuzzy;
 mod lines;
 pub mod links;
 pub mod table;
+pub mod texmath;
 pub mod text_stats;
 
 pub use analysis::{Analysis, Bias, LinePrefix, ListMarker, PrefixLevel, analyze};
