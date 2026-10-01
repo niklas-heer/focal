@@ -467,3 +467,103 @@ mod tests {
         assert!(out.contains("font-family: Helvetica Neue"), "{out}");
     }
 }
+#[cfg(test)]
+mod corpus {
+    use super::*;
+
+    /// One small diagram of each Mermaid type.
+    const CORPUS: &[(&str, &str)] = &[
+        (
+            "flowchart",
+            "flowchart LR\n  A[Start] --> B{Ok?}\n  B -->|yes| C\n  B -->|no| D",
+        ),
+        (
+            "sequence",
+            "sequenceDiagram\n  Alice->>Bob: Hi\n  Bob-->>Alice: Hello",
+        ),
+        (
+            "class",
+            "classDiagram\n  Animal <|-- Duck\n  Animal : +int age",
+        ),
+        (
+            "state",
+            "stateDiagram-v2\n  [*] --> Still\n  Still --> Moving\n  Moving --> [*]",
+        ),
+        ("er", "erDiagram\n  CUSTOMER ||--o{ ORDER : places"),
+        (
+            "journey",
+            "journey\n  title My day\n  section Work\n    Write: 5: Me",
+        ),
+        (
+            "gantt",
+            "gantt\n  title Plan\n  dateFormat YYYY-MM-DD\n  section A\n  Task :a1, 2026-01-01, 3d",
+        ),
+        ("pie", "pie title Pets\n  \"Dogs\" : 3\n  \"Cats\" : 2"),
+        (
+            "quadrant",
+            "quadrantChart\n  title Reach\n  x-axis Low --> High\n  y-axis Low --> High\n  A: [0.3, 0.6]",
+        ),
+        (
+            "requirement",
+            "requirementDiagram\n  requirement r1 {\n    id: 1\n    text: the text\n    risk: high\n    verifymethod: test\n  }",
+        ),
+        (
+            "gitgraph",
+            "gitGraph\n  commit\n  branch dev\n  commit\n  checkout main\n  merge dev",
+        ),
+        (
+            "c4",
+            "C4Context\n  Person(user, \"User\")\n  System(app, \"Focal\")\n  Rel(user, app, \"Writes\")",
+        ),
+        ("mindmap", "mindmap\n  root((Focal))\n    Write\n    Read"),
+        (
+            "timeline",
+            "timeline\n  title History\n  2025 : Idea\n  2026 : Focal",
+        ),
+        ("sankey", "sankey-beta\n  A,B,10\n  B,C,5"),
+        (
+            "xychart",
+            "xychart-beta\n  x-axis [a, b, c]\n  bar [1, 3, 2]",
+        ),
+        ("block", "block-beta\n  columns 2\n  a b"),
+        (
+            "packet",
+            "packet-beta\n  0-15: \"Source Port\"\n  16-31: \"Destination Port\"",
+        ),
+        (
+            "kanban",
+            "kanban\n  Todo\n    [Write docs]\n  Done\n    [Ship]",
+        ),
+        (
+            "architecture",
+            "architecture-beta\n  service api(server)[API]\n  service db(database)[DB]\n  api:R --> L:db",
+        ),
+        ("radar", "radar-beta\n  axis a, b, c\n  curve x{1, 2, 3}"),
+        (
+            "treemap",
+            "treemap-beta\n  \"Root\"\n    \"A\": 10\n    \"B\": 20",
+        ),
+    ];
+
+    #[test]
+    fn every_mermaid_diagram_type_draws() {
+        let palette = Palette {
+            canvas: "#ffffff".into(),
+            surface: "#eeeeee".into(),
+            text: "#222222".into(),
+            line: "#888888".into(),
+            series: vec!["#4a7fd6".into()],
+        };
+        let failed: Vec<String> = CORPUS
+            .iter()
+            .filter_map(
+                |(name, source)| match render(DiagramLanguage::Mermaid, source, &palette) {
+                    Ok(svg) if svg_size(&svg).is_some() => None,
+                    Ok(_) => Some(format!("{name}: no size")),
+                    Err(error) => Some(format!("{name}: {error}")),
+                },
+            )
+            .collect();
+        assert!(failed.is_empty(), "{failed:#?}");
+    }
+}

@@ -246,15 +246,15 @@ Raw HTML: CommonMark and GFM pass HTML through untouched, as blocks and inline; 
 
 | Language | Seen in | Focal |
 | --- | --- | --- |
-| `mermaid` | GitHub, GitLab, Obsidian, Docusaurus, Typora | Built (M5, merman); M10: every diagram type merman draws, checked against a corpus. |
-| `dot`, `graphviz` | GitLab (Kroki), Hugo, Pandoc filters | M10: drawn natively; `dot` when installed. |
-| `plantuml`, `puml` | GitLab, MkDocs, Confluence exports | M10: `plantuml` when installed, otherwise source with a note. |
-| `d2` | Terrastruct, docs sites | M10: `d2` when installed. |
-| `svgbob`, `bob` | Kroki, mdBook | M10: drawn natively. |
-| `pikchr` | Fossil, Kroki | M10: drawn natively. |
-| `wavedrom` | Kroki, hardware docs | M10: drawn in QuickJS. |
-| `geojson`, `topojson` | GitHub | M10: drawn as an outline map. |
-| `vega`, `vega-lite` | Kroki, Jupyter | M10: drawn in QuickJS if it fits, otherwise source with a note. |
+| `mermaid` | GitHub, GitLab, Obsidian, Docusaurus, Typora | Built (M5, M10): all 22 diagram types, checked by a test. |
+| `dot`, `graphviz` | GitLab (Kroki), Hugo, Pandoc filters | Built (M10): `dot` when installed, otherwise natively (`layout-rs`). |
+| `plantuml`, `puml` | GitLab, MkDocs, Confluence exports | Built (M10): `plantuml` when installed, otherwise a code block. |
+| `d2` | Terrastruct, docs sites | Built (M10): `d2` when installed, otherwise a code block. |
+| `svgbob`, `bob` | Kroki, mdBook | Built (M10), natively. |
+| `pikchr` | Fossil, Kroki | Built (M10), natively. |
+| `wavedrom` | Kroki, hardware docs | Built (M10), natively (`wavedrom`). |
+| `geojson`, `topojson` | GitHub | Built (M10): an outline map, no tiles or network. |
+| `vega`, `vega-lite` | Kroki, Jupyter | Not yet: stays a code block (Vega needs a browser canvas to measure text). |
 | `stl` | GitHub | Later: a still render. |
 
 ## 8. Milestones (Proposed)
@@ -271,6 +271,7 @@ Raw HTML: CommonMark and GFM pass HTML through untouched, as blocks and inline; 
 | **M7 — Everyday editing** | Done: find and replace with a find bar, New, Open… and Open Recent, and asking before untitled text is lost. |
 | **M8 — Outline and sharing** | Done: Go to Heading, Export as HTML…, Copy as HTML. |
 | **M9 — Dialects** | Done: math in every notation, callouts in every style, TOML and JSON front matter, Pandoc and Markdown Extra extensions, Obsidian syntax, emoji shortcodes, tables of contents, README-style HTML, and any encoding; see section 7a. |
+| **M10 — Diagrams** | Done: Graphviz, Svgbob, Pikchr, WaveDrom, GeoJSON and TopoJSON natively, D2 and PlantUML through their tools, all Mermaid types; every drawing in Focal's palette; see section 7a. |
 
 Each milestone gets its own implementation plan before work starts.
 
