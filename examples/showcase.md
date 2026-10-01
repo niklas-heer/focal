@@ -61,7 +61,8 @@ fn main() {
 |:--------|:------:|------:|
 | Live rendering | **works** | markers hide |
 | Tables | grid | click a cell to edit it |
-| Mermaid | later | M5 |
+| Mermaid | drawn | natively, no web view |
+| Find | ⌘F | replace with ⌥⌘F |
 
 Tab and Return move between cells, a right-click shows row and column actions, and the handles drag rows and columns. A wide table scrolls sideways:
 
