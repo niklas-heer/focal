@@ -201,6 +201,62 @@ Built in M4 unless marked otherwise.
 | Wiki links | `[[name]]` and `[[name\|label]]` resolve to files in the open folder (or beside a single file), without regard to case, same folder first; unresolved links are drawn quietly; ⌘-click or ⌘↩ opens or creates (`<name>.md`, written on first save). Relative Markdown links and `#heading` anchors follow too; ⌘[ goes back. |
 | Images | An image alone on its line is an island scaled to the column; with the caret on the line the source shows with the image below. Relative paths resolve against the document; remote images are downloaded once in the background into `~/Library/Caches/Focal/images`. |
 
+## 7a. Compatibility (Agreed goal, Proposed details)
+
+**Agreed (2026-10-01):** Focal is compatible with the Markdown that is out there. Whatever a file was written for (GitHub, GitLab, Obsidian, Pandoc, MkDocs, Docusaurus, VitePress, Jekyll or Hugo, MultiMarkdown, an LLM's answer), opening it gives something nice to work with, and its diagrams draw.
+
+Principles:
+
+- **Read every dialect, write only what is there.** Compatibility never rewrites the file; constructs are recognized where they stand.
+- **Nothing breaks.** A construct Focal does not render shows its source quietly, never garbled output; an unknown diagram language shows its source with a note.
+- **Same dialect everywhere.** The editor, Go to Heading, Export as HTML and Copy as HTML recognize the same constructs.
+- **Native first** still holds: renderers run in Focal (Rust, or JavaScript in the embedded QuickJS); tools the user installed (`dot`, `plantuml`, `d2`) are used when present; no web views, and no network services unless the user opts in.
+
+### Dialects (Milestone 9)
+
+| Construct | Seen in | Focal |
+| --- | --- | --- |
+| CommonMark core, tables, task lists, strikethrough, autolinks, footnotes, alerts `> [!NOTE]` | CommonMark, GFM | Built (M1 to M4). |
+| Raw HTML | everywhere | See below. |
+| Math `$…$`, `$$…$$` | GitHub, GitLab, Obsidian, Typora, Pandoc | Built (M4). |
+| Math `\(…\)`, `\[…\]` | MathJax, Pandoc, LLM answers | M9: as math. |
+| Math fences `` ```math `` and `` $`…`$ `` | GitHub, GitLab | M9: as math. |
+| Callouts `> [!type] Title`, any type, `+`/`-` folding | Obsidian, GitHub (five types) | M9: every type, mapped to the five colors, custom titles. |
+| Containers `::: type Title` … `:::` | Docusaurus, VitePress, Pandoc fenced divs, markdown-it | M9: as callouts. |
+| Admonitions `!!! type "Title"` with indented body, `???` collapsible | MkDocs, Python-Markdown | M9: as callouts. |
+| `>>>` multi-line quotes | GitLab | M9: as quotes. |
+| Front matter YAML `---`, TOML `+++`, JSON `;;;` / `{…}` | Jekyll, Hugo, Zola, GitLab | YAML built (M4); M9: TOML and JSON. |
+| Definition lists | PHP Markdown Extra, Pandoc, GitLab, kramdown | M9. |
+| Superscript `^x^` | Pandoc, MultiMarkdown, markdown-it | M9. Subscript `~x~` stays strikethrough, as on GitHub. |
+| Heading attributes `{#id .class}` | Pandoc, kramdown, Markdown Extra | M9: hidden away from the caret. |
+| Abbreviations `*[HTML]: …` | Markdown Extra, MultiMarkdown, kramdown | M9: quiet lines. |
+| Wiki links `[[note#heading\|alias]]`, embeds `![[image.png]]`, `![[note]]` | Obsidian, Foam, Logseq | Links built (M4); M9: image embeds as images, note embeds as links. |
+| Comments `%%…%%`, `<!-- … -->` | Obsidian, HTML | M9: quiet. |
+| Tags `#tag/sub` | Obsidian, Bear | M9: styled. |
+| Emoji shortcodes `:tada:` | GitHub, GitLab, Slack | M9: shown as emoji away from the caret. |
+| Table of contents `[TOC]`, `[[_TOC_]]`, `[[toc]]`, `{:toc}` | GitLab, Markdown Extra, kramdown, VitePress | M9: drawn as the outline. |
+| Pandoc grid and simple tables, line blocks | Pandoc | Shown as monospaced source (later: grids). |
+| Template syntax `{{< … >}}`, `{% … %}`, MDX `import`/JSX | Hugo, Jekyll, MDX | Shown quietly as source. |
+| Encodings: UTF-8 with BOM, UTF-16, legacy 8-bit (Windows-1252) | older files, Windows | M9: detected and kept on save. |
+| Line endings LF, CRLF, CR | all | LF and CRLF built; M9: CR. |
+
+Raw HTML: CommonMark and GFM pass HTML through untouched, as blocks and inline; GFM's "tagfilter" extension escapes nine tags that could break a page (`title`, `textarea`, `style`, `xmp`, `iframe`, `noembed`, `noframes`, `script`, `plaintext`); GitHub and GitLab then sanitize the result with an allow-list (GitLab adds `span`, `abbr`, `details` and `summary`); Obsidian and Typora render HTML in their previews; Pandoc passes it through to HTML output. Focal (M9): the editor never runs HTML. It shows comments quietly, draws an `<img>` that stands alone as an image, styles inline formatting tags (`b`, `strong`, `i`, `em`, `u`, `ins`, `s`, `del`, `mark`, `kbd`, `sub`, `sup`, `code`, `br`, `a`) with the tags hidden away from the caret, hides layout wrappers (`<p align>`, `<div align>`, `<center>`) and shows `<details>`/`<summary>` as a titled block; other HTML stays quiet source. Export passes HTML through like CommonMark, with GFM's tagfilter applied.
+
+### Diagrams (Milestone 10)
+
+| Language | Seen in | Focal |
+| --- | --- | --- |
+| `mermaid` | GitHub, GitLab, Obsidian, Docusaurus, Typora | Built (M5, merman); M10: every diagram type merman draws, checked against a corpus. |
+| `dot`, `graphviz` | GitLab (Kroki), Hugo, Pandoc filters | M10: drawn natively; `dot` when installed. |
+| `plantuml`, `puml` | GitLab, MkDocs, Confluence exports | M10: `plantuml` when installed, otherwise source with a note. |
+| `d2` | Terrastruct, docs sites | M10: `d2` when installed. |
+| `svgbob`, `bob` | Kroki, mdBook | M10: drawn natively. |
+| `pikchr` | Fossil, Kroki | M10: drawn natively. |
+| `wavedrom` | Kroki, hardware docs | M10: drawn in QuickJS. |
+| `geojson`, `topojson` | GitHub | M10: drawn as an outline map. |
+| `vega`, `vega-lite` | Kroki, Jupyter | M10: drawn in QuickJS if it fits, otherwise source with a note. |
+| `stl` | GitHub | Later: a still render. |
+
 ## 8. Milestones (Proposed)
 
 | Milestone | Outcome |
