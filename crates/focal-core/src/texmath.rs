@@ -303,7 +303,7 @@ fn double_struck(c: char) -> Option<char> {
     })
 }
 
-fn superscript_of(c: char) -> Option<char> {
+pub(crate) fn superscript_of(c: char) -> Option<char> {
     Some(match c {
         '0' => '⁰',
         '1' => '¹',

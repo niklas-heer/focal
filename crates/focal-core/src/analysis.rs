@@ -7,8 +7,7 @@
 use std::ops::{BitOr, BitOrAssign, Range};
 
 use pulldown_cmark::{
-    Alignment, BlockQuoteKind, CodeBlockKind, Event, HeadingLevel, LinkType, MetadataBlockKind,
-    Options, Parser, Tag,
+    Alignment, BlockQuoteKind, CodeBlockKind, Event, HeadingLevel, LinkType, Options, Parser, Tag,
 };
 
 use crate::lines::LineIndex;
@@ -396,6 +395,10 @@ pub(crate) const fn options() -> Options {
         .union(Options::ENABLE_MATH)
         .union(Options::ENABLE_GFM)
         .union(Options::ENABLE_WIKILINKS)
+        // TOML front matter (Hugo, Zola), and Pandoc and Markdown Extra.
+        .union(Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS)
+        .union(Options::ENABLE_DEFINITION_LIST)
+        .union(Options::ENABLE_HEADING_ATTRIBUTES)
 }
 
 /// Analyzes the whole text. Parsing is fast enough to run after every edit.
@@ -449,6 +452,10 @@ enum ContainerKind {
     Quote(Option<Alert>),
     Item {
         marker: ListMarker,
+        marker_range: Range<usize>,
+    },
+    /// A definition in a definition list; `marker_range` is its `: `.
+    Definition {
         marker_range: Range<usize>,
     },
 }
@@ -630,7 +637,22 @@ impl<'a> Builder<'a> {
             Tag::Strong => self.markers_around(&range, content, InlineStyle::STRONG),
             Tag::Strikethrough => self.markers_around(&range, content, InlineStyle::STRIKETHROUGH),
             Tag::Superscript | Tag::Subscript => {
-                self.markers_around(&range, content, InlineStyle::NONE);
+                self.markers_around(&range, content.clone(), InlineStyle::NONE);
+                // Away from the caret, superscript reads raised when every
+                // character has a Unicode superscript.
+                if let Some(content) = content
+                    && matches!(frame.tag, Tag::Superscript)
+                    && let Some(raised) = self.text[content.clone()]
+                        .chars()
+                        .map(crate::texmath::superscript_of)
+                        .collect::<Option<String>>()
+                {
+                    self.markers.push(Marker {
+                        range: content,
+                        reveal: Reveal::Touching(range.clone()),
+                        replacement: Some(Replacement::Math(raised)),
+                    });
+                }
             }
             Tag::Link {
                 link_type,
@@ -674,7 +696,12 @@ impl<'a> Builder<'a> {
             Tag::Heading { level, .. } => self.heading(&range, content, level),
             Tag::Item => self.item(&range, content.as_ref(), frame.task.as_ref()),
             Tag::CodeBlock(kind) => self.code_block(&range, content, &kind),
-            Tag::MetadataBlock(MetadataBlockKind::YamlStyle) => self.front_matter(&range),
+            Tag::MetadataBlock(_) => self.front_matter(&range),
+            Tag::DefinitionListTitle => {
+                let title = self.trim_line_ending(&range);
+                self.style(title, InlineStyle::STRONG);
+            }
+            Tag::DefinitionListDefinition => self.definition(&range),
             Tag::HtmlBlock => {
                 for line in self.lines.lines_of(&range) {
                     self.infos[line].kind = LineKind::Html;
@@ -863,6 +890,26 @@ impl<'a> Builder<'a> {
         });
     }
 
+    /// A definition list's definition, `: text`: the colon is a hidden prefix
+    /// and the text hangs indented.
+    fn definition(&mut self, range: &Range<usize>) {
+        let bytes = self.text.as_bytes();
+        let line_end = self.lines.range(self.lines.line_of(range.start)).end;
+        let mut end = range.start;
+        if end < line_end && matches!(bytes[end], b':' | b'~') {
+            end += 1;
+        }
+        while end < line_end && matches!(bytes[end], b' ' | b'\t') {
+            end += 1;
+        }
+        self.containers.push(Container {
+            range: self.trim_line_ending(range),
+            kind: ContainerKind::Definition {
+                marker_range: range.start..end,
+            },
+        });
+    }
+
     fn code_block(
         &mut self,
         range: &Range<usize>,
@@ -980,6 +1027,15 @@ impl<'a> Builder<'a> {
                         infos[line].prefix.levels.push(PrefixLevel::Quote(*alert));
                     }
                 }
+                ContainerKind::Definition { marker_range } => {
+                    for line in lines {
+                        let prefix = &mut infos[line].prefix;
+                        prefix.levels.push(PrefixLevel::List(None));
+                        if line == self.lines.line_of(marker_range.start) {
+                            prefix.content_start = marker_range.end;
+                        }
+                    }
+                }
                 ContainerKind::Item {
                     marker,
                     marker_range,
@@ -1022,6 +1078,7 @@ impl<'a> Builder<'a> {
             &mut markers,
             &mut styles,
         );
+        apply_inline_extras(self.text, &self.lines, &infos, &mut markers, &mut styles);
         let line_markers = bucket(&self.lines, count, markers.iter().map(|m| &m.range));
         let line_styles = bucket(&self.lines, count, styles.iter().map(|s| &s.range));
         Analysis {
@@ -1139,6 +1196,91 @@ fn apply_callouts(
             }
         }
     }
+}
+
+/// Pandoc and Markdown Extra syntax `pulldown-cmark` does not read in
+/// words: superscript `^x^` (also `2^10^`), and abbreviation definitions
+/// `*[HTML]: …`, which are quiet.
+fn apply_inline_extras(
+    text: &str,
+    lines: &LineIndex,
+    infos: &[LineInfo],
+    markers: &mut Vec<Marker>,
+    styles: &mut Vec<StyleSpan>,
+) {
+    let covered = |styles: &[StyleSpan], at: usize| {
+        styles.iter().any(|s| {
+            s.range.start <= at
+                && at < s.range.end
+                && (s.style.contains(InlineStyle::CODE)
+                    || s.style.contains(InlineStyle::MATH)
+                    || s.style.contains(InlineStyle::HTML))
+        })
+    };
+    for (line, info) in infos.iter().enumerate() {
+        if !matches!(info.kind, LineKind::Text | LineKind::Heading(_)) {
+            continue;
+        }
+        let range = lines.range(line);
+        let source = &text[range.clone()];
+        let content = source.trim_start();
+        if content.starts_with("*[") && content.contains("]:") {
+            styles.push(StyleSpan {
+                range: range.start + (source.len() - content.len())..range.end,
+                style: InlineStyle::HTML,
+            });
+            continue;
+        }
+        for (open, close) in superscripts(source) {
+            let (open, close) = (range.start + open, range.start + close);
+            if covered(styles, open) {
+                continue;
+            }
+            let outer = open..close + 1;
+            for marker in [open..open + 1, close..close + 1] {
+                markers.push(Marker {
+                    range: marker,
+                    reveal: Reveal::Touching(outer.clone()),
+                    replacement: None,
+                });
+            }
+            let inner = open + 1..close;
+            if let Some(raised) = text[inner.clone()]
+                .chars()
+                .map(crate::texmath::superscript_of)
+                .collect::<Option<String>>()
+            {
+                markers.push(Marker {
+                    range: inner,
+                    reveal: Reveal::Touching(outer),
+                    replacement: Some(Replacement::Math(raised)),
+                });
+            }
+        }
+    }
+}
+
+/// The `^` pairs around superscripts in `line`: no spaces or brackets
+/// inside, and not a footnote's `[^`.
+pub(crate) fn superscripts(line: &str) -> Vec<(usize, usize)> {
+    let bytes = line.as_bytes();
+    let mut found = Vec::new();
+    let mut at = 0;
+    while let Some(open) = line[at..].find('^').map(|ix| ix + at) {
+        at = open + 1;
+        if open > 0 && matches!(bytes[open - 1], b'[' | b'\\') {
+            continue;
+        }
+        let Some(close) = line[open + 1..].find('^').map(|ix| ix + open + 1) else {
+            break;
+        };
+        let inner = &line[open + 1..close];
+        if !inner.is_empty() && !inner.contains([' ', '\t', '[', ']']) {
+            found.push((open, close));
+            at = close + 1;
+        }
+    }
+    found
 }
 
 /// Clips each range to the lines it touches.
@@ -1577,5 +1719,89 @@ mod tests {
         let analysis = analyze(text);
         assert_eq!(analysis.info(1).prefix.levels, [PrefixLevel::Block(None)]);
         assert_eq!(marker_texts(text, &analysis), [">>>", ">>>"]);
+    }
+
+    #[test]
+    fn toml_front_matter_is_front_matter() {
+        let analysis = analyze("+++\ntitle = \"Hi\"\n+++\n\nBody\n");
+        assert_eq!(analysis.infos[0].kind, LineKind::FrontMatterFence);
+        assert_eq!(analysis.infos[1].kind, LineKind::FrontMatter);
+        assert_eq!(analysis.infos[2].kind, LineKind::FrontMatterFence);
+    }
+
+    #[test]
+    fn gitlab_json_front_matter_is_front_matter() {
+        let analysis = analyze(";;;\n{ \"title\": \"Hi\" }\n;;;\n\nBody\n");
+        assert_eq!(analysis.infos[0].kind, LineKind::FrontMatterFence);
+        assert_eq!(analysis.infos[1].kind, LineKind::FrontMatter);
+    }
+
+    #[test]
+    fn superscript_reads_raised_away_from_the_caret() {
+        let text = "x^2^ and m^th^";
+        let analysis = analyze(text);
+        let replacements: Vec<String> = analysis
+            .markers
+            .iter()
+            .filter_map(|m| m.replacement.as_ref().map(Replacement::text))
+            .collect();
+        assert_eq!(replacements, ["²", "ᵗʰ"]);
+        assert!(marker_texts(text, &analysis).contains(&"^"));
+    }
+
+    #[test]
+    fn tildes_stay_strikethrough() {
+        let text = "~gone~";
+        assert!(
+            analyze(text)
+                .styles
+                .iter()
+                .any(|s| s.style.contains(InlineStyle::STRIKETHROUGH))
+        );
+    }
+
+    #[test]
+    fn definition_lists_hide_their_colon() {
+        let text = "Term\n: The definition\n";
+        let analysis = analyze(text);
+        assert!(
+            analysis
+                .styles
+                .iter()
+                .any(|s| s.style.contains(InlineStyle::STRONG) && &text[s.range.clone()] == "Term"),
+            "the term is bold"
+        );
+        assert_eq!(&text[analysis.content_range(1)], "The definition");
+        assert_eq!(analysis.info(1).prefix.levels, [PrefixLevel::List(None)]);
+    }
+
+    #[test]
+    fn heading_attributes_hide_away_from_the_caret() {
+        let text = "## Title {#custom .wide}\n";
+        let analysis = analyze(text);
+        assert_eq!(analysis.infos[0].kind, LineKind::Heading(2));
+        assert!(
+            marker_texts(text, &analysis)
+                .iter()
+                .any(|m| m.contains("{#custom .wide}"))
+        );
+    }
+
+    #[test]
+    fn abbreviation_definitions_are_quiet() {
+        let text = "*[HTML]: Hyper Text Markup Language\n";
+        let analysis = analyze(text);
+        assert!(
+            analysis
+                .styles
+                .iter()
+                .any(|s| s.style.contains(InlineStyle::HTML))
+        );
+        assert!(
+            !analysis
+                .styles
+                .iter()
+                .any(|s| s.style.contains(InlineStyle::EMPHASIS))
+        );
     }
 }

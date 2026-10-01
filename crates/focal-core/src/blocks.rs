@@ -22,9 +22,27 @@ pub fn front_matter(analysis: &Analysis, text: &str) -> Option<FrontMatter> {
     let end = (1..analysis.line_count())
         .find(|&line| analysis.info(line).kind == LineKind::FrontMatterFence)?;
     let mut fields: Vec<(String, String)> = Vec::new();
+    let fence = text[analysis.lines.range(0)].trim();
     for line in 1..end {
         let source = &text[analysis.lines.range(line)];
         let item = source.trim_start();
+        // JSON (GitLab's `;;;`): `"key": value,` lines inside braces.
+        if fence == ";;;" {
+            let item = item.trim_end().trim_end_matches(',');
+            if let Some((key, value)) = item.split_once("\":") {
+                let key = key.trim_start_matches(['{', ' ']).trim_matches('"');
+                let value = value.trim().trim_end_matches('}').trim();
+                fields.push((key.to_owned(), unquote(value)));
+            }
+            continue;
+        }
+        // TOML (`+++`): `key = value`.
+        if fence == "+++" {
+            if let Some((key, value)) = item.split_once('=') {
+                fields.push((key.trim().to_owned(), list_or_value(value.trim())));
+            }
+            continue;
+        }
         let indented = item.len() < source.len();
         if indented {
             // A list item adds to the last key; other nested lines are skipped.
@@ -37,26 +55,29 @@ pub fn front_matter(analysis: &Analysis, text: &str) -> Option<FrontMatter> {
             continue;
         }
         if let Some((key, value)) = item.split_once(':') {
-            let value = value.trim();
-            let value = value
-                .strip_prefix('[')
-                .and_then(|v| v.strip_suffix(']'))
-                .map_or_else(
-                    || unquote(value),
-                    |list| {
-                        list.split(',')
-                            .map(|v| unquote(v.trim()))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    },
-                );
-            fields.push((key.trim().to_owned(), value));
+            fields.push((key.trim().to_owned(), list_or_value(value.trim())));
         }
     }
     Some(FrontMatter {
         lines: 0..end + 1,
         fields,
     })
+}
+
+/// A `[a, b]` list joined with commas, or the value unquoted.
+fn list_or_value(value: &str) -> String {
+    value
+        .strip_prefix('[')
+        .and_then(|v| v.strip_suffix(']'))
+        .map_or_else(
+            || unquote(value),
+            |list| {
+                list.split(',')
+                    .map(|v| unquote(v.trim()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            },
+        )
 }
 
 fn unquote(value: &str) -> String {
@@ -236,5 +257,27 @@ mod tests {
             ]
         );
         assert!(front_matter(&analyze("# No matter\n"), "# No matter\n").is_none());
+    }
+
+    #[test]
+    fn toml_and_json_front_matter_fields() {
+        let text = "+++\ntitle = \"Hi\"\ntags = [\"a\", \"b\"]\n+++\n";
+        let fields = front_matter(&analyze(text), text).unwrap().fields;
+        assert_eq!(
+            fields,
+            [
+                ("title".into(), "Hi".into()),
+                ("tags".into(), "a, b".into())
+            ]
+        );
+        let text = ";;;\n{\n  \"title\": \"Hi\",\n  \"draft\": false\n}\n;;;\n";
+        let fields = front_matter(&analyze(text), text).unwrap().fields;
+        assert_eq!(
+            fields,
+            [
+                ("title".into(), "Hi".into()),
+                ("draft".into(), "false".into())
+            ]
+        );
     }
 }

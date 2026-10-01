@@ -115,13 +115,28 @@ fn inline(text: &str, render: &mut dyn FnMut(Embed<'_>) -> Option<String>) -> St
 
 /// `text` without callouts, as HTML.
 fn markdown(text: &str, render: &mut dyn FnMut(Embed<'_>) -> Option<String>) -> String {
+    let (text, abbreviations) = abbreviations(text);
     let mut events: Vec<Event> = Vec::new();
+    // Text read so far: `pulldown-cmark` splits text at `^`, `=` and other
+    // delimiters, so extras are found in the joined text.
+    let mut pending = String::new();
     // A Mermaid block's source while it is read.
     let mut diagram: Option<String> = None;
     let mut in_metadata = false;
     let mut in_code = false;
-    let shadowed = crate::shadow::shadow(text);
+    let shadowed = crate::shadow::shadow(&text);
     for event in Parser::new_ext(&shadowed, crate::analysis::options()) {
+        if let Event::Text(text) = &event
+            && !in_code
+            && !in_metadata
+            && diagram.is_none()
+        {
+            pending.push_str(text);
+            continue;
+        }
+        if !pending.is_empty() {
+            events.extend(inline_extras(&std::mem::take(&mut pending), &abbreviations));
+        }
         match event {
             Event::Start(Tag::MetadataBlock(_)) => in_metadata = true,
             Event::End(TagEnd::MetadataBlock(_)) => in_metadata = false,
@@ -155,85 +170,177 @@ fn markdown(text: &str, render: &mut dyn FnMut(Embed<'_>) -> Option<String>) -> 
                 in_code = false;
                 events.push(Event::End(TagEnd::CodeBlock));
             }
-            Event::InlineMath(tex) => {
-                let html = match render(Embed::InlineMath(&tex)) {
-                    Some(svg) => format!(r#"<span class="math">{svg}</span>"#),
-                    None => format!(r#"<code class="math">{}</code>"#, escape(&tex)),
-                };
-                events.push(Event::InlineHtml(html.into()));
-            }
-            Event::DisplayMath(tex) => {
-                let html = match render(Embed::DisplayMath(&tex)) {
-                    Some(svg) => format!(r#"<div class="math">{svg}</div>"#),
-                    None => format!(r#"<pre class="math">{}</pre>"#, escape(&tex)),
-                };
-                events.push(Event::Html(html.into()));
-            }
-            Event::Start(Tag::Link {
-                link_type: link_type @ LinkType::WikiLink { .. },
-                dest_url,
-                title,
-                id,
-            }) => {
-                let href =
-                    render(Embed::WikiLink(&dest_url)).unwrap_or_else(|| format!("{dest_url}.md"));
-                events.push(Event::Start(Tag::Link {
-                    link_type,
-                    dest_url: href.into(),
-                    title,
-                    id,
-                }));
-            }
-            Event::Start(Tag::Image {
-                link_type,
-                dest_url,
-                title,
-                id,
-            }) => {
-                let source = render(Embed::Image(&dest_url)).map_or(dest_url, CowStr::from);
-                events.push(Event::Start(Tag::Image {
-                    link_type,
-                    dest_url: source,
-                    title,
-                    id,
-                }));
-            }
-            Event::Text(text) if !in_code => push_highlighted(&mut events, text),
-            other => events.push(other),
+            other => events.push(embedded(other, render)),
         }
+    }
+    if !pending.is_empty() {
+        events.extend(inline_extras(&pending, &abbreviations));
     }
     let mut html = String::new();
     pulldown_cmark::html::push_html(&mut html, events.into_iter());
     html
 }
 
-/// `==highlight==` is not part of `pulldown-cmark`; as in the editor, it is
-/// found inside one text event.
-fn push_highlighted<'a>(events: &mut Vec<Event<'a>>, text: CowStr<'a>) {
-    let mut rest: &str = &text;
-    let mut parts: Vec<Event<'a>> = Vec::new();
-    while let Some(open) = rest.find("==") {
-        let inner = &rest[open + 2..];
-        let Some(close) = inner.find("==") else {
-            break;
-        };
-        if close == 0 || inner[..close].contains('\n') {
-            parts.push(Event::Text(rest[..open + 2].to_owned().into()));
-            rest = inner;
-            continue;
+/// Math, wiki links and images as the app renders or resolves them; other
+/// events unchanged.
+fn embedded<'a>(
+    event: Event<'a>,
+    render: &mut dyn FnMut(Embed<'_>) -> Option<String>,
+) -> Event<'a> {
+    match event {
+        Event::InlineMath(tex) => {
+            let html = match render(Embed::InlineMath(&tex)) {
+                Some(svg) => format!(r#"<span class="math">{svg}</span>"#),
+                None => format!(r#"<code class="math">{}</code>"#, escape(&tex)),
+            };
+            Event::InlineHtml(html.into())
         }
-        parts.push(Event::Text(rest[..open].to_owned().into()));
-        parts.push(Event::InlineHtml("<mark>".into()));
-        parts.push(Event::Text(inner[..close].to_owned().into()));
-        parts.push(Event::InlineHtml("</mark>".into()));
-        rest = &inner[close + 2..];
+        Event::DisplayMath(tex) => {
+            let html = match render(Embed::DisplayMath(&tex)) {
+                Some(svg) => format!(r#"<div class="math">{svg}</div>"#),
+                None => format!(r#"<pre class="math">{}</pre>"#, escape(&tex)),
+            };
+            Event::Html(html.into())
+        }
+        Event::Start(Tag::Link {
+            link_type: link_type @ LinkType::WikiLink { .. },
+            dest_url,
+            title,
+            id,
+        }) => {
+            let href =
+                render(Embed::WikiLink(&dest_url)).unwrap_or_else(|| format!("{dest_url}.md"));
+            Event::Start(Tag::Link {
+                link_type,
+                dest_url: href.into(),
+                title,
+                id,
+            })
+        }
+        Event::Start(Tag::Image {
+            link_type,
+            dest_url,
+            title,
+            id,
+        }) => {
+            let source = render(Embed::Image(&dest_url)).map_or(dest_url, CowStr::from);
+            Event::Start(Tag::Image {
+                link_type,
+                dest_url: source,
+                title,
+                id,
+            })
+        }
+        other => other,
     }
-    if parts.is_empty() {
-        events.push(Event::Text(text));
+}
+
+/// Abbreviation definitions `*[HTML]: Hyper Text Markup Language`, taken
+/// out of `text`.
+fn abbreviations(text: &str) -> (std::borrow::Cow<'_, str>, Vec<(String, String)>) {
+    let mut found = Vec::new();
+    let mut kept = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        let definition = line
+            .trim_start()
+            .strip_prefix("*[")
+            .and_then(|rest| rest.split_once("]:"))
+            .filter(|(word, _)| !word.is_empty());
+        match definition {
+            Some((word, title)) => {
+                found.push((word.to_owned(), title.trim().to_owned()));
+                kept.push('\n');
+            }
+            None => kept.push_str(line),
+        }
+    }
+    if found.is_empty() {
+        (std::borrow::Cow::Borrowed(text), found)
     } else {
-        parts.push(Event::Text(rest.to_owned().into()));
-        events.extend(parts);
+        (std::borrow::Cow::Owned(kept), found)
     }
+}
+
+/// Text or markup, while text is split into extras.
+enum Piece {
+    Text(String),
+    Html(String),
+}
+
+/// What `pulldown-cmark` does not read in text: `==highlight==` (as
+/// `<mark>`), superscript `^x^` in words, and abbreviations (as `<abbr>`).
+fn inline_extras(text: &str, abbreviations: &[(String, String)]) -> Vec<Event<'static>> {
+    let mut pieces = vec![Piece::Text(text.to_owned())];
+    pieces = split(pieces, |text| {
+        let mut found = Vec::new();
+        let mut at = 0;
+        while let Some(open) = text[at..].find("==").map(|ix| ix + at) {
+            let inner = open + 2;
+            let Some(close) = text[inner..].find("==").map(|ix| ix + inner) else {
+                break;
+            };
+            if close > inner && !text[inner..close].contains('\n') {
+                found.push((open, 2, close, 2, "mark".to_owned()));
+                at = close + 2;
+            } else {
+                at = inner;
+            }
+        }
+        found
+    });
+    pieces = split(pieces, |text| {
+        crate::analysis::superscripts(text)
+            .into_iter()
+            .map(|(open, close)| (open, 1, close, 1, "sup".to_owned()))
+            .collect()
+    });
+    for (word, title) in abbreviations {
+        pieces = split(pieces, |text| {
+            let bytes = text.as_bytes();
+            let boundary = |at: usize| at >= bytes.len() || !bytes[at].is_ascii_alphanumeric();
+            text.match_indices(word.as_str())
+                .filter(|(at, _)| (*at == 0 || boundary(at - 1)) && boundary(at + word.len()))
+                .map(|(at, _)| {
+                    let tag = format!("abbr title=\"{}\"", escape(title));
+                    (at, 0, at + word.len(), 0, tag)
+                })
+                .collect()
+        });
+    }
+    pieces
+        .into_iter()
+        .map(|piece| match piece {
+            Piece::Text(text) => Event::Text(text.into()),
+            Piece::Html(html) => Event::InlineHtml(html.into()),
+        })
+        .collect()
+}
+
+/// Splits each text piece where `find` reports spans: (open, its width,
+/// close, its width, the tag with attributes) in order, wrapping each
+/// span's inside in that tag.
+fn split(
+    pieces: Vec<Piece>,
+    find: impl Fn(&str) -> Vec<(usize, usize, usize, usize, String)>,
+) -> Vec<Piece> {
+    let mut out = Vec::new();
+    for piece in pieces {
+        let Piece::Text(text) = piece else {
+            out.push(piece);
+            continue;
+        };
+        let mut at = 0;
+        for (open, open_width, close, close_width, tag) in find(&text) {
+            let name = tag.split_whitespace().next().unwrap_or_default().to_owned();
+            out.push(Piece::Text(text[at..open].to_owned()));
+            out.push(Piece::Html(format!("<{tag}>")));
+            out.push(Piece::Text(text[open + open_width..close].to_owned()));
+            out.push(Piece::Html(format!("</{name}>")));
+            at = close + close_width;
+        }
+        out.push(Piece::Text(text[at..].to_owned()));
+    }
+    out
 }
 
 fn escape(text: &str) -> String {
@@ -488,5 +595,29 @@ mod tests {
             html.contains("<em>text</em>") && html.contains("<p>After</p>"),
             "{html}"
         );
+    }
+
+    #[test]
+    fn pandoc_and_extra_extensions_export() {
+        let html = plain(
+            "+++\ntitle = \"x\"\n+++\n\n## Title {#custom}\n\nE = mc^2^, 2^10^ and the 1^st^.\n\nTerm\n: Definition\n\nThe HTML spec.\n\n*[HTML]: Hyper Text Markup Language\n",
+        );
+        assert!(
+            !html.contains("title = "),
+            "front matter is left out: {html}"
+        );
+        assert!(html.contains(r#"<h2 id="custom">Title</h2>"#), "{html}");
+        for sup in ["<sup>2</sup>", "<sup>10</sup>", "<sup>st</sup>"] {
+            assert!(html.contains(sup), "{sup}: {html}");
+        }
+        assert!(
+            html.contains("<dt>Term</dt>") && html.contains("<dd>Definition</dd>"),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"<abbr title="Hyper Text Markup Language">HTML</abbr>"#),
+            "{html}"
+        );
+        assert!(!html.contains("*[HTML]"), "{html}");
     }
 }

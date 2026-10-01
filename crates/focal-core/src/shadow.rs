@@ -11,6 +11,7 @@ pub fn shadow(text: &str) -> Cow<'_, str> {
     let mut out = text.as_bytes().to_vec();
     let lines = line_ranges(text);
     callouts(text, &lines, &mut out);
+    json_front_matter(text, &lines, &mut out);
     // The open code fence: its character, its length and whether it is math.
     let mut fence: Option<(u8, usize, bool)> = None;
     for (ix, line) in lines.iter().enumerate() {
@@ -74,6 +75,20 @@ fn callouts(text: &str, lines: &[std::ops::Range<usize>], out: &mut [u8]) {
                 }
             }
         }
+    }
+}
+
+/// GitLab's JSON front matter between `;;;` lines reads as front matter.
+fn json_front_matter(text: &str, lines: &[std::ops::Range<usize>], out: &mut [u8]) {
+    if lines.len() < 2 || &text[lines[0].clone()] != ";;;" {
+        return;
+    }
+    if let Some(close) = lines[1..]
+        .iter()
+        .find(|line| &text[(*line).clone()] == ";;;")
+    {
+        out[lines[0].clone()].copy_from_slice(b"---");
+        out[close.clone()].copy_from_slice(b"---");
     }
 }
 
