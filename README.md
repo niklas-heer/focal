@@ -38,6 +38,17 @@ Set `FOCAL_TRACE=1` to print parse and restyle times for every change.
 
 Lists, tasks, quotes, tables, code and math blocks are in the Format menu and the bottom bar.
 
+### Optional diagram tools
+
+Focal draws Mermaid, Graphviz, Svgbob, Pikchr, WaveDrom, Vega and Vega-Lite, GeoJSON, TopoJSON and STL by itself. Two languages need a tool installed on your Mac; without it their blocks stay code:
+
+| Language | Install |
+| --- | --- |
+| D2 | `brew install d2` |
+| PlantUML | `brew install plantuml` |
+
+With `brew install graphviz`, Graphviz blocks use the real `dot`, which reads every DOT feature. **Settings → Diagram tools** shows what this Mac has.
+
 ## The goal
 
 Focal combines two things:

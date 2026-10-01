@@ -14,7 +14,7 @@ use gpui_kit::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::theme::{PROSE_FONT, Theme as Colors};
+use crate::theme::{MONO_FONT, PROSE_FONT, Theme as Colors};
 
 actions!(focal, [OpenSettings, CloseSettings]);
 
@@ -160,7 +160,7 @@ fn open_window(cx: &mut App) {
     {
         return;
     }
-    let bounds = Bounds::centered(None, size(px(460.), px(500.)), cx);
+    let bounds = Bounds::centered(None, size(px(460.), px(660.)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions {
@@ -210,6 +210,40 @@ fn choice<T: Copy + PartialEq + 'static>(
                 update(cx, |settings| set(settings, value));
             }
         })
+}
+
+/// A diagram tool, whether it is installed, and how to install it.
+fn tool_row(tool: &crate::diagram::Tool, theme: &Colors) -> impl IntoElement + use<> {
+    let status = if tool.installed {
+        "installed".to_owned()
+    } else {
+        format!("not installed: {}", tool.install)
+    };
+    div()
+        .id(SharedString::from(format!("diagram-tool-{}", tool.command)))
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .flex()
+                .gap(px(6.))
+                .child(div().font_family(MONO_FONT).child(tool.command))
+                .child(
+                    div()
+                        .text_color(if tool.installed {
+                            theme.text
+                        } else {
+                            theme.marker
+                        })
+                        .child(status),
+                ),
+        )
+        .child(
+            div()
+                .text_size(px(12.))
+                .text_color(theme.marker)
+                .child(tool.draws),
+        )
 }
 
 impl Render for SettingsView {
@@ -289,6 +323,12 @@ impl Render for SettingsView {
                         let checked = *checked;
                         update(cx, |settings| settings.check_updates = checked);
                     }),
+            )
+            .child(heading("DIAGRAM TOOLS"))
+            .children(
+                crate::diagram::tools()
+                    .into_iter()
+                    .map(|tool| tool_row(&tool, &theme)),
             )
             .child(heading("TYPEWRITER SCROLLING"))
             .child(

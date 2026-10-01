@@ -72,6 +72,44 @@ pub fn render(
     }
 }
 
+/// A diagram tool Focal uses when it is installed.
+pub struct Tool {
+    pub command: &'static str,
+    /// What it draws, and what Focal does without it.
+    pub draws: &'static str,
+    pub install: &'static str,
+    pub installed: bool,
+}
+
+/// The optional diagram tools and whether this Mac has them, for Settings.
+pub fn tools() -> Vec<Tool> {
+    [
+        (
+            "d2",
+            "D2 diagrams (otherwise shown as code)",
+            "brew install d2",
+        ),
+        (
+            "plantuml",
+            "PlantUML diagrams (otherwise shown as code)",
+            "brew install plantuml",
+        ),
+        (
+            "dot",
+            "Graphviz with every DOT feature (otherwise drawn natively)",
+            "brew install graphviz",
+        ),
+    ]
+    .into_iter()
+    .map(|(command, draws, install)| Tool {
+        command,
+        draws,
+        install,
+        installed: crate::tools::find(command).is_some(),
+    })
+    .collect()
+}
+
 /// Whether Focal can draw `language` on this Mac; a block it cannot draw
 /// stays a code block.
 pub fn can_draw(language: DiagramLanguage) -> bool {
@@ -696,5 +734,20 @@ mod corpus {
             light.contains("#F7F7A1"),
             "the light appearance keeps WaveDrom's colors"
         );
+    }
+
+    #[test]
+    fn settings_list_the_optional_tools_with_how_to_install_them() {
+        let tools = tools();
+        let commands: Vec<&str> = tools.iter().map(|t| t.command).collect();
+        assert_eq!(commands, ["d2", "plantuml", "dot"]);
+        for tool in &tools {
+            assert!(
+                tool.install.starts_with("brew install "),
+                "{}",
+                tool.install
+            );
+            assert_eq!(tool.installed, crate::tools::find(tool.command).is_some());
+        }
     }
 }
