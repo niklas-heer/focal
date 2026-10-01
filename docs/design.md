@@ -221,7 +221,7 @@ Principles:
 | Math `$…$`, `$$…$$` | GitHub, GitLab, Obsidian, Typora, Pandoc | Built (M4). |
 | Math `\(…\)`, `\[…\]` | MathJax, Pandoc, LLM answers | Built (M9). |
 | Math fences `` ```math `` and `` $`…`$ `` | GitHub, GitLab | Built (M9). |
-| Callouts `> [!type] Title`, any type, `+`/`-` folding | Obsidian, GitHub (five types) | Built (M9): every type, mapped to the five colors, written titles. |
+| Callouts `> [!type] Title`, any type, `+`/`-` folding | Obsidian, GitHub (five types) | Built (M9): every type, mapped to the five colors, written titles; folding (M11). |
 | Containers `::: type Title` … `:::` | Docusaurus, VitePress, Pandoc fenced divs, markdown-it | Built (M9): titled callouts. |
 | Admonitions `!!! type "Title"` with indented body, `???` collapsible | MkDocs, Python-Markdown | Built (M9): titled callouts. |
 | `>>>` multi-line quotes | GitLab | Built (M9). |
@@ -254,8 +254,8 @@ Raw HTML: CommonMark and GFM pass HTML through untouched, as blocks and inline; 
 | `pikchr` | Fossil, Kroki | Built (M10), natively. |
 | `wavedrom` | Kroki, hardware docs | Built (M10), natively (`wavedrom`). |
 | `geojson`, `topojson` | GitHub | Built (M10): an outline map, no tiles or network. |
-| `vega`, `vega-lite` | Kroki, Jupyter | Not yet: stays a code block (Vega needs a browser canvas to measure text). |
-| `stl` | GitHub | Later: a still render. |
+| `vega`, `vega-lite` | Kroki, Jupyter | Built (M11): Vega itself in QuickJS, as math (`scripts/vega`); text widths are estimated without a canvas. |
+| `stl` | GitHub | Built (M11): a shaded still from an angle above (ASCII STL). |
 
 ## 8. Milestones (Proposed)
 
@@ -272,6 +272,7 @@ Raw HTML: CommonMark and GFM pass HTML through untouched, as blocks and inline; 
 | **M8 — Outline and sharing** | Done: Go to Heading, Export as HTML…, Copy as HTML. |
 | **M9 — Dialects** | Done: math in every notation, callouts in every style, TOML and JSON front matter, Pandoc and Markdown Extra extensions, Obsidian syntax, emoji shortcodes, tables of contents, README-style HTML, and any encoding; see section 7a. |
 | **M10 — Diagrams** | Done: Graphviz, Svgbob, Pikchr, WaveDrom, GeoJSON and TopoJSON natively, D2 and PlantUML through their tools, all Mermaid types; every drawing in Focal's palette; see section 7a. |
+| **M11 — Completeness** | Done: folding callouts and `<details>`, Vega and Vega-Lite, STL, PlantUML's dark mode, WaveDrom in the dark, centered HTML, and export that renders callouts in one pass (footnotes and references reach into them; folding callouts export as `<details>`). |
 
 Each milestone gets its own implementation plan before work starts.
 
