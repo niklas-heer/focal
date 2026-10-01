@@ -7,14 +7,15 @@ use pulldown_cmark::{CodeBlockKind, CowStr, Event, LinkType, Parser, Tag, TagEnd
 use std::fmt::Write as _;
 
 use crate::analysis::Alert;
+use crate::blocks::DiagramLanguage;
 
 /// Something the app renders for the export.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Embed<'a> {
     DisplayMath(&'a str),
     InlineMath(&'a str),
-    /// A Mermaid diagram's source.
-    Diagram(&'a str),
+    /// A diagram's language and source.
+    Diagram(DiagramLanguage, &'a str),
     /// A wiki link's target name; the answer is the link's `href`.
     WikiLink(&'a str),
     /// An image's source; the answer replaces it.
@@ -179,8 +180,8 @@ fn markdown(text: &str, render: &mut dyn FnMut(Embed<'_>) -> Option<String>) -> 
     // Text read so far: `pulldown-cmark` splits text at `^`, `=` and other
     // delimiters, so extras are found in the joined text.
     let mut pending = String::new();
-    // A Mermaid block's source while it is read.
-    let mut diagram: Option<String> = None;
+    // A diagram block's language and source while it is read.
+    let mut diagram: Option<(DiagramLanguage, String)> = None;
     let mut in_metadata = false;
     let mut in_code = false;
     // The open heading, by its index in `events`, and its text so far.
@@ -196,14 +197,7 @@ fn markdown(text: &str, render: &mut dyn FnMut(Embed<'_>) -> Option<String>) -> 
             title.push_str(text);
         }
         if let Some(note) = embed {
-            if matches!(event, Event::End(TagEnd::Image)) {
-                embed = None;
-                if note {
-                    events.push(Event::End(TagEnd::Link));
-                }
-            } else if note {
-                events.push(event);
-            }
+            embed = inside_embed(note, event, &mut events);
             continue;
         }
         if let Event::Text(text) = &event
@@ -250,18 +244,19 @@ fn markdown(text: &str, render: &mut dyn FnMut(Embed<'_>) -> Option<String>) -> 
             Event::End(TagEnd::MetadataBlock(_)) => in_metadata = false,
             _ if in_metadata => {}
             Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(lang)))
-                if lang.split_whitespace().next() == Some("mermaid") =>
+                if DiagramLanguage::from_info(&lang).is_some() =>
             {
-                diagram = Some(String::new());
+                diagram = DiagramLanguage::from_info(&lang).map(|l| (l, String::new()));
             }
             Event::Text(source) if diagram.is_some() => {
-                if let Some(diagram) = &mut diagram {
+                if let Some((_, diagram)) = &mut diagram {
                     diagram.push_str(&source);
                 }
             }
             Event::End(TagEnd::CodeBlock) if diagram.is_some() => {
-                let source = diagram.take().unwrap_or_default();
-                events.push(diagram_html(&source, render));
+                if let Some((language, source)) = diagram.take() {
+                    events.push(diagram_html(language, &source, render));
+                }
             }
             Event::Start(Tag::CodeBlock(kind)) => {
                 in_code = true;
@@ -346,15 +341,17 @@ fn filtered(html: CowStr<'_>) -> CowStr<'_> {
     }
 }
 
-/// A Mermaid diagram drawn by the app, or its source when it cannot be.
+/// A diagram drawn by the app, or its source when it cannot be.
 fn diagram_html(
+    language: DiagramLanguage,
     source: &str,
     render: &mut dyn FnMut(Embed<'_>) -> Option<String>,
 ) -> Event<'static> {
-    let html = match render(Embed::Diagram(source)) {
+    let html = match render(Embed::Diagram(language, source)) {
         Some(svg) => format!(r#"<figure class="diagram">{svg}</figure>"#),
         None => format!(
-            r#"<pre><code class="language-mermaid">{}</code></pre>"#,
+            r#"<pre><code class="language-{}">{}</code></pre>"#,
+            language.name().to_ascii_lowercase(),
             escape(source)
         ),
     };
@@ -367,6 +364,22 @@ fn anchor(start: &mut Event<'_>, title: &str) {
     if let Event::Start(Tag::Heading { id: id @ None, .. }) = start {
         *id = Some(crate::links::heading_slug(title.trim()).into());
     }
+}
+
+/// An event inside an Obsidian embed being replaced (`note`: by a link):
+/// a note's text stays in its link, an image's is dropped. Returns whether
+/// the embed is still open.
+fn inside_embed<'a>(note: bool, event: Event<'a>, events: &mut Vec<Event<'a>>) -> Option<bool> {
+    if matches!(event, Event::End(TagEnd::Image)) {
+        if note {
+            events.push(Event::End(TagEnd::Link));
+        }
+        return None;
+    }
+    if note {
+        events.push(event);
+    }
+    Some(note)
 }
 
 /// An Obsidian embed: `![[note]]` as the start of a link to the note,
@@ -674,7 +687,7 @@ mod tests {
                 Some(match embed {
                     Embed::InlineMath(_) => "<svg>inline</svg>".into(),
                     Embed::DisplayMath(_) => "<svg>display</svg>".into(),
-                    Embed::Diagram(_) => "<svg>diagram</svg>".into(),
+                    Embed::Diagram(..) => "<svg>diagram</svg>".into(),
                     Embed::WikiLink(_) | Embed::Image(_) => return None,
                 })
             },
@@ -894,9 +907,23 @@ mod tests {
     #[test]
     fn diagrams_keep_their_own_styles() {
         let html = to_html("```mermaid\nA\n```\n", &mut |embed| match embed {
-            Embed::Diagram(_) => Some("<svg><style>.a{}</style></svg>".into()),
+            Embed::Diagram(..) => Some("<svg><style>.a{}</style></svg>".into()),
             _ => None,
         });
         assert!(html.contains("<style>"), "{html}");
+    }
+
+    #[test]
+    fn diagrams_export_with_their_language() {
+        let mut seen = Vec::new();
+        to_html("```dot\ndigraph { a }\n```\n", &mut |embed| {
+            seen.push(format!("{embed:?}"));
+            None
+        });
+        assert!(
+            seen.iter()
+                .any(|s| s.contains("Graphviz") && s.contains("digraph")),
+            "{seen:?}"
+        );
     }
 }

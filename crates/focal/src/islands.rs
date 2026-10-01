@@ -22,6 +22,13 @@ use crate::editor::{Editor, Island, IslandKind, PaintedRow, Row};
 use crate::theme::Theme;
 use crate::{diagram, math};
 
+/// A drawn diagram's language, source and palette.
+pub(crate) type DiagramKey = (
+    focal_core::blocks::DiagramLanguage,
+    String,
+    diagram::Palette,
+);
+
 /// Entries an embed search looks at before giving up.
 const FIND_LIMIT: usize = 20_000;
 
@@ -35,7 +42,10 @@ pub(crate) fn islands(analysis: &Analysis, text: &str) -> Vec<Island> {
             end: matter.lines.end,
         });
     }
-    for block in diagram_blocks(analysis, text) {
+    for block in diagram_blocks(analysis, text)
+        .into_iter()
+        .filter(|block| diagram::can_draw(block.language))
+    {
         islands.push(Island {
             kind: IslandKind::Diagram,
             start: block.lines.start,
@@ -613,7 +623,8 @@ impl Editor {
         else {
             return div().into_any_element();
         };
-        let key = (block.source.clone(), palette(theme));
+        let name = block.language.name();
+        let key = (block.language, block.source.clone(), palette(theme));
         let state = self.diagrams.borrow().get(&key).cloned();
         if state.is_none() {
             self.draw_diagram(key, cx);
@@ -636,17 +647,17 @@ impl Editor {
                     .h(px(height))
                     .into_any_element()
                 }
-                None => quiet("Mermaid diagram".into(), size, theme).into_any_element(),
+                None => quiet(format!("{name} diagram"), size, theme).into_any_element(),
             },
             Shown::Error(message) => {
-                quiet(format!("Mermaid: {message}"), size, theme).into_any_element()
+                quiet(format!("{name}: {message}"), size, theme).into_any_element()
             }
             Shown::Pending => quiet("Drawing the diagram…".into(), size, theme).into_any_element(),
         };
-        island_frame(id, line, "Mermaid diagram".into(), content)
+        island_frame(id, line, format!("{name} diagram"), content)
     }
 
-    fn draw_diagram(&self, key: (String, diagram::Palette), cx: &Context<Self>) {
+    fn draw_diagram(&self, key: DiagramKey, cx: &Context<Self>) {
         remember(
             &mut self.diagrams.borrow_mut(),
             key.clone(),
@@ -655,7 +666,7 @@ impl Editor {
         let failed = key.clone();
         let task = cx
             .background_executor()
-            .spawn(async move { diagram::render(&key.0, &key.1).map(|svg| (key, svg)) });
+            .spawn(async move { diagram::render(key.0, &key.1, &key.2).map(|svg| (key, svg)) });
         cx.spawn(async move |this, cx| {
             let (key, typeset) = match task.await {
                 Ok((key, svg)) => (key, Typeset::Svg(svg)),

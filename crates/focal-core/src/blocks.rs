@@ -157,27 +157,75 @@ pub fn math_blocks(analysis: &Analysis, text: &str) -> Vec<MathBlock> {
         .collect()
 }
 
-/// A fenced `mermaid` code block.
+/// A language that fenced code blocks draw diagrams in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DiagramLanguage {
+    Mermaid,
+    Graphviz,
+    Svgbob,
+    Pikchr,
+    WaveDrom,
+    PlantUml,
+    D2,
+    GeoJson,
+    TopoJson,
+}
+
+impl DiagramLanguage {
+    /// The language a code block's info string names, by its first word,
+    /// with the aliases in use (`dot` and `gv` for Graphviz, `bob` for
+    /// Svgbob, `puml` for PlantUML).
+    pub fn from_info(info: &str) -> Option<Self> {
+        let word = info.split_whitespace().next()?.to_ascii_lowercase();
+        Some(match word.as_str() {
+            "mermaid" => Self::Mermaid,
+            "dot" | "graphviz" | "gv" => Self::Graphviz,
+            "svgbob" | "bob" => Self::Svgbob,
+            "pikchr" => Self::Pikchr,
+            "wavedrom" => Self::WaveDrom,
+            "plantuml" | "puml" => Self::PlantUml,
+            "d2" => Self::D2,
+            "geojson" => Self::GeoJson,
+            "topojson" => Self::TopoJson,
+            _ => return None,
+        })
+    }
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Mermaid => "Mermaid",
+            Self::Graphviz => "Graphviz",
+            Self::Svgbob => "Svgbob",
+            Self::Pikchr => "Pikchr",
+            Self::WaveDrom => "WaveDrom",
+            Self::PlantUml => "PlantUML",
+            Self::D2 => "D2",
+            Self::GeoJson => "GeoJSON",
+            Self::TopoJson => "TopoJSON",
+        }
+    }
+}
+
+/// A fenced code block in a diagram language.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiagramBlock {
     /// Its lines, fences included.
     pub lines: Range<usize>,
+    pub language: DiagramLanguage,
     /// The diagram's source between the fences.
     pub source: String,
 }
 
-/// The fenced code blocks whose language is `mermaid`, in any case.
+/// The fenced code blocks in a diagram language.
 pub fn diagram_blocks(analysis: &Analysis, text: &str) -> Vec<DiagramBlock> {
     analysis
         .code_blocks
         .iter()
-        .filter(|block| {
-            block
-                .language
-                .as_deref()
-                .is_some_and(|language| language.eq_ignore_ascii_case("mermaid"))
+        .filter_map(|block| {
+            let language = DiagramLanguage::from_info(block.language.as_deref()?)?;
+            Some((block, language))
         })
-        .map(|block| {
+        .map(|(block, language)| {
             let lines = block.lines.clone();
             let closed = lines.len() > 1
                 && analysis.info(lines.end - 1).kind == (LineKind::CodeFence { opening: false });
@@ -189,6 +237,7 @@ pub fn diagram_blocks(analysis: &Analysis, text: &str) -> Vec<DiagramBlock> {
                 .join("\n");
             DiagramBlock {
                 lines,
+                language,
                 source: source.trim_end().to_owned(),
             }
         })
@@ -279,10 +328,12 @@ mod tests {
             [
                 DiagramBlock {
                     lines: 0..4,
+                    language: DiagramLanguage::Mermaid,
                     source: "flowchart TD\n  A --> B".into()
                 },
                 DiagramBlock {
                     lines: 9..11,
+                    language: DiagramLanguage::Mermaid,
                     source: "pie".into()
                 },
             ]
@@ -341,5 +392,33 @@ mod tests {
         let analysis = analyze(text);
         assert!(block_image(&analysis, text, 1).unwrap().centered);
         assert!(!block_image(&analysis, text, 4).unwrap().centered);
+    }
+
+    #[test]
+    fn diagram_languages_and_their_aliases() {
+        for (info, language) in [
+            ("mermaid", DiagramLanguage::Mermaid),
+            ("dot", DiagramLanguage::Graphviz),
+            ("Graphviz", DiagramLanguage::Graphviz),
+            ("bob", DiagramLanguage::Svgbob),
+            ("pikchr", DiagramLanguage::Pikchr),
+            ("wavedrom", DiagramLanguage::WaveDrom),
+            ("puml", DiagramLanguage::PlantUml),
+            ("d2 title=x", DiagramLanguage::D2),
+            ("geojson", DiagramLanguage::GeoJson),
+            ("topojson", DiagramLanguage::TopoJson),
+        ] {
+            assert_eq!(DiagramLanguage::from_info(info), Some(language), "{info}");
+        }
+        assert_eq!(DiagramLanguage::from_info("rust"), None);
+    }
+
+    #[test]
+    fn diagram_blocks_carry_their_language() {
+        let text = "```dot\ndigraph { a -> b }\n```\n\n```rust\nfn main() {}\n```\n";
+        let blocks = diagram_blocks(&analyze(text), text);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].language, DiagramLanguage::Graphviz);
+        assert_eq!(blocks[0].source, "digraph { a -> b }");
     }
 }

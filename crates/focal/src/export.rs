@@ -47,7 +47,7 @@ pub fn html(text: &str, sources: &Sources, destination: &Path) -> String {
     export::to_html(text, &mut |embed| match embed {
         Embed::DisplayMath(tex) => math::typeset_as(tex, true).ok(),
         Embed::InlineMath(tex) => math::typeset_as(tex, false).ok(),
-        Embed::Diagram(source) => diagram::render(source, &palette).ok(),
+        Embed::Diagram(language, source) => diagram::render(language, source, &palette).ok(),
         Embed::WikiLink(name) => sources
             .wiki_file(name)
             .map(|file| reference(&file, Some(destination))),
@@ -63,7 +63,7 @@ pub fn pasteboard_html(text: &str, sources: &Sources) -> String {
     export::to_html(text, &mut |embed| match embed {
         Embed::DisplayMath(tex) => math_picture(tex, true),
         Embed::InlineMath(tex) => math_picture(tex, false),
-        Embed::Diagram(source) => diagram::render(source, &palette)
+        Embed::Diagram(language, source) => diagram::render(language, source, &palette)
             .ok()
             .and_then(|svg| diagram_picture(&svg)),
         Embed::WikiLink(name) => sources.wiki_file(name).map(|file| reference(&file, None)),

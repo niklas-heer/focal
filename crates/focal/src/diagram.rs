@@ -1,6 +1,8 @@
-//! Mermaid diagrams, laid out and drawn to SVG by `merman`, natively: no
-//! web view and no JavaScript.
+//! Diagrams in the languages Markdown files use, drawn to SVG in Focal's
+//! palette: Mermaid by `merman`, natively, with no web view and no
+//! JavaScript; the others as each language allows (see [`render`]).
 
+use focal_core::blocks::DiagramLanguage;
 use merman::render::{HeadlessRenderer, HostThemeOutput, HostThemeProfile, HostThemeRoles};
 
 /// The colors a diagram is drawn in, as `#rrggbb`.
@@ -14,8 +16,26 @@ pub struct Palette {
     pub series: Vec<String>,
 }
 
-/// Draws `source` as SVG in `palette`, or says why it cannot.
-pub fn render(source: &str, palette: &Palette) -> Result<String, String> {
+/// Draws `source`, written in `language`, as SVG in `palette`, or says why
+/// it cannot.
+pub fn render(
+    language: DiagramLanguage,
+    source: &str,
+    palette: &Palette,
+) -> Result<String, String> {
+    match language {
+        DiagramLanguage::Mermaid => mermaid(source, palette),
+        other => Err(format!("{} diagrams are not drawn yet.", other.name())),
+    }
+}
+
+/// Whether Focal can draw `language` on this Mac; a block it cannot draw
+/// stays a code block.
+pub const fn can_draw(language: DiagramLanguage) -> bool {
+    matches!(language, DiagramLanguage::Mermaid)
+}
+
+fn mermaid(source: &str, palette: &Palette) -> Result<String, String> {
     let profile = HostThemeProfile::builder()
         .roles(HostThemeRoles {
             canvas: Some(palette.canvas.clone()),
@@ -105,7 +125,12 @@ mod tests {
 
     #[test]
     fn charts_use_the_series_colors() {
-        let svg = render("pie\n  \"a\" : 2\n  \"b\" : 1\n", &palette()).unwrap();
+        let svg = render(
+            DiagramLanguage::Mermaid,
+            "pie\n  \"a\" : 2\n  \"b\" : 1\n",
+            &palette(),
+        )
+        .unwrap();
         assert!(
             svg.to_lowercase().contains("#4a7fd6"),
             "the first series color is used"
@@ -114,7 +139,12 @@ mod tests {
 
     #[test]
     fn a_flowchart_renders_in_the_palette() {
-        let svg = render("flowchart TD\n  A[Start] --> B[End]\n", &palette()).unwrap();
+        let svg = render(
+            DiagramLanguage::Mermaid,
+            "flowchart TD\n  A[Start] --> B[End]\n",
+            &palette(),
+        )
+        .unwrap();
         assert!(svg.starts_with("<svg"), "{}", &svg[..80.min(svg.len())]);
         assert!(svg.contains("#e6e6e6"), "the text color is used");
         let (width, height) = svg_size(&svg).unwrap();
@@ -123,9 +153,14 @@ mod tests {
 
     #[test]
     fn a_broken_diagram_says_why() {
-        let error = render("flowchart TD\n  A --> \n", &palette()).unwrap_err();
+        let error = render(
+            DiagramLanguage::Mermaid,
+            "flowchart TD\n  A --> \n",
+            &palette(),
+        )
+        .unwrap_err();
         assert!(error.to_lowercase().contains("parse"), "{error}");
-        assert!(render("just text", &palette()).is_err());
+        assert!(render(DiagramLanguage::Mermaid, "just text", &palette()).is_err());
     }
 
     #[test]

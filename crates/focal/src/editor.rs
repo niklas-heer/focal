@@ -374,8 +374,7 @@ pub struct Editor {
     /// Watches the file for changes on disk; dropping it stops watching.
     watch: Option<(notify::RecommendedWatcher, Task<()>)>,
     /// Drawn Mermaid diagrams, by their source and palette.
-    pub(crate) diagrams:
-        RefCell<HashMap<(String, crate::diagram::Palette), crate::islands::Typeset>>,
+    pub(crate) diagrams: RefCell<HashMap<crate::islands::DiagramKey, crate::islands::Typeset>>,
     /// The last picture each math or diagram block showed, by kind and line.
     pub(crate) last_pictures: RefCell<HashMap<(&'static str, usize), String>>,
     /// Typeset display math, by its TeX.
@@ -2563,6 +2562,7 @@ impl Editor {
                     .find(|block| block.lines.end == line + 1);
                 let diagram = diagram_blocks(analysis, self.text())
                     .into_iter()
+                    .filter(|block| crate::diagram::can_draw(block.language))
                     .find(|block| block.lines.end == line + 1);
                 if block_image(analysis, self.text(), line).is_some() {
                     div()
