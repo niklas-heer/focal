@@ -213,6 +213,14 @@ pub struct Link {
     pub wiki: bool,
 }
 
+/// An image: `![alt](destination)`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Image {
+    pub range: Range<usize>,
+    pub destination: String,
+    pub alt: String,
+}
+
 /// A footnote reference (`[^label]`) or the label of its definition
 /// (`[^label]:`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -266,6 +274,7 @@ pub struct Analysis {
     pub styles: Vec<StyleSpan>,
     pub links: Vec<Link>,
     pub footnotes: Vec<Footnote>,
+    pub images: Vec<Image>,
     pub tables: Vec<Table>,
     pub code_blocks: Vec<CodeBlock>,
     pub(crate) line_markers: Vec<Vec<Piece>>,
@@ -366,6 +375,7 @@ pub fn analyze(text: &str) -> Analysis {
         styles: Vec::new(),
         links: Vec::new(),
         footnotes: Vec::new(),
+        images: Vec::new(),
         tables: Vec::new(),
         code_blocks: Vec::new(),
         stack: Vec::new(),
@@ -417,6 +427,7 @@ struct Builder<'a> {
     styles: Vec<StyleSpan>,
     links: Vec<Link>,
     footnotes: Vec<Footnote>,
+    images: Vec<Image>,
     tables: Vec<Table>,
     code_blocks: Vec<CodeBlock>,
     stack: Vec<Frame<'a>>,
@@ -576,7 +587,18 @@ impl<'a> Builder<'a> {
                     wiki: matches!(link_type, LinkType::WikiLink { .. }),
                 });
             }
-            Tag::Image { .. } => self.markers_around(&range, content, InlineStyle::IMAGE),
+            Tag::Image { dest_url, .. } => {
+                let alt = content
+                    .as_ref()
+                    .map_or("", |content| &self.text[content.clone()])
+                    .to_owned();
+                self.images.push(Image {
+                    range: range.clone(),
+                    destination: dest_url.to_string(),
+                    alt,
+                });
+                self.markers_around(&range, content, InlineStyle::IMAGE);
+            }
             Tag::FootnoteDefinition(label) => {
                 let label_end = self.text[range.clone()]
                     .find("]:")
@@ -913,6 +935,7 @@ impl<'a> Builder<'a> {
             styles: self.styles,
             links: self.links,
             footnotes: self.footnotes,
+            images: self.images,
             tables: self.tables,
             code_blocks: self.code_blocks,
             line_markers,

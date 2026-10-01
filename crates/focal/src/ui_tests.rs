@@ -975,3 +975,52 @@ fn clicking_front_matter_shows_its_source(cx: &mut TestAppContext) {
         assert!(window.try_find("front-matter").is_none());
     });
 }
+
+/// A 1×1 transparent PNG.
+const PIXEL: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+    0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+    0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
+    0x42, 0x60, 0x82,
+];
+
+fn image_folder(name: &str, text: &str) -> std::path::PathBuf {
+    let root = crate::folder::tests::temp_folder(name);
+    std::fs::write(root.join("pixel.png"), PIXEL).unwrap();
+    std::fs::write(root.join("notes.md"), text).unwrap();
+    root
+}
+
+#[gpui_kit::test]
+fn an_image_line_shows_the_image(cx: &mut TestAppContext) {
+    let root = image_folder("image", "Above\n\n![A pixel](pixel.png)\n");
+    let (window, workspace) = open_folder(cx, &root);
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find(("image-island", 2usize)).is_some(),
+            "drawn in place of the line"
+        );
+    });
+    editor_of(cx, &workspace).update(cx, |e, cx| e.move_to(9, cx));
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find(("image-island", 2usize)).is_none(),
+            "the source shows"
+        );
+        assert!(
+            window.try_find(("image-preview", 2usize)).is_some(),
+            "with the image below"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn a_missing_image_says_so(cx: &mut TestAppContext) {
+    let root = image_folder("image-missing", "![Gone](nowhere.png)\n");
+    let (window, _) = open_folder(cx, &root);
+    act(cx, window, |window, _| {
+        let note = window.find(("image-missing", 0usize));
+        assert_eq!(note.label(), Some("Image not found: nowhere.png"));
+    });
+}

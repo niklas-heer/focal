@@ -70,10 +70,53 @@ fn unquote(value: &str) -> String {
     }
 }
 
+/// An image alone on its line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImageRef {
+    pub alt: String,
+    pub destination: String,
+}
+
+/// The image on `line` if nothing else is (beyond quote or list markers).
+pub fn block_image(analysis: &Analysis, text: &str, line: usize) -> Option<ImageRef> {
+    let content = analysis.content_range(line);
+    let source = &text[content.clone()];
+    let start = content.start + (source.len() - source.trim_start().len());
+    let end = start + source.trim().len();
+    analysis
+        .images
+        .iter()
+        .find(|image| image.range == (start..end))
+        .map(|image| ImageRef {
+            alt: image.alt.clone(),
+            destination: image.destination.clone(),
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::analysis::analyze;
+
+    #[test]
+    fn an_image_alone_on_its_line_is_a_block() {
+        let text = "![A cat](cat%20one.png \"title\")\ntext ![b](b.png)\n[![c](c.png)](https://x)\n> ![d](https://e.com/d.jpg)\n";
+        let analysis = analyze(text);
+        assert_eq!(
+            block_image(&analysis, text, 0),
+            Some(ImageRef {
+                alt: "A cat".into(),
+                destination: "cat%20one.png".into()
+            })
+        );
+        assert_eq!(block_image(&analysis, text, 1), None, "inside text");
+        assert_eq!(block_image(&analysis, text, 2), None, "inside a link");
+        assert_eq!(
+            block_image(&analysis, text, 3).map(|i| i.destination),
+            Some("https://e.com/d.jpg".into()),
+            "inside a quote"
+        );
+    }
 
     #[test]
     fn front_matter_fields_are_read_plainly() {

@@ -11,6 +11,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use focal_core::analysis::{InlineStyle, LineKind};
+use focal_core::blocks::block_image;
 use focal_core::display::{Run, mark_runs, prose_ranges};
 use focal_core::links;
 use focal_core::text_stats::{reading_minutes, sentence_at, word_count};
@@ -256,6 +257,8 @@ pub(crate) struct Island {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum IslandKind {
     FrontMatter,
+    /// An image alone on its line.
+    Image,
 }
 
 /// Everything derived from the text and caret, rebuilt after each change.
@@ -359,6 +362,9 @@ pub struct Editor {
     save_task: Option<Task<()>>,
     /// Watches the file for changes on disk; dropping it stops watching.
     watch: Option<(notify::RecommendedWatcher, Task<()>)>,
+    /// Remote images being downloaded, and those that failed, by URL.
+    pub(crate) fetching_images: RefCell<std::collections::HashSet<String>>,
+    pub(crate) failed_images: RefCell<std::collections::HashSet<String>>,
     /// The pointer's last position, where a footnote preview appears.
     pointer: Point<Pixels>,
     /// The editor's bounds in the window, from the last frame.
@@ -434,6 +440,8 @@ impl Editor {
             watch: None,
             grid: None,
             next_grid_session: 0,
+            fetching_images: RefCell::default(),
+            failed_images: RefCell::default(),
             pointer: Point::default(),
             frame: Rc::default(),
             footnote_preview: None,
@@ -2221,7 +2229,18 @@ impl Editor {
         let row = self.snapshot.rows.get(ix).copied().unwrap_or(Row::Line(0));
         let last = ix + 1 == self.snapshot.rows.len();
         let content = match row {
-            Row::Line(line) => self.render_line(line, &theme, window, cx),
+            // With the caret on an image's line, the image shows below its source.
+            Row::Line(line) => {
+                let text = self.render_line(line, &theme, window, cx);
+                if block_image(&self.snapshot.analysis, self.text(), line).is_some() {
+                    div()
+                        .child(text)
+                        .child(self.render_image(line, "image-preview", &theme, cx))
+                        .into_any_element()
+                } else {
+                    text
+                }
+            }
             Row::Table(table) => self.render_table(table, &theme, window, cx),
             Row::Island(island) => self.render_island(island, &theme, cx),
         };
