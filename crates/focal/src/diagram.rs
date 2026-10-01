@@ -40,12 +40,20 @@ pub fn render(
         }
         DiagramLanguage::GeoJson => crate::maps::geojson(source, palette),
         DiagramLanguage::TopoJson => crate::maps::topojson(source, palette),
-        other => Err(format!("{} diagrams are not drawn yet.", other.name())),
+        DiagramLanguage::D2 => {
+            let theme = if dark(palette) { "200" } else { "0" };
+            tool("d2", &["--theme", theme, "--pad", "10", "-", "-"], source)
+                .map(|svg| d2_polish(&svg))
+        }
+        DiagramLanguage::PlantUml => tool("plantuml", &["-tsvg", "-pipe"], source),
     }))
     .unwrap_or_else(|_| Err(format!("{} could not draw this.", language.name())))?;
     if matches!(
         language,
-        DiagramLanguage::Mermaid | DiagramLanguage::GeoJson | DiagramLanguage::TopoJson
+        DiagramLanguage::Mermaid
+            | DiagramLanguage::GeoJson
+            | DiagramLanguage::TopoJson
+            | DiagramLanguage::D2
     ) {
         // Drawn in Focal's palette already.
         Ok(drawn)
@@ -56,7 +64,7 @@ pub fn render(
 
 /// Whether Focal can draw `language` on this Mac; a block it cannot draw
 /// stays a code block.
-pub const fn can_draw(language: DiagramLanguage) -> bool {
+pub fn can_draw(language: DiagramLanguage) -> bool {
     match language {
         DiagramLanguage::Mermaid
         | DiagramLanguage::Graphviz
@@ -65,8 +73,41 @@ pub const fn can_draw(language: DiagramLanguage) -> bool {
         | DiagramLanguage::WaveDrom
         | DiagramLanguage::GeoJson
         | DiagramLanguage::TopoJson => true,
-        DiagramLanguage::PlantUml | DiagramLanguage::D2 => false,
+        DiagramLanguage::PlantUml => crate::tools::find("plantuml").is_some(),
+        DiagramLanguage::D2 => crate::tools::find("d2").is_some(),
     }
+}
+
+/// D2's drawing on Focal's page: its own background rectangle goes, and
+/// its embedded fonts (which the SVG renderer does not load) give way to
+/// Focal's.
+fn d2_polish(svg: &str) -> String {
+    let mut out = svg.replace(
+        "font-family: \"d2-",
+        "font-family: Helvetica Neue, Helvetica, Arial, \"d2-",
+    );
+    if let Some(rect) = out.find("<rect ")
+        && let Some(end) = out[rect..].find('>').map(|end| rect + end)
+        && let Some(fill) = out[rect..end].find("fill=\"").map(|at| rect + at + 6)
+        && let Some(close) = out[fill..end].find('"').map(|at| fill + at)
+    {
+        out.replace_range(fill..close, "none");
+    }
+    out
+}
+
+/// Runs the installed tool `name` on `source`.
+fn tool(name: &str, args: &[&str], source: &str) -> Result<String, String> {
+    let tool = crate::tools::find(name).ok_or_else(|| format!("{name} is not installed."))?;
+    crate::tools::run(&tool, args, source, crate::tools::TIMEOUT)
+}
+
+/// Whether `palette` is the dark appearance's, by its page color.
+fn dark(palette: &Palette) -> bool {
+    let channel = |at: usize| {
+        u8::from_str_radix(palette.canvas.get(at..at + 2).unwrap_or("ff"), 16).unwrap_or(255)
+    };
+    u32::from(channel(1)) + u32::from(channel(3)) + u32::from(channel(5)) < 3 * 128
 }
 
 /// Graphviz: the `dot` tool when it is installed, which reads all of DOT,
@@ -399,5 +440,30 @@ mod tests {
             assert!(svg_size(&svg).is_some(), "{language:?}: {svg}");
         }
         assert!(render(DiagramLanguage::WaveDrom, "{ signal: [", &palette()).is_err());
+    }
+
+    #[test]
+    fn d2_and_plantuml_draw_when_their_tools_are_installed() {
+        assert_eq!(
+            can_draw(DiagramLanguage::D2),
+            crate::tools::find("d2").is_some()
+        );
+        assert_eq!(
+            can_draw(DiagramLanguage::PlantUml),
+            crate::tools::find("plantuml").is_some()
+        );
+        if can_draw(DiagramLanguage::D2) {
+            let svg = render(DiagramLanguage::D2, "a -> b: hello", &palette()).unwrap();
+            assert!(svg_size(&svg).is_some(), "{svg}");
+            assert!(render(DiagramLanguage::D2, "a -> {", &palette()).is_err());
+        }
+    }
+
+    #[test]
+    fn d2_drawings_lose_their_background_and_fonts() {
+        let svg = r##"<svg><svg><rect x="0" fill="#1E1E2E" class="fill-N7"/><style>.a { font-family: "d2-1-font-regular"; }</style></svg></svg>"##;
+        let out = d2_polish(svg);
+        assert!(out.contains(r#"<rect x="0" fill="none""#), "{out}");
+        assert!(out.contains("font-family: Helvetica Neue"), "{out}");
     }
 }
