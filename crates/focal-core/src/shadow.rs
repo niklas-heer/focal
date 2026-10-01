@@ -10,6 +10,7 @@ use std::borrow::Cow;
 pub fn shadow(text: &str) -> Cow<'_, str> {
     let mut out = text.as_bytes().to_vec();
     let lines = line_ranges(text);
+    callouts(text, &lines, &mut out);
     // The open code fence: its character, its length and whether it is math.
     let mut fence: Option<(u8, usize, bool)> = None;
     for (ix, line) in lines.iter().enumerate() {
@@ -42,8 +43,42 @@ pub fn shadow(text: &str) -> Cow<'_, str> {
     }
 }
 
+/// Callout syntax without `>`: container fences and admonition titles
+/// become blank lines, and an admonition's four-space body indent becomes
+/// `>   `, so its body is read as a quote rather than as code.
+fn callouts(text: &str, lines: &[std::ops::Range<usize>], out: &mut [u8]) {
+    use crate::callouts::Style;
+    let blank = |out: &mut [u8], line: usize| {
+        for byte in &mut out[lines[line].clone()] {
+            *byte = b' ';
+        }
+    };
+    for callout in crate::callouts::callouts(text) {
+        match callout.style {
+            Style::Quote => {}
+            Style::Fenced { closing } => {
+                blank(out, callout.lines.start);
+                if let Some(line) = closing {
+                    blank(out, line);
+                }
+            }
+            Style::Indented => {
+                blank(out, callout.lines.start);
+                for range in &lines[callout.lines.start + 1..callout.lines.end] {
+                    let range = range.clone();
+                    if text[range.clone()].starts_with("    ") {
+                        out[range.start..range.start + 4].copy_from_slice(b">   ");
+                    } else if text[range.clone()].starts_with('\t') {
+                        out[range.start] = b'>';
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Each line's range, without its line ending.
-fn line_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
+pub(crate) fn line_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
     let mut lines = Vec::new();
     let mut start = 0;
     for (ix, byte) in text.bytes().enumerate() {
@@ -62,7 +97,7 @@ fn line_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
 }
 
 /// The length of a line's indentation and `>` quote markers.
-fn prefix_len(line: &str) -> usize {
+pub(crate) fn prefix_len(line: &str) -> usize {
     let bytes = line.as_bytes();
     let mut at = 0;
     while at < bytes.len() && (bytes[at] == b' ' || bytes[at] == b'>' || bytes[at] == b'\t') {
@@ -72,7 +107,7 @@ fn prefix_len(line: &str) -> usize {
 }
 
 /// A fence that opens a code block: its character, length and info string.
-fn opening_fence(body: &str) -> Option<(u8, usize, &str)> {
+pub(crate) fn opening_fence(body: &str) -> Option<(u8, usize, &str)> {
     let ch = *body.as_bytes().first()?;
     if ch != b'`' && ch != b'~' {
         return None;
@@ -82,7 +117,7 @@ fn opening_fence(body: &str) -> Option<(u8, usize, &str)> {
     (count >= 3 && !(ch == b'`' && info.contains('`'))).then_some((ch, count, info))
 }
 
-fn closes_fence(body: &str, ch: u8, count: usize) -> bool {
+pub(crate) fn closes_fence(body: &str, ch: u8, count: usize) -> bool {
     let run = body.bytes().take_while(|&b| b == ch).count();
     run >= count && body[run..].trim().is_empty()
 }

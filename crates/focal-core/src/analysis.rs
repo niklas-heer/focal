@@ -83,6 +83,17 @@ impl Alert {
         }
     }
 
+    /// Its name in HTML class names.
+    pub const fn class(self) -> &'static str {
+        match self {
+            Self::Note => "note",
+            Self::Tip => "tip",
+            Self::Important => "important",
+            Self::Warning => "warning",
+            Self::Caution => "caution",
+        }
+    }
+
     /// A small symbol before the title, drawn in the alert's color.
     pub const fn icon(self) -> &'static str {
         match self {
@@ -148,6 +159,9 @@ pub enum ListMarker {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PrefixLevel {
     Quote(Option<Alert>),
+    /// A callout written without `>` (a `:::` container, `>>>`, an MkDocs
+    /// admonition): drawn like a quote, with no prefix in the source.
+    Block(Option<Alert>),
     /// A list level: the marker on an item's first line, `None` on its other lines.
     List(Option<ListMarker>),
 }
@@ -182,23 +196,30 @@ pub enum Reveal {
 /// What a hidden marker shows instead of nothing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Replacement {
-    AlertTitle(Alert),
+    /// A callout's icon and title (empty when the source has its own title).
+    Callout(Option<Alert>, String),
     Label(String),
     /// Inline math written in Unicode.
     Math(String),
 }
 
 impl Replacement {
+    /// A callout title: the icon of `alert` (a quote mark for none), then
+    /// `title`.
+    pub fn callout(alert: Option<Alert>, title: &str) -> Self {
+        let icon = alert.map_or("❝", Alert::icon);
+        Self::Callout(alert, format!("{icon} {title}"))
+    }
+
     pub fn text(&self) -> String {
         match self {
-            Self::AlertTitle(alert) => format!("{} {}", alert.icon(), alert.title()),
-            Self::Label(label) | Self::Math(label) => label.clone(),
+            Self::Callout(_, text) | Self::Label(text) | Self::Math(text) => text.clone(),
         }
     }
 
     pub const fn style(&self) -> InlineStyle {
         match self {
-            Self::AlertTitle(_) => InlineStyle::ALERT_TITLE,
+            Self::Callout(..) => InlineStyle::ALERT_TITLE,
             Self::Label(_) => InlineStyle::LABEL,
             Self::Math(_) => InlineStyle::MATH,
         }
@@ -380,8 +401,11 @@ pub(crate) const fn options() -> Options {
 /// Analyzes the whole text. Parsing is fast enough to run after every edit.
 pub fn analyze(text: &str) -> Analysis {
     let lines = LineIndex::new(text);
+    // Other dialects' syntax, rewritten in place; ranges stay those of `text`.
+    let shadowed = crate::shadow::shadow(text);
     let mut builder = Builder {
         text,
+        shadow: &shadowed,
         prefix_end: (0..lines.len())
             .map(|line| lines.range(line).start)
             .collect(),
@@ -398,8 +422,6 @@ pub fn analyze(text: &str) -> Analysis {
         stack: Vec::new(),
         containers: Vec::new(),
     };
-    // Other dialects' syntax, rewritten in place; ranges stay those of `text`.
-    let shadowed = crate::shadow::shadow(text);
     for (event, range) in Parser::new_ext(&shadowed, options()).into_offset_iter() {
         builder.event(event, range);
     }
@@ -438,6 +460,9 @@ struct Container {
 
 struct Builder<'a> {
     text: &'a str,
+    /// The shadow text the parser read (see [`crate::shadow`]): the same
+    /// length as `text`, for finding structure such as quote markers.
+    shadow: &'a str,
     lines: LineIndex,
     /// Where each line's content starts after container prefixes such as `>`.
     prefix_end: Vec<usize>,
@@ -496,15 +521,23 @@ impl<'a> Builder<'a> {
         for line in lines.clone() {
             let line_range = self.lines.range(line);
             let start = self.prefix_end[line].max(range.start).min(line_range.end);
-            let bytes = self.text.as_bytes();
+            let bytes = self.shadow.as_bytes();
             let mut pos = start;
             while pos < line_range.end && matches!(bytes[pos], b' ' | b'\t') {
                 pos += 1;
             }
             if pos < line_range.end && bytes[pos] == b'>' {
+                let marker = pos;
                 pos += 1;
                 if pos < line_range.end && bytes[pos] == b' ' {
                     pos += 1;
+                }
+                // An admonition body's indent the shadow turned into `>   `:
+                // the whole indent is prefix.
+                if self.text.as_bytes()[marker] != b'>' {
+                    while pos < line_range.end && pos - marker < 4 && bytes[pos] == b' ' {
+                        pos += 1;
+                    }
                 }
                 self.infos[line]
                     .prefix
@@ -518,21 +551,7 @@ impl<'a> Builder<'a> {
                 info.alert = alert;
             }
         }
-        if let Some(alert) = alert {
-            let line = lines.start;
-            let line_range = self.lines.range(line);
-            let start = self.prefix_end[line];
-            if self.text[start..line_range.end]
-                .trim_start()
-                .starts_with("[!")
-            {
-                self.markers.push(Marker {
-                    range: start..line_range.end,
-                    reveal: Reveal::Lines(line..line + 1),
-                    replacement: Some(Replacement::AlertTitle(alert)),
-                });
-            }
-        }
+        // Titles are added with the other callouts, in `finish`.
         self.containers.push(Container {
             range: self.trim_line_ending(range),
             kind: ContainerKind::Quote(alert),
@@ -994,13 +1013,22 @@ impl<'a> Builder<'a> {
             }
         }
 
-        let line_markers = bucket(&self.lines, count, self.markers.iter().map(|m| &m.range));
-        let line_styles = bucket(&self.lines, count, self.styles.iter().map(|s| &s.range));
+        let mut markers = self.markers;
+        let mut styles = self.styles;
+        apply_callouts(
+            self.text,
+            &self.lines,
+            &mut infos,
+            &mut markers,
+            &mut styles,
+        );
+        let line_markers = bucket(&self.lines, count, markers.iter().map(|m| &m.range));
+        let line_styles = bucket(&self.lines, count, styles.iter().map(|s| &s.range));
         Analysis {
             lines: self.lines,
             infos,
-            markers: self.markers,
-            styles: self.styles,
+            markers,
+            styles,
             links: self.links,
             footnotes: self.footnotes,
             images: self.images,
@@ -1009,6 +1037,106 @@ impl<'a> Builder<'a> {
             code_blocks: self.code_blocks,
             line_markers,
             line_styles,
+        }
+    }
+}
+
+/// Draws callouts in every dialect (see [`crate::callouts`]): colors their
+/// lines, adds a bar where the source has no `>`, and hides their syntax
+/// behind an icon and title.
+fn apply_callouts(
+    text: &str,
+    lines: &LineIndex,
+    infos: &mut [LineInfo],
+    markers: &mut Vec<Marker>,
+    styles: &mut Vec<StyleSpan>,
+) {
+    use crate::callouts::{Style, callouts};
+    let content = |line: usize| {
+        let range = lines.range(line);
+        range.start..range.start + text[range].trim_end().len()
+    };
+    for callout in callouts(text) {
+        let first = callout.lines.start;
+        let alert = callout.alert;
+        let title = |written: bool| {
+            Some(Replacement::callout(
+                alert,
+                if written { "" } else { &callout.title },
+            ))
+        };
+        match callout.style {
+            Style::Quote => {
+                for line in callout.lines.clone() {
+                    infos[line].alert = alert;
+                    if let Some(level) = infos[line]
+                        .prefix
+                        .levels
+                        .iter_mut()
+                        .find(|level| matches!(level, PrefixLevel::Quote(_)))
+                    {
+                        *level = PrefixLevel::Quote(alert);
+                    }
+                }
+                markers.push(Marker {
+                    range: callout.head.clone(),
+                    reveal: Reveal::Lines(first..first + 1),
+                    replacement: title(callout.title_range.is_some()),
+                });
+                if let Some(range) = callout.title_range {
+                    styles.push(StyleSpan {
+                        range,
+                        style: InlineStyle::ALERT_TITLE,
+                    });
+                }
+            }
+            Style::Fenced { closing } => {
+                let colons = text[content(first)].trim_start().starts_with(':');
+                if colons && !callout.titled {
+                    // A Pandoc div of another kind: its fences stay, quietly.
+                    for line in std::iter::once(first).chain(closing) {
+                        styles.push(StyleSpan {
+                            range: content(line),
+                            style: InlineStyle::HTML,
+                        });
+                    }
+                    continue;
+                }
+                for line in callout.lines.clone() {
+                    infos[line].alert = alert;
+                    infos[line]
+                        .prefix
+                        .levels
+                        .insert(0, PrefixLevel::Block(alert));
+                }
+                markers.push(Marker {
+                    range: content(first),
+                    reveal: Reveal::Lines(first..first + 1),
+                    replacement: callout.titled.then(|| title(false)).flatten(),
+                });
+                if let Some(line) = closing {
+                    markers.push(Marker {
+                        range: content(line),
+                        reveal: Reveal::Lines(line..line + 1),
+                        replacement: None,
+                    });
+                }
+            }
+            Style::Indented => {
+                for line in callout.lines.clone() {
+                    infos[line].alert = alert;
+                    let levels = &mut infos[line].prefix.levels;
+                    match levels.first_mut() {
+                        Some(level @ PrefixLevel::Quote(_)) => *level = PrefixLevel::Block(alert),
+                        _ => levels.insert(0, PrefixLevel::Block(alert)),
+                    }
+                }
+                markers.push(Marker {
+                    range: content(first),
+                    reveal: Reveal::Lines(first..first + 1),
+                    replacement: title(false),
+                });
+            }
         }
     }
 }
@@ -1137,9 +1265,15 @@ mod tests {
 
     #[test]
     fn alert_titles_carry_an_icon() {
-        assert_eq!(Replacement::AlertTitle(Alert::Note).text(), "ⓘ Note");
-        assert_eq!(Replacement::AlertTitle(Alert::Warning).text(), "⚠ Warning");
-        assert_eq!(Replacement::AlertTitle(Alert::Caution).text(), "⊘ Caution");
+        assert_eq!(
+            Replacement::callout(Some(Alert::Note), "Note").text(),
+            "ⓘ Note"
+        );
+        assert_eq!(
+            Replacement::callout(Some(Alert::Warning), "Warning").text(),
+            "⚠ Warning"
+        );
+        assert_eq!(Replacement::callout(None, "Quote").text(), "❝ Quote");
     }
 
     #[test]
@@ -1287,6 +1421,7 @@ mod tests {
         );
         assert_eq!(analysis.info(0).alert, Some(Alert::Warning));
         assert_eq!(marker_texts(text, &analysis), ["[!WARNING]"]);
+        assert_eq!(title_of(&analysis, 0).as_deref(), Some("⚠ Warning"));
     }
 
     #[test]
@@ -1356,5 +1491,91 @@ mod tests {
             markers.contains(&"$`") && markers.contains(&"`$"),
             "{markers:?}"
         );
+    }
+
+    fn title_of(analysis: &Analysis, line: usize) -> Option<String> {
+        analysis.markers.iter().find_map(|m| match &m.replacement {
+            Some(Replacement::Callout(_, title))
+                if analysis.lines.line_of(m.range.start) == line =>
+            {
+                Some(title.clone())
+            }
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn obsidian_callouts_take_their_color_and_title() {
+        let text = "> [!info]- My title\n> Body\n";
+        let analysis = analyze(text);
+        assert_eq!(
+            analysis.info(1).prefix.levels,
+            [PrefixLevel::Quote(Some(Alert::Note))]
+        );
+        assert_eq!(analysis.info(0).alert, Some(Alert::Note));
+        assert_eq!(marker_texts(text, &analysis), ["[!info]- "]);
+        assert_eq!(
+            title_of(&analysis, 0).as_deref(),
+            Some("ⓘ "),
+            "the icon before the written title"
+        );
+        assert!(
+            analysis
+                .styles
+                .iter()
+                .any(|s| s.style.contains(InlineStyle::ALERT_TITLE)
+                    && &text[s.range.clone()] == "My title"),
+            "the written title is styled as one"
+        );
+    }
+
+    #[test]
+    fn fenced_containers_are_callouts_with_markdown_inside() {
+        let text = "::: warning Careful\nSome **bold** text\n:::\n";
+        let analysis = analyze(text);
+        for line in 0..3 {
+            assert_eq!(
+                analysis.info(line).prefix.levels.first(),
+                Some(&PrefixLevel::Block(Some(Alert::Warning))),
+                "line {line}"
+            );
+        }
+        assert_eq!(title_of(&analysis, 0).as_deref(), Some("⚠ Careful"));
+        assert!(
+            marker_texts(text, &analysis).contains(&":::"),
+            "the closing fence hides"
+        );
+        assert!(
+            analysis
+                .styles
+                .iter()
+                .any(|s| s.style.contains(InlineStyle::STRONG) && &text[s.range.clone()] == "bold"),
+            "the body is Markdown"
+        );
+    }
+
+    #[test]
+    fn mkdocs_admonitions_read_their_body_as_markdown() {
+        let text = "!!! tip \"Try this\"\n    First *one*.\n\n    Second.\n\nAfter\n";
+        let analysis = analyze(text);
+        for line in 0..4 {
+            assert_eq!(
+                analysis.info(line).prefix.levels.first(),
+                Some(&PrefixLevel::Block(Some(Alert::Tip))),
+                "line {line}"
+            );
+        }
+        assert!(analysis.info(5).prefix.levels.is_empty());
+        assert_ne!(analysis.info(1).kind, LineKind::Code, "not indented code");
+        assert_eq!(&text[analysis.content_range(1)], "First *one*.");
+        assert_eq!(title_of(&analysis, 0).as_deref(), Some("✦ Try this"));
+    }
+
+    #[test]
+    fn gitlab_quotes_are_plain_blocks() {
+        let text = ">>>\nQuoted\n>>>\n";
+        let analysis = analyze(text);
+        assert_eq!(analysis.info(1).prefix.levels, [PrefixLevel::Block(None)]);
+        assert_eq!(marker_texts(text, &analysis), [">>>", ">>>"]);
     }
 }

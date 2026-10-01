@@ -4,6 +4,10 @@
 
 use pulldown_cmark::{CodeBlockKind, CowStr, Event, LinkType, Parser, Tag, TagEnd};
 
+use std::fmt::Write as _;
+
+use crate::analysis::Alert;
+
 /// Something the app renders for the export.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Embed<'a> {
@@ -20,6 +24,97 @@ pub enum Embed<'a> {
 /// `text` as an HTML fragment. `render` turns embeds into HTML (or an
 /// `href`); `None` falls back to the escaped source.
 pub fn to_html(text: &str, render: &mut dyn FnMut(Embed<'_>) -> Option<String>) -> String {
+    use crate::callouts::{Style, callouts};
+    let lines = crate::shadow::line_ranges(text);
+    let mut html = String::new();
+    // Callouts are rendered on their own, each body as Markdown of its own.
+    let mut at_line = 0;
+    for callout in callouts(text) {
+        if callout.lines.start < at_line {
+            continue; // Inside a callout already rendered.
+        }
+        html.push_str(&markdown(
+            &join(text, &lines, at_line..callout.lines.start),
+            render,
+        ));
+        let body_lines = match callout.style {
+            Style::Quote | Style::Indented => callout.lines.start + 1..callout.lines.end,
+            Style::Fenced { closing } => {
+                callout.lines.start + 1..closing.unwrap_or(callout.lines.end)
+            }
+        };
+        let mut body = String::new();
+        if callout.style == Style::Quote {
+            // Text after the title on the first line belongs to the body too.
+            for line in body_lines.clone() {
+                body.push_str(strip_quote(&text[lines[line].clone()]));
+                body.push('\n');
+            }
+        } else if callout.style == Style::Indented {
+            for line in body_lines.clone() {
+                let source = &text[lines[line].clone()];
+                let stripped = source
+                    .strip_prefix("    ")
+                    .or_else(|| source.strip_prefix('\t'))
+                    .unwrap_or(source);
+                body.push_str(stripped);
+                body.push('\n');
+            }
+        } else {
+            body = join(text, &lines, body_lines.clone());
+        }
+        let inner = to_html(&body, render);
+        if callout.titled {
+            let class = callout.alert.map_or("quote", |alert| alert.class());
+            let icon = callout.alert.map_or("❝", Alert::icon);
+            let title = inline(&callout.title, render);
+            let _ = write!(
+                html,
+                "<div class=\"callout callout-{class}\">\n<p class=\"callout-title\">{icon} {title}</p>\n{inner}</div>\n"
+            );
+        } else if text[lines[callout.lines.start].clone()]
+            .trim_start()
+            .starts_with('>')
+        {
+            let _ = write!(html, "<blockquote>\n{inner}</blockquote>\n");
+        } else {
+            html.push_str(&inner);
+        }
+        at_line = callout.lines.end;
+    }
+    html.push_str(&markdown(&join(text, &lines, at_line..lines.len()), render));
+    html
+}
+
+/// The source of `lines`, each followed by a line break.
+fn join(text: &str, lines: &[std::ops::Range<usize>], range: std::ops::Range<usize>) -> String {
+    let mut joined = String::new();
+    for line in range {
+        joined.push_str(&text[lines[line].clone()]);
+        joined.push('\n');
+    }
+    joined
+}
+
+/// A quote line without its `>` and the space after it.
+fn strip_quote(line: &str) -> &str {
+    let trimmed = line.trim_start_matches(' ');
+    let unquoted = trimmed.strip_prefix('>').unwrap_or(trimmed);
+    unquoted.strip_prefix(' ').unwrap_or(unquoted)
+}
+
+/// Markdown `text` as inline HTML, without the paragraph around it.
+fn inline(text: &str, render: &mut dyn FnMut(Embed<'_>) -> Option<String>) -> String {
+    let html = markdown(text, render);
+    let html = html.trim();
+    html.strip_prefix("<p>")
+        .and_then(|h| h.strip_suffix("</p>"))
+        .unwrap_or(html)
+        .to_owned()
+}
+
+/// `text` without callouts, as HTML.
+fn markdown(text: &str, render: &mut dyn FnMut(Embed<'_>) -> Option<String>) -> String {
     let mut events: Vec<Event> = Vec::new();
     // A Mermaid block's source while it is read.
     let mut diagram: Option<String> = None;
@@ -187,16 +282,14 @@ pre { background: var(--code); padding: 0.8em 1em; border-radius: 6px; overflow-
 pre code { color: inherit; }
 mark { background: var(--mark); color: inherit; }
 blockquote { margin: 1em 0; padding-left: 1em; border-left: 3px solid var(--rule); color: var(--quiet); }
-blockquote[class^="markdown-alert-"] { color: var(--text); }
-.markdown-alert-note { border-color: var(--note); } .markdown-alert-tip { border-color: var(--tip); }
-.markdown-alert-important { border-color: var(--important); }
-.markdown-alert-warning { border-color: var(--warning); } .markdown-alert-caution { border-color: var(--caution); }
-blockquote[class^="markdown-alert-"]::before { display: block; font-weight: bold; }
-.markdown-alert-note::before { content: "ⓘ Note"; color: var(--note); }
-.markdown-alert-tip::before { content: "✦ Tip"; color: var(--tip); }
-.markdown-alert-important::before { content: "! Important"; color: var(--important); }
-.markdown-alert-warning::before { content: "⚠ Warning"; color: var(--warning); }
-.markdown-alert-caution::before { content: "⊘ Caution"; color: var(--caution); }
+.callout { margin: 1em 0; padding: 0.1em 0 0.1em 1em; border-left: 3px solid var(--rule); }
+.callout-title { font-weight: bold; margin: 0.4em 0; }
+.callout-note { border-color: var(--note); } .callout-note > .callout-title { color: var(--note); }
+.callout-tip { border-color: var(--tip); } .callout-tip > .callout-title { color: var(--tip); }
+.callout-important { border-color: var(--important); } .callout-important > .callout-title { color: var(--important); }
+.callout-warning { border-color: var(--warning); } .callout-warning > .callout-title { color: var(--warning); }
+.callout-caution { border-color: var(--caution); } .callout-caution > .callout-title { color: var(--caution); }
+.callout-quote > .callout-title { color: var(--quiet); }
 table { border-collapse: collapse; margin: 1em 0; }
 th, td { border: 1px solid var(--rule); padding: 0.3em 0.7em; }
 hr { border: none; border-top: 1px solid var(--rule); margin: 2em 0; }
@@ -344,5 +437,56 @@ mod tests {
         ] {
             assert!(joined.contains(expected), "{expected} in {joined}");
         }
+    }
+
+    #[test]
+    fn callouts_in_every_style_export_as_titled_blocks() {
+        for (text, class, title) in [
+            (
+                "> [!tip] Hello *you*\n> Body **b**\n",
+                "callout-tip",
+                "✦ Hello <em>you</em>",
+            ),
+            (
+                "> [!WARNING]\n> Body **b**\n",
+                "callout-warning",
+                "⚠ Warning",
+            ),
+            (
+                "::: danger Hot\nBody **b**\n:::\n",
+                "callout-caution",
+                "⊘ Hot",
+            ),
+            (
+                "!!! note \"Read\"\n    Body **b**\n",
+                "callout-note",
+                "ⓘ Read",
+            ),
+        ] {
+            let html = plain(text);
+            assert!(
+                html.contains(&format!(r#"<div class="callout {class}">"#)),
+                "{text:?}: {html}"
+            );
+            assert!(
+                html.contains(&format!(r#"<p class="callout-title">{title}</p>"#)),
+                "{text:?}: {html}"
+            );
+            assert!(html.contains("<strong>b</strong>"), "{text:?}: {html}");
+            assert!(
+                !html.contains("[!") && !html.contains(":::") && !html.contains("!!!"),
+                "{html}"
+            );
+        }
+    }
+
+    #[test]
+    fn gitlab_quotes_export_as_quotes() {
+        let html = plain("Before\n\n>>>\nQuoted *text*\n>>>\n\nAfter\n");
+        assert!(html.contains("<blockquote>"), "{html}");
+        assert!(
+            html.contains("<em>text</em>") && html.contains("<p>After</p>"),
+            "{html}"
+        );
     }
 }

@@ -31,7 +31,7 @@ pub fn wrap(
     let mut element = content;
     for (index, level) in prefix.levels.iter().enumerate().rev() {
         element = match level {
-            PrefixLevel::Quote(alert) => div()
+            PrefixLevel::Quote(alert) | PrefixLevel::Block(alert) => div()
                 .border_l(px(3.))
                 .border_color(alert.map_or(theme.quote_bar, |alert| theme.alert(alert)))
                 .pl(px(14.))

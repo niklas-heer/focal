@@ -11,6 +11,7 @@ pub mod a11y;
 pub mod analysis;
 pub mod blocks;
 pub mod buffer;
+pub mod callouts;
 pub mod display;
 pub mod editing;
 pub mod export;
