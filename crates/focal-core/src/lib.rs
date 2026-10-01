@@ -13,6 +13,7 @@ pub mod blocks;
 pub mod buffer;
 pub mod display;
 pub mod editing;
+pub mod find;
 pub mod fuzzy;
 mod lines;
 pub mod links;
