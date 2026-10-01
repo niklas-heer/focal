@@ -42,3 +42,5 @@ opt-level = 2
 
 [profile.release]
 lto = "thin"
+# Symbols add about 9 MB to the app; crash reports are not symbolicated anyway.
+strip = true

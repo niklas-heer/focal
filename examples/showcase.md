@@ -98,6 +98,15 @@ $$
 \int_0^\infty e^{-x^2}\,dx = \frac{\sqrt{\pi}}{2}
 $$
 
+Mermaid diagrams are drawn in place, natively:
+
+```mermaid
+flowchart LR
+    A[Write Markdown] --> B{Caret on it?}
+    B -->|yes| C[Show source]
+    B -->|no| D[Render]
+```
+
 That's it.
 
 [^1]: Footnotes render as quiet references, and hovering one shows its note.

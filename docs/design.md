@@ -18,7 +18,7 @@ The primary use is opening one file to read or review it, often a file in a Git 
 Principles, in priority order:
 
 1. **The file is the document.** The text on disk is the source of truth. Opening and saving a file without editing it produces identical bytes. Focal changes how Markdown looks, not what it says.
-2. **Native first.** Native Rust with GPUI, Zed's GPU-accelerated UI framework, using macOS services such as the system spell checker through `objc2` bindings. No web views, except an isolated Mermaid renderer (section 7).
+2. **Native first.** Native Rust with GPUI, Zed's GPU-accelerated UI framework, using macOS services such as the system spell checker through `objc2` bindings. No web views, except an isolated Mermaid renderer (section 7). (Not needed so far: Mermaid renders natively since M5.)
 3. **Quiet by default.** Chrome appears only when asked for: the formatting bar at the bottom edge, the file list on a shortcut, focus mode on a toggle.
 4. **Correct Markdown.** CommonMark and GitHub-flavored Markdown are rendered the way GitHub renders them, as far as the parser allows.
 5. **Stable while editing.** Rendering must never flicker, jump or lose styling while scrolling, typing or clicking. The Electron prototype failed here; the GPUI spike and Milestone 0 tested it first.
@@ -192,7 +192,7 @@ Built in M4 unless marked otherwise.
 | Front matter | Metadata block from `pulldown-cmark`; one quiet line of keys and values that shows its source on click or when the caret enters; a document opens with the caret at its body. |
 | Footnotes | References stay inline and colored (GPUI text runs cannot raise or shrink text); hovering previews the note; ⌘-click or ⌘↩ jumps between reference and note, ⌘[ returns. |
 | Math | Display math (`$$ … $$` alone on its lines) is an island typeset by MathJax 3 in an embedded QuickJS engine, no web view ([decision](../decisions/2026-10-01_071745636_typeset-math-with-mathjax-in-an-embedded-quickjs.md), proposed); editing shows the source with a live preview. Inline math cannot be an image inside a text run, so away from the caret it reads as Unicode (Greek letters, operators, super- and subscripts, `e^(iπ)` where Unicode has no superscript); TeX that Unicode cannot show stays source. |
-| Mermaid | Rendered to SVG off the main thread by an isolated renderer (a hidden `WKWebView` through `objc2`, or an external renderer), only when a document contains a Mermaid block. SVGs are cached by content hash and appearance and shown as island images. |
+| Mermaid | Built in M5: a fenced `mermaid` block is an island drawn by `merman`, a headless Rust implementation of Mermaid, on a background thread, in Focal's palette for the appearance; cached by source and palette; editing shows the source with a live preview, and a parse error shows the parser's message. No web view ([decision](../decisions/2026-10-01_080601086_render-mermaid-natively-with-merman.md), proposed). |
 | Wiki links | `[[name]]` and `[[name\|label]]` resolve to files in the open folder (or beside a single file), without regard to case, same folder first; unresolved links are drawn quietly; ⌘-click or ⌘↩ opens or creates (`<name>.md`, written on first save). Relative Markdown links and `#heading` anchors follow too; ⌘[ goes back. |
 | Images | An image alone on its line is an island scaled to the column; with the caret on the line the source shows with the image below. Relative paths resolve against the document; remote images are downloaded once in the background into `~/Library/Caches/Focal/images`. |
 
@@ -205,7 +205,7 @@ Built in M4 unless marked otherwise.
 | **M2 — Tables** | Done: every table is a grid with cells edited in place; Tab, Return and the arrow keys move between cells; hover buttons, a context menu and drag handles add, delete, move and align rows and columns; edited tables are rewritten aligned, and a cell edit is one undo step; wide tables scroll sideways. |
 | **M3 — Chrome** | Done: bottom bar with word count, focus mode by sentence or paragraph with typewriter scrolling, folder mode with a live sidebar and a ⌘P quick switcher, a settings window, a menu bar, and formatting shortcuts. |
 | **M4 — Extras** | Done: islands (blocks drawn in place of their source while the caret is elsewhere) for front matter, images and display math; footnote previews and jumps; following wiki links, file links and anchors with ⌘[ to go back; alert icons. |
-| **M5 — Mermaid** | Lazy renderer, cache and island. |
+| **M5 — Mermaid** | Done: native rendering with `merman`, cache by source and appearance, island with live preview. |
 | **M6 — Distribution** | Done: `Focal.app` bundle with an icon and Markdown document types, one running instance that `focal` forwards to (with `--wait`), Finder's Open With, "Install Command Line Tool…", Sparkle updates with a setting and a download prompt, About panel, Developer ID signing, and a release script with notarization and a Homebrew cask template. The first public release is still to be published. |
 
 Each milestone gets its own implementation plan before work starts.

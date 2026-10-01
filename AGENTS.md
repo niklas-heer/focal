@@ -11,7 +11,7 @@ Focal is a native macOS Markdown editor: iA Writer's minimal look with Bear-styl
 ## Invariants
 
 - **The file is the document.** Opening and saving an unedited file must produce identical bytes. Never normalize whitespace, line endings or Markdown style. The only permitted rewrite is an edited table, serialized with aligned columns.
-- **Native first.** Native Rust with GPUI, using macOS services (spell checking, and later others) through `objc2` bindings where GPUI has none. No web views, except an isolated Mermaid renderer that loads only when a document contains Mermaid.
+- **Native first.** Native Rust with GPUI, using macOS services (spell checking, and later others) through `objc2` bindings where GPUI has none. No web views. (The principles allow an isolated Mermaid renderer, but Mermaid now renders natively with `merman`; math uses MathJax in an embedded QuickJS, not a web view.)
 - **Stable rendering.** Styling must not flicker, jump or disappear while scrolling or typing. This is where the earlier Electron prototype failed (history at commit `a72a464`).
 - **Accessible.** The editor's accessibility tree carries the rendered text, the selection and tables. Keep it in step with rendering changes.
 
