@@ -26,7 +26,7 @@ Focal is a native macOS Markdown editor: iA Writer's minimal look with Bear-styl
 - `FOCAL_TRACE=1` prints timings and the caret per change. `FOCAL_FOREGROUND=1` keeps `focal` in the terminal like `--wait`. `FOCAL_APPEARANCE=light` or `dark` overrides the system appearance for Focal alone, to check both palettes.
 - GPUI pitfalls found so far are listed in [docs/gpui-spike.md](docs/gpui-spike.md); absolutely positioned elements need explicit `top_0()`/`left_0()`.
 - Debug builds are large (several GB); run `mise run clean` when done.
-- CI (`.github/workflows/check.yml`) runs `mise run check` on a macOS runner, because the app links AppKit. Dependabot proposes updates weekly; when one fails the check, `fix-dependency-update.yml` has Claude adapt the code on its branch. Review those commits like any other.
+- CI (`.github/workflows/check.yml`) runs `mise run check` on a macOS runner, because the app links AppKit. Dependabot proposes updates weekly; when one fails the check, `fix-dependency-update.yml` has Claude adapt the code on its branch (once the secret `CLAUDE_CODE_OAUTH_TOKEN` and the variable `CLAUDE_FIX_ENABLED=true` are set). Review those commits like any other.
 
 ## Conventions
 

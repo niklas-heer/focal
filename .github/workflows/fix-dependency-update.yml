@@ -2,9 +2,10 @@
 # fixes the code on the same branch, and the check runs again. A person
 # still reviews and merges the pull request.
 #
-# Needs the repository secret CLAUDE_CODE_OAUTH_TOKEN (`claude
-# setup-token`). The new dependency's build scripts run in this job, which
-# holds that token; only Dependabot's own branches are taken.
+# Turned on by the repository variable CLAUDE_FIX_ENABLED=true together with
+# the secret CLAUDE_CODE_OAUTH_TOKEN (`claude setup-token`); a job condition
+# cannot read secrets. The new dependency's build scripts run in this job,
+# which holds that token; only Dependabot's own branches are taken.
 name: Fix dependency update
 
 on:
@@ -27,6 +28,7 @@ jobs:
     # Dependabot's run only: the check this job starts again runs as
     # github-actions, so a fix that still fails is left for a person.
     if: >-
+      vars.CLAUDE_FIX_ENABLED == 'true' &&
       github.event.workflow_run.conclusion == 'failure' &&
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.actor.login == 'dependabot[bot]' &&
@@ -48,6 +50,8 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}
+          # The run was started by Dependabot's pull request.
+          allowed_bots: "dependabot,dependabot[bot]"
           claude_args: >-
             --max-turns 300
             --allowedTools "Bash(cargo:*),Bash(mise:*),Bash(git diff:*),Bash(git log:*),Bash(git status:*),Bash(gh pr view:*),Read,Edit,Write,Glob,Grep,WebFetch"

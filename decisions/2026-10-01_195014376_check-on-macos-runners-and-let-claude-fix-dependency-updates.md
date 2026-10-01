@@ -32,7 +32,7 @@ Alternatives considered:
 
 ## Consequences
 
-- The repository needs the secret `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) for the fix workflow; without it, failing updates simply wait for a person.
+- The fix workflow runs once the repository has the secret `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) and the variable `CLAUDE_FIX_ENABLED=true` (job conditions cannot read secrets); until then, failing updates wait for a person.
 - The fix job compiles and runs the new dependency's build scripts while it holds that token and a token that can push. It only takes Dependabot's branches in this repository, but a compromised crate release could read the secrets; rotating the token is the remedy.
 - Once the fix workflow pushes to a Dependabot branch, Dependabot stops rebasing that pull request; recreate it with `@dependabot recreate` if needed.
 - `svgbob` is held back on purpose and ignored by Dependabot.
