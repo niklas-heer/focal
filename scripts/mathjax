@@ -1,0 +1,12 @@
+#!/bin/bash
+# Rebuild assets/mathjax/mathjax.js: MathJax's TeX input and SVG output in one
+# script that Focal runs in an embedded QuickJS (no web view). Needs bun.
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+work="$(mktemp -d "${TMPDIR:-/tmp}/focal-mathjax.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+cp "$root/packaging/mathjax/package.json" "$root/packaging/mathjax/entry.js" "$work/"
+(cd "$work" && bun install --silent && bun build entry.js --minify --format=iife --target=browser --outfile mathjax.js)
+cp "$work/mathjax.js" "$root/assets/mathjax/mathjax.js"
+cp "$work/node_modules/mathjax-full/LICENSE" "$root/assets/mathjax/LICENSE"
+echo "Wrote assets/mathjax/mathjax.js ($(wc -c < "$root/assets/mathjax/mathjax.js") bytes)"

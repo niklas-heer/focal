@@ -93,6 +93,33 @@ pub fn block_image(analysis: &Analysis, text: &str, line: usize) -> Option<Image
         })
 }
 
+/// Display math (`$$ … $$`) that stands alone in its lines.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MathBlock {
+    pub lines: Range<usize>,
+    /// The TeX between the dollar signs.
+    pub tex: String,
+}
+
+/// The display math that fills whole lines (beyond quote or list markers).
+pub fn math_blocks(analysis: &Analysis, text: &str) -> Vec<MathBlock> {
+    analysis
+        .display_math
+        .iter()
+        .filter_map(|(range, tex)| {
+            let lines = analysis.lines.lines_of(range);
+            let first = analysis.content_range(lines.start);
+            let last = analysis.lines.range(lines.end - 1);
+            let before = &text[first.start..range.start];
+            let after = &text[range.end..last.end];
+            (before.trim().is_empty() && after.trim().is_empty()).then(|| MathBlock {
+                lines,
+                tex: tex.trim().to_owned(),
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,6 +142,25 @@ mod tests {
             block_image(&analysis, text, 3).map(|i| i.destination),
             Some("https://e.com/d.jpg".into()),
             "inside a quote"
+        );
+    }
+
+    #[test]
+    fn display_math_alone_on_its_lines_is_a_block() {
+        let text = "$$\n\\frac{a}{b}\n$$\n\nInline $$x$$ here.\n\n$$E = mc^2$$\n";
+        let blocks = math_blocks(&analyze(text), text);
+        assert_eq!(
+            blocks,
+            [
+                MathBlock {
+                    lines: 0..3,
+                    tex: "\\frac{a}{b}".into()
+                },
+                MathBlock {
+                    lines: 6..7,
+                    tex: "E = mc^2".into()
+                },
+            ]
         );
     }
 

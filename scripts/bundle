@@ -37,6 +37,7 @@ sed -e "s/<string>VERSION</<string>$version</" -e "s/<string>BUILD</<string>$bui
   packaging/Info.plist > "$app/Contents/Info.plist"
 cp packaging/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
 cp assets/fonts/LICENSE.md "$app/Contents/Resources/Fonts-LICENSE.md"
+cp assets/mathjax/LICENSE "$app/Contents/Resources/MathJax-LICENSE"
 cp -R "$sparkle/Sparkle.framework" "$app/Contents/Frameworks/"
 if [[ -n "$feed" ]]; then
   /usr/libexec/PlistBuddy -c "Add :SUFeedURL string $feed" "$app/Contents/Info.plist"

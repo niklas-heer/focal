@@ -1024,3 +1024,22 @@ fn a_missing_image_says_so(cx: &mut TestAppContext) {
         assert_eq!(note.label(), Some("Image not found: nowhere.png"));
     });
 }
+
+#[gpui_kit::test]
+fn display_math_is_an_island_with_a_preview_while_editing(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "Before\n\n$$\nE = mc^2\n$$\n");
+    act(cx, window, |window, _| {
+        assert!(window.try_find(("math-island", 2usize)).is_some());
+    });
+    editor.update(cx, |e, cx| e.move_to(12, cx));
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find(("math-island", 2usize)).is_none(),
+            "the source shows"
+        );
+        assert!(
+            window.try_find(("math-preview", 2usize)).is_some(),
+            "with a preview"
+        );
+    });
+}

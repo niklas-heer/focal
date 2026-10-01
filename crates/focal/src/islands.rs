@@ -4,18 +4,20 @@
 
 use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use focal_core::Analysis;
-use focal_core::blocks::{block_image, front_matter};
+use focal_core::blocks::{block_image, front_matter, math_blocks};
 use focal_core::links;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, Context, InteractiveElement as _, IntoElement, ObjectFit, ParentElement as _,
-    StatefulInteractiveElement as _, Styled as _, StyledImage as _, TestSupportExt as _, canvas,
-    div, img, px,
+    AnyElement, Context, Image, ImageFormat, InteractiveElement as _, IntoElement, ObjectFit,
+    ParentElement as _, StatefulInteractiveElement as _, Styled as _, StyledImage as _,
+    TestSupportExt as _, canvas, div, img, px,
 };
 
 use crate::editor::{Editor, Island, IslandKind, PaintedRow, Row};
+use crate::math;
 use crate::theme::Theme;
 
 /// The islands of this version of the text.
@@ -28,6 +30,13 @@ pub(crate) fn islands(analysis: &Analysis, text: &str) -> Vec<Island> {
             end: matter.lines.end,
         });
     }
+    for block in math_blocks(analysis, text) {
+        islands.push(Island {
+            kind: IslandKind::Math,
+            start: block.lines.start,
+            end: block.lines.end,
+        });
+    }
     for line in 0..analysis.line_count() {
         if block_image(analysis, text, line).is_some() {
             islands.push(Island {
@@ -38,6 +47,23 @@ pub(crate) fn islands(analysis: &Analysis, text: &str) -> Vec<Island> {
         }
     }
     islands
+}
+
+/// A formula's typesetting, by its TeX.
+#[derive(Clone)]
+pub(crate) enum Typeset {
+    Pending,
+    Svg(String),
+    Error(String),
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a color channel in 0..=1 scales to 0..=255"
+)]
+fn channel(value: f32) -> u8 {
+    (value.clamp(0., 1.) * 255.).round() as u8
 }
 
 /// Where an image's pixels come from.
@@ -90,7 +116,7 @@ impl Editor {
     pub(crate) fn island_entry(&self, island: Island) -> usize {
         let line = match island.kind {
             IslandKind::FrontMatter if island.end - island.start > 2 => island.start + 1,
-            IslandKind::FrontMatter | IslandKind::Image => island.start,
+            IslandKind::FrontMatter | IslandKind::Image | IslandKind::Math => island.start,
         };
         self.snapshot.analysis.lines.range(line).start
     }
@@ -119,6 +145,7 @@ impl Editor {
         let content = match island.kind {
             IslandKind::FrontMatter => self.render_front_matter(theme),
             IslandKind::Image => self.render_image(island.start, "image-island", theme, cx),
+            IslandKind::Math => self.render_math(island.start, "math-island", theme, cx),
         };
         div()
             .relative()
@@ -252,6 +279,86 @@ impl Editor {
         match path {
             Some(path) if path.is_file() => Picture::Ready(path),
             _ => Picture::Missing,
+        }
+    }
+
+    /// The display math starting on `line`, typeset and centered; its TeX
+    /// while it is being typeset, and `MathJax`'s message if it cannot be.
+    pub(crate) fn render_math(
+        &self,
+        line: usize,
+        id: &'static str,
+        theme: &Theme,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let Some(block) = math_blocks(&self.snapshot.analysis, self.text())
+            .into_iter()
+            .find(|block| block.lines.start == line)
+        else {
+            return div().into_any_element();
+        };
+        let state = self.math.borrow().get(&block.tex).cloned();
+        let size = self.typography.size;
+        let frame = div()
+            .id((id, line))
+            .test_support()
+            .aria_label(block.tex.clone())
+            .w_full()
+            .py(px(8.))
+            .flex()
+            .justify_center()
+            .cursor_pointer();
+        let quiet = |text: String| {
+            div()
+                .text_size(px(size * 0.8))
+                .text_color(theme.marker)
+                .child(text)
+        };
+        match state {
+            Some(Typeset::Svg(svg)) => {
+                let color = theme.text.to_rgb();
+                let hex = format!(
+                    "#{:02x}{:02x}{:02x}",
+                    channel(color.r),
+                    channel(color.g),
+                    channel(color.b)
+                );
+                match math::sized(&svg, &hex, size) {
+                    Some(sized) => frame
+                        .child(
+                            img(Arc::new(Image::from_bytes(ImageFormat::Svg, sized.svg)))
+                                .w(px(sized.width))
+                                .h(px(sized.height)),
+                        )
+                        .into_any_element(),
+                    None => frame.child(quiet(block.tex)).into_any_element(),
+                }
+            }
+            Some(Typeset::Error(message)) => frame
+                .child(quiet(format!("Math: {message}")))
+                .into_any_element(),
+            Some(Typeset::Pending) => frame.child(quiet(block.tex)).into_any_element(),
+            None => {
+                self.math
+                    .borrow_mut()
+                    .insert(block.tex.clone(), Typeset::Pending);
+                let result = math::typeset(&block.tex);
+                let tex = block.tex.clone();
+                cx.spawn(async move |this, cx| {
+                    let typeset = match result.recv().await {
+                        Ok(Ok(svg)) => Typeset::Svg(svg),
+                        Ok(Err(message)) => Typeset::Error(message),
+                        Err(_) => Typeset::Error("the typesetter stopped".into()),
+                    };
+                    this.update(cx, |this, cx| {
+                        this.math.borrow_mut().insert(tex, typeset);
+                        cx.notify();
+                    })
+                    .ok();
+                })
+                .detach();
+                frame.child(quiet(block.tex)).into_any_element()
+            }
         }
     }
 

@@ -275,6 +275,8 @@ pub struct Analysis {
     pub links: Vec<Link>,
     pub footnotes: Vec<Footnote>,
     pub images: Vec<Image>,
+    /// Display math (`$$ … $$`): its source range and the TeX inside.
+    pub display_math: Vec<(Range<usize>, String)>,
     pub tables: Vec<Table>,
     pub code_blocks: Vec<CodeBlock>,
     pub(crate) line_markers: Vec<Vec<Piece>>,
@@ -376,6 +378,7 @@ pub fn analyze(text: &str) -> Analysis {
         links: Vec::new(),
         footnotes: Vec::new(),
         images: Vec::new(),
+        display_math: Vec::new(),
         tables: Vec::new(),
         code_blocks: Vec::new(),
         stack: Vec::new(),
@@ -428,6 +431,7 @@ struct Builder<'a> {
     links: Vec<Link>,
     footnotes: Vec<Footnote>,
     images: Vec<Image>,
+    display_math: Vec<(Range<usize>, String)>,
     tables: Vec<Table>,
     code_blocks: Vec<CodeBlock>,
     stack: Vec<Frame<'a>>,
@@ -530,7 +534,10 @@ impl<'a> Builder<'a> {
                 self.wrap(range, ticks, ticks, InlineStyle::CODE);
             }
             Event::InlineMath(_) => self.wrap(range, 1, 1, InlineStyle::MATH),
-            Event::DisplayMath(_) => self.wrap(range, 2, 2, InlineStyle::MATH),
+            Event::DisplayMath(tex) => {
+                self.wrap(range, 2, 2, InlineStyle::MATH);
+                self.display_math.push((range.clone(), tex.to_string()));
+            }
             Event::InlineHtml(_) | Event::Html(_) => self.style(range.clone(), InlineStyle::HTML),
             Event::FootnoteReference(label) => {
                 self.wrap(range, 2, 1, InlineStyle::FOOTNOTE);
@@ -936,6 +943,7 @@ impl<'a> Builder<'a> {
             links: self.links,
             footnotes: self.footnotes,
             images: self.images,
+            display_math: self.display_math,
             tables: self.tables,
             code_blocks: self.code_blocks,
             line_markers,

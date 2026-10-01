@@ -11,7 +11,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use focal_core::analysis::{InlineStyle, LineKind};
-use focal_core::blocks::block_image;
+use focal_core::blocks::{block_image, math_blocks};
 use focal_core::display::{Run, mark_runs, prose_ranges};
 use focal_core::links;
 use focal_core::text_stats::{reading_minutes, sentence_at, word_count};
@@ -259,6 +259,8 @@ pub(crate) enum IslandKind {
     FrontMatter,
     /// An image alone on its line.
     Image,
+    /// Display math alone on its lines.
+    Math,
 }
 
 /// Everything derived from the text and caret, rebuilt after each change.
@@ -362,6 +364,8 @@ pub struct Editor {
     save_task: Option<Task<()>>,
     /// Watches the file for changes on disk; dropping it stops watching.
     watch: Option<(notify::RecommendedWatcher, Task<()>)>,
+    /// Typeset display math, by its TeX.
+    pub(crate) math: RefCell<HashMap<String, crate::islands::Typeset>>,
     /// Remote images being downloaded, and those that failed, by URL.
     pub(crate) fetching_images: RefCell<std::collections::HashSet<String>>,
     pub(crate) failed_images: RefCell<std::collections::HashSet<String>>,
@@ -440,6 +444,7 @@ impl Editor {
             watch: None,
             grid: None,
             next_grid_session: 0,
+            math: RefCell::default(),
             fetching_images: RefCell::default(),
             failed_images: RefCell::default(),
             pointer: Point::default(),
@@ -2232,10 +2237,20 @@ impl Editor {
             // With the caret on an image's line, the image shows below its source.
             Row::Line(line) => {
                 let text = self.render_line(line, &theme, window, cx);
-                if block_image(&self.snapshot.analysis, self.text(), line).is_some() {
+                let analysis = &self.snapshot.analysis;
+                // A formula being edited shows its preview after its last line.
+                let math = math_blocks(analysis, self.text())
+                    .into_iter()
+                    .find(|block| block.lines.end == line + 1);
+                if block_image(analysis, self.text(), line).is_some() {
                     div()
                         .child(text)
                         .child(self.render_image(line, "image-preview", &theme, cx))
+                        .into_any_element()
+                } else if let Some(block) = math {
+                    div()
+                        .child(text)
+                        .child(self.render_math(block.lines.start, "math-preview", &theme, cx))
                         .into_any_element()
                 } else {
                     text

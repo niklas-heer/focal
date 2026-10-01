@@ -12,6 +12,7 @@ mod highlight;
 mod instance;
 mod islands;
 mod mac;
+mod math;
 mod menus;
 mod prefix;
 mod settings;
