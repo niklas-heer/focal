@@ -1593,3 +1593,20 @@ fn folds_opened_by_hand_stay_open_when_the_file_opens_again(cx: &mut TestAppCont
     let editor = again.read_with(cx, |w, _| w.editor().clone());
     assert!(shows_line(cx, &editor, 1), "opened as it was left");
 }
+
+#[gpui_kit::test]
+fn an_html_table_draws_as_a_grid_until_the_caret_enters(cx: &mut TestAppContext) {
+    let text = "Intro\n\n<table>\n<tr><th>A</th><th>B</th></tr>\n<tr><td>1</td><td>2</td></tr>\n</table>\n";
+    let (window, editor) = open_editor(cx, text);
+    act(cx, window, |window, _| {
+        assert!(window.try_find(("html-table", 2usize)).is_some());
+    });
+    let inside = text.find("<tr>").unwrap();
+    editor.update(cx, |e, cx| e.move_to(inside, cx));
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find(("html-table", 2usize)).is_none(),
+            "the source shows"
+        );
+    });
+}

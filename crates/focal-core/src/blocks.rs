@@ -341,6 +341,128 @@ pub fn folds(analysis: &Analysis, text: &str) -> Vec<Fold> {
     found
 }
 
+/// A table written in HTML (`<table>` … `</table>`), read for drawing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HtmlTable {
+    /// Its lines, from `<table>` to `</table>`.
+    pub lines: Range<usize>,
+    /// Each row's cells as plain text.
+    pub rows: Vec<Vec<String>>,
+    /// Whether the first row is a header (`<th>` cells).
+    pub header: bool,
+}
+
+/// The HTML tables of the text, outside code.
+pub fn html_tables(analysis: &Analysis, text: &str) -> Vec<HtmlTable> {
+    let count = analysis.line_count();
+    let line = |ix: usize| &text[analysis.lines.range(ix)];
+    let mut found = Vec::new();
+    let mut start = 0;
+    while start < count {
+        let code = matches!(
+            analysis.info(start).kind,
+            LineKind::Code | LineKind::CodeFence { .. }
+        );
+        if code
+            || !line(start)
+                .trim_start()
+                .to_ascii_lowercase()
+                .starts_with("<table")
+        {
+            start += 1;
+            continue;
+        }
+        let Some(end) =
+            (start..count).find(|&ix| line(ix).to_ascii_lowercase().contains("</table>"))
+        else {
+            break;
+        };
+        let source = &text[analysis.lines.range(start).start..analysis.lines.range(end).end];
+        let (rows, header) = table_rows(source);
+        if !rows.is_empty() {
+            found.push(HtmlTable {
+                lines: start..end + 1,
+                rows,
+                header,
+            });
+        }
+        start = end + 1;
+    }
+    found
+}
+
+/// The rows of an HTML table's source, and whether the first is a header.
+fn table_rows(source: &str) -> (Vec<Vec<String>>, bool) {
+    let lower = source.to_ascii_lowercase();
+    let mut rows = Vec::new();
+    let mut header = false;
+    let mut at = 0;
+    while let Some(row_start) = lower[at..].find("<tr").map(|ix| ix + at) {
+        let row_end = lower[row_start..]
+            .find("</tr>")
+            .map_or(lower.len(), |ix| ix + row_start);
+        let mut cells = Vec::new();
+        let mut cell_at = row_start;
+        while let Some(open) =
+            find_cell(&lower[cell_at..row_end]).map(|(ix, th)| (ix + cell_at, th))
+        {
+            let (open, th) = open;
+            let content_start = lower[open..].find('>').map_or(row_end, |ix| ix + open + 1);
+            let close = lower[content_start..row_end]
+                .find(if th { "</th>" } else { "</td>" })
+                .map_or(row_end, |ix| ix + content_start);
+            if rows.is_empty() && th {
+                header = true;
+            }
+            cells.push(plain(&source[content_start.min(close)..close]));
+            cell_at = close.max(content_start);
+            if cell_at >= row_end {
+                break;
+            }
+        }
+        if !cells.is_empty() {
+            rows.push(cells);
+        }
+        at = row_end.max(row_start + 3);
+    }
+    (rows, header)
+}
+
+/// The next `<td` or `<th` in `lower`, and whether it is a header cell.
+fn find_cell(lower: &str) -> Option<(usize, bool)> {
+    let td = lower.find("<td");
+    let th = lower.find("<th");
+    match (td, th) {
+        (Some(td), Some(th)) if th < td => Some((th, true)),
+        (Some(td), _) => Some((td, false)),
+        (None, Some(th)) => Some((th, true)),
+        (None, None) => None,
+    }
+}
+
+/// HTML as plain text: tags left out, common entities read, whitespace
+/// collapsed.
+fn plain(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            c if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    let out = out
+        .replace("&nbsp;", " ")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&");
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -520,5 +642,26 @@ mod tests {
         );
         assert!(!fold("<details open>\n<summary>More</summary>\nx\n</details>\n")[0].folded);
         assert!(fold("> [!note] Plain\n> x\n").is_empty(), "not foldable");
+    }
+
+    #[test]
+    fn html_tables_read_as_rows_of_cells() {
+        let text = "Before\n\n<table>\n  <tr><th>Name</th><th>Role</th></tr>\n  <tr>\n    <td><b>Ada</b></td>\n    <td>Math &amp; code</td>\n  </tr>\n</table>\n\nAfter\n";
+        let tables = html_tables(&analyze(text), text);
+        assert_eq!(tables.len(), 1);
+        let table = &tables[0];
+        assert_eq!(table.lines, 2..9);
+        assert!(table.header);
+        assert_eq!(
+            table.rows,
+            [vec!["Name", "Role"], vec!["Ada", "Math & code"]]
+        );
+    }
+
+    #[test]
+    fn html_tables_in_code_or_unclosed_are_not_tables() {
+        let text =
+            "```\n<table><tr><td>x</td></tr></table>\n```\n\n<table>\n<tr><td>open</td></tr>\n";
+        assert!(html_tables(&analyze(text), text).is_empty());
     }
 }

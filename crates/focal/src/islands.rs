@@ -9,7 +9,9 @@ use std::time::{Duration, Instant};
 
 use focal_core::Analysis;
 use focal_core::analysis::Alert;
-use focal_core::blocks::{block_image, diagram_blocks, front_matter, math_blocks, toc_blocks};
+use focal_core::blocks::{
+    block_image, diagram_blocks, front_matter, html_tables, math_blocks, toc_blocks,
+};
 use focal_core::links;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -57,6 +59,13 @@ pub(crate) fn islands(analysis: &Analysis, text: &str) -> Vec<Island> {
             kind: IslandKind::Math,
             start: block.lines.start,
             end: block.lines.end,
+        });
+    }
+    for table in html_tables(analysis, text) {
+        islands.push(Island {
+            kind: IslandKind::HtmlTable,
+            start: table.lines.start,
+            end: table.lines.end,
         });
     }
     for lines in toc_blocks(analysis, text) {
@@ -269,7 +278,8 @@ impl Editor {
             | IslandKind::Image
             | IslandKind::Math
             | IslandKind::Diagram
-            | IslandKind::Toc => island.start,
+            | IslandKind::Toc
+            | IslandKind::HtmlTable => island.start,
         };
         self.snapshot.analysis.lines.range(line).start
     }
@@ -301,6 +311,7 @@ impl Editor {
             IslandKind::Math => self.render_math(island.start, "math-island", theme, cx),
             IslandKind::Diagram => self.render_diagram(island.start, "diagram-island", theme, cx),
             IslandKind::Toc => self.render_toc(island.start, theme, cx),
+            IslandKind::HtmlTable => self.render_html_table(island.start, theme),
         };
         div()
             .relative()
@@ -321,6 +332,51 @@ impl Editor {
                 .top_0()
                 .left_0()
                 .size_full(),
+            )
+            .into_any_element()
+    }
+
+    /// A table written in HTML, drawn as a plain grid: equal columns, the
+    /// header row bold.
+    fn render_html_table(&self, line: usize, theme: &Theme) -> AnyElement {
+        let Some(table) = html_tables(&self.snapshot.analysis, self.text())
+            .into_iter()
+            .find(|table| table.lines.start == line)
+        else {
+            return div().into_any_element();
+        };
+        let columns = table.rows.iter().map(Vec::len).max().unwrap_or(1);
+        let rows = table.rows.into_iter().enumerate().map(|(r, cells)| {
+            let bold = r == 0 && table.header;
+            div()
+                .flex()
+                .when(r > 0, |d| d.border_t_1())
+                .border_color(theme.rule)
+                .children((0..columns).map(|c| {
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .px(px(10.))
+                        .py(px(5.))
+                        .when(c > 0, |d| d.border_l_1())
+                        .border_color(theme.rule)
+                        .when(bold, |d| d.font_weight(gpui_kit::FontWeight::BOLD))
+                        .child(cells.get(c).cloned().unwrap_or_default())
+                }))
+        });
+        div()
+            .id(("html-table", line))
+            .test_support()
+            .aria_label("Table")
+            .py(px(6.))
+            .child(
+                div()
+                    .border_1()
+                    .border_color(theme.rule)
+                    .rounded(px(6.))
+                    .overflow_hidden()
+                    .text_size(px(self.typography.size * 0.9))
+                    .children(rows),
             )
             .into_any_element()
     }

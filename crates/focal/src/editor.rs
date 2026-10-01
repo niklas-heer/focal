@@ -268,6 +268,8 @@ pub(crate) enum IslandKind {
     Math,
     /// A table-of-contents marker such as `[TOC]`.
     Toc,
+    /// A table written in HTML.
+    HtmlTable,
     /// A fenced Mermaid code block.
     Diagram,
 }
