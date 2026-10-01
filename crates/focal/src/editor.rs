@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use focal_core::analysis::{InlineStyle, LineKind};
 use focal_core::display::{Run, mark_runs, prose_ranges};
+use focal_core::links;
 use focal_core::text_stats::{reading_minutes, sentence_at, word_count};
 use focal_core::{
     Analysis, Bias, Buffer, Caret, EditKind, LineView, analyze, editing, line_view, range_view,
@@ -21,8 +22,8 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::native_menu::NativeMenu;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AccessibleAction, HighlightStyle, Role, SharedString, StatefulInteractiveElement as _,
-    TestSupportExt as _, WindowAppearance,
+    AccessibleAction, EventEmitter, HighlightStyle, Role, SharedString,
+    StatefulInteractiveElement as _, TestSupportExt as _, WindowAppearance,
 };
 use gpui_kit::{
     App, Bounds, ClipboardItem, Context, CursorStyle, ElementInputHandler, EntityInputHandler,
@@ -99,6 +100,7 @@ actions!(
         InsertTable,
         InsertCodeBlock,
         InsertMath,
+        OpenLink,
     ]
 );
 
@@ -106,6 +108,17 @@ actions!(
 #[derive(Clone, Debug, PartialEq, gpui_kit::Action)]
 #[action(namespace = focal, no_json)]
 pub struct SetHeading(pub u8);
+
+/// What the editor asks of its window.
+pub enum EditorEvent {
+    /// Open this file, from a followed link.
+    Open(PathBuf),
+    /// The caret jumped (to an anchor or a footnote) from this selection,
+    /// which "back" returns to.
+    Jumped(Range<usize>),
+}
+
+impl EventEmitter<EditorEvent> for Editor {}
 
 /// What the bottom bar shows about the document and the caret.
 pub(crate) struct BarState {
@@ -199,6 +212,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-shift-x", Strikethrough, context),
         KeyBinding::new("cmd-e", InlineCode, context),
         KeyBinding::new("cmd-k", InsertLink, context),
+        KeyBinding::new("cmd-enter", OpenLink, context),
         KeyBinding::new("cmd-0", SetHeading(0), context),
         KeyBinding::new("cmd-1", SetHeading(1), context),
         KeyBinding::new("cmd-2", SetHeading(2), context),
@@ -329,6 +343,9 @@ pub struct Editor {
     save_task: Option<Task<()>>,
     /// Watches the file for changes on disk; dropping it stops watching.
     watch: Option<(notify::RecommendedWatcher, Task<()>)>,
+    /// The folder wiki links resolve in, and its Markdown files relative to it.
+    link_root: Option<PathBuf>,
+    link_files: Rc<[PathBuf]>,
     /// The table cell being edited, if any.
     pub(crate) grid: Option<crate::grid::GridSession>,
     pub(crate) next_grid_session: u64,
@@ -395,8 +412,29 @@ impl Editor {
             watch: None,
             grid: None,
             next_grid_session: 0,
+            link_root: None,
+            link_files: Rc::from([]),
             table_source: None,
         };
+        // A single file's wiki links resolve among the files beside it.
+        if let Some(dir) = editor
+            .path()
+            .and_then(std::path::Path::parent)
+            .map(PathBuf::from)
+        {
+            let files: Vec<PathBuf> = std::fs::read_dir(&dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|entry| PathBuf::from(entry.file_name()))
+                .filter(|name| {
+                    name.extension()
+                        .is_some_and(|e| e == "md" || e == "markdown")
+                })
+                .collect();
+            editor.link_root = Some(dir);
+            editor.link_files = files.into();
+        }
         editor.refresh();
         editor.watch_document(cx);
         editor
@@ -404,6 +442,126 @@ impl Editor {
 
     pub fn title(&self) -> String {
         self.document.title()
+    }
+
+    /// The folder wiki links resolve in and its Markdown files, relative to it.
+    pub(crate) fn set_link_files(
+        &mut self,
+        root: PathBuf,
+        files: Rc<[PathBuf]>,
+        cx: &mut Context<Self>,
+    ) {
+        self.link_root = Some(root);
+        self.link_files = files;
+        cx.notify();
+    }
+
+    fn wiki_file(&self, destination: &str) -> Option<PathBuf> {
+        let root = self.link_root.as_ref()?;
+        let (name, _) = links::wiki_target(destination);
+        let document = self
+            .path()
+            .and_then(|path| path.strip_prefix(root).ok())
+            .unwrap_or(std::path::Path::new(""));
+        links::resolve_wiki(&name, document, &self.link_files).map(|file| root.join(file))
+    }
+
+    /// Draws wiki links that lead nowhere yet in the marker color with a
+    /// quiet underline.
+    fn mark_unresolved(
+        &self,
+        line: usize,
+        view: &LineView,
+        runs: Vec<TextRun>,
+        theme: &Theme,
+    ) -> Vec<TextRun> {
+        let analysis = &self.snapshot.analysis;
+        let range = analysis.lines.range(line);
+        let mut runs = runs;
+        for link in &analysis.links {
+            if !link.wiki || link.range.end <= range.start || range.end <= link.range.start {
+                continue;
+            }
+            if self.link_root.is_none() || self.wiki_file(&link.destination).is_some() {
+                continue;
+            }
+            let clamp = |offset: usize| view.map.to_display(offset.clamp(range.start, range.end));
+            let marker = theme.marker;
+            runs = restyle(
+                runs,
+                &(clamp(link.range.start)..clamp(link.range.end)),
+                true,
+                |part| {
+                    part.color = marker;
+                    part.underline = Some(UnderlineStyle {
+                        thickness: px(1.),
+                        color: Some(marker.opacity(0.5)),
+                        wavy: false,
+                    });
+                },
+            );
+        }
+        runs
+    }
+
+    /// Follows the link at `offset`: web links open in the browser, files and
+    /// wiki links in Focal (a missing wiki link target as a new file beside
+    /// this one), anchors move the caret. Returns whether there was a link.
+    fn follow_link(&mut self, offset: usize, cx: &mut Context<Self>) -> bool {
+        let Some(link) = self.snapshot.analysis.link_at(offset).cloned() else {
+            return false;
+        };
+        let destination = link.destination;
+        let folder = self
+            .path()
+            .and_then(std::path::Path::parent)
+            .map(PathBuf::from);
+        if link.wiki {
+            let target = self.wiki_file(&destination).or_else(|| {
+                let (name, _) = links::wiki_target(&destination);
+                let dir = folder.clone().or_else(|| self.link_root.clone())?;
+                (!name.is_empty()).then(|| dir.join(format!("{name}.md")))
+            });
+            if let Some(target) = target {
+                cx.emit(EditorEvent::Open(target));
+            }
+        } else if let Some(slug) = destination.strip_prefix('#') {
+            let analysis = self.snapshot.analysis.clone();
+            if let Some(at) = links::find_heading(&analysis, self.text(), slug) {
+                let from = self.selection.clone();
+                self.move_to(at, cx);
+                cx.emit(EditorEvent::Jumped(from));
+            }
+        } else if destination.contains("://") || destination.starts_with("mailto:") {
+            cx.open_url(&destination);
+        } else if let Some(target) =
+            folder.and_then(|dir| links::relative_target(&destination, &dir))
+        {
+            let markdown = target.extension().is_some_and(|e| {
+                ["md", "markdown", "mdown", "mkd"]
+                    .iter()
+                    .any(|x| e.eq_ignore_ascii_case(x))
+            });
+            if markdown {
+                cx.emit(EditorEvent::Open(target));
+            } else {
+                cx.open_url(&format!("file://{}", target.display()));
+            }
+        }
+        true
+    }
+
+    fn open_link(&mut self, _: &OpenLink, _: &mut Window, cx: &mut Context<Self>) {
+        let head = self.head();
+        self.follow_link(head, cx);
+    }
+
+    /// Selects `range`, clamped to the text, as "back" does.
+    pub(crate) fn select(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+        let len = self.text().len();
+        self.selection = range.start.min(len)..range.end.min(len);
+        self.reversed = false;
+        self.after_selection(cx);
     }
 
     /// The error shown in the banner, if any.
@@ -1547,12 +1705,7 @@ impl Editor {
             Hit::Text { offset } => offset,
         };
         self.grid = None;
-        if event.modifiers.platform
-            && let Some(link) = self.snapshot.analysis.link_at(offset)
-        {
-            if link.destination.contains("://") || link.destination.starts_with("mailto:") {
-                cx.open_url(&link.destination);
-            }
+        if event.modifiers.platform && self.follow_link(offset, cx) {
             return;
         }
         let granularity = match event.click_count {
@@ -2007,10 +2160,11 @@ impl Editor {
                 let range = analysis.lines.range(line);
                 let clamp =
                     |offset: usize| view.map.to_display(offset.clamp(range.start, range.end));
-                fade_outside(runs, clamp(keep.start)..clamp(keep.end))
+                fade_outside(runs, &(clamp(keep.start)..clamp(keep.end)))
             }
             None => runs,
         };
+        let runs = self.mark_unresolved(line, &view, runs, theme);
         let text = StyledText::new(view.text.clone()).with_runs(runs);
         let layout = text.layout().clone();
         let line_range = analysis.content_range(line);
@@ -2405,15 +2559,21 @@ fn rendered_table_cells(analysis: &Analysis, text: &str) -> Rc<[Vec<Vec<String>>
 }
 
 /// The lines of the paragraph (non-blank run of lines) around `offset`.
-/// Dims the runs outside `keep`, a display range of the line.
-fn fade_outside(runs: Vec<TextRun>, keep: Range<usize>) -> Vec<TextRun> {
+/// Splits text runs at the ends of `range` (display offsets of the line) and
+/// changes the parts inside it, or outside it.
+fn restyle(
+    runs: Vec<TextRun>,
+    range: &Range<usize>,
+    inside: bool,
+    change: impl Fn(&mut TextRun),
+) -> Vec<TextRun> {
     let mut out = Vec::with_capacity(runs.len() + 2);
     let mut at = 0;
     for run in runs {
         let end = at + run.len;
         let mut cuts = vec![at];
         cuts.extend(
-            [keep.start, keep.end]
+            [range.start, range.end]
                 .into_iter()
                 .filter(|&c| at < c && c < end),
         );
@@ -2421,21 +2581,29 @@ fn fade_outside(runs: Vec<TextRun>, keep: Range<usize>) -> Vec<TextRun> {
         for piece in cuts.windows(2) {
             let mut part = run.clone();
             part.len = piece[1] - piece[0];
-            if piece[0] < keep.start || piece[1] > keep.end || keep.is_empty() {
-                part.color = part.color.opacity(DIMMED);
-                part.background_color = part.background_color.map(|c| c.opacity(DIMMED));
-                if let Some(underline) = &mut part.underline {
-                    underline.color = underline.color.map(|c| c.opacity(DIMMED));
-                }
-                if let Some(strike) = &mut part.strikethrough {
-                    strike.color = strike.color.map(|c| c.opacity(DIMMED));
-                }
+            let within = !range.is_empty() && range.start <= piece[0] && piece[1] <= range.end;
+            if within == inside {
+                change(&mut part);
             }
             out.push(part);
         }
         at = end;
     }
     out
+}
+
+/// Dims the runs outside `keep`, a display range of the line.
+fn fade_outside(runs: Vec<TextRun>, keep: &Range<usize>) -> Vec<TextRun> {
+    restyle(runs, keep, false, |part| {
+        part.color = part.color.opacity(DIMMED);
+        part.background_color = part.background_color.map(|c| c.opacity(DIMMED));
+        if let Some(underline) = &mut part.underline {
+            underline.color = underline.color.map(|c| c.opacity(DIMMED));
+        }
+        if let Some(strike) = &mut part.strikethrough {
+            strike.color = strike.color.map(|c| c.opacity(DIMMED));
+        }
+    })
 }
 
 fn paragraph_around(analysis: &Analysis, text: &str, offset: usize) -> Range<usize> {
@@ -2659,6 +2827,7 @@ impl Render for Editor {
             .on_action(cx.listener(Self::strikethrough))
             .on_action(cx.listener(Self::inline_code))
             .on_action(cx.listener(Self::insert_link))
+            .on_action(cx.listener(Self::open_link))
             .on_action(cx.listener(Self::set_heading))
             .on_action(cx.listener(Self::toggle_bullets))
             .on_action(cx.listener(Self::toggle_numbers))

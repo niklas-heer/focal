@@ -6,13 +6,13 @@ use gpui_kit::{App, Menu, MenuItem, OsAction, actions};
 use crate::cli_install::{InstallCommand, UninstallCommand};
 use crate::editor::{
     Bold, CloseWindow, Copy, Cut, InlineCode, InsertCodeBlock, InsertLink, InsertMath, InsertTable,
-    Italic, Paste, Quit, Redo, Save, SelectAll, SetHeading, Strikethrough, ToggleBullets,
+    Italic, OpenLink, Paste, Quit, Redo, Save, SelectAll, SetHeading, Strikethrough, ToggleBullets,
     ToggleFocusMode, ToggleNumbers, ToggleQuote, ToggleTask, Undo,
 };
 use crate::settings::OpenSettings;
 use crate::switcher::QuickOpen;
 use crate::updates::{CheckForUpdates, OpenReleases};
-use crate::workspace::ToggleSidebar;
+use crate::workspace::{GoBack, ToggleSidebar};
 
 actions!(focal, [AboutFocal]);
 
@@ -80,6 +80,9 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::action("Toggle Sidebar", ToggleSidebar),
             MenuItem::action("Quick Open…", QuickOpen),
             MenuItem::action("Focus Mode", ToggleFocusMode),
+            MenuItem::separator(),
+            MenuItem::action("Open Link", OpenLink),
+            MenuItem::action("Back", GoBack),
         ]),
     ]);
 }

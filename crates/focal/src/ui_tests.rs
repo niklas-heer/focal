@@ -830,3 +830,65 @@ fn without_a_bundle_there_is_no_updater(cx: &mut TestAppContext) {
         assert_eq!(crate::menus::update_item(cx).0, "Focal Releases…");
     });
 }
+
+/// A folder whose newest file, `notes.md`, holds `text`, next to `other.md`.
+fn linked_folder(name: &str, text: &str) -> std::path::PathBuf {
+    let root = crate::folder::tests::temp_folder(name);
+    std::fs::write(root.join("other.md"), "other text").unwrap();
+    let past = std::time::SystemTime::now() - std::time::Duration::from_hours(1);
+    std::fs::File::options()
+        .write(true)
+        .open(root.join("other.md"))
+        .unwrap()
+        .set_modified(past)
+        .unwrap();
+    std::fs::write(root.join("notes.md"), text).unwrap();
+    root
+}
+
+fn editor_of(cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> Entity<Editor> {
+    workspace.read_with(cx, |w, _| w.editor().clone())
+}
+
+#[gpui_kit::test]
+fn a_wiki_link_opens_its_file_and_back_returns(cx: &mut TestAppContext) {
+    let root = linked_folder("wiki", "See [[Other]] now.");
+    let (window, workspace) = open_folder(cx, &root);
+    let editor = editor_of(cx, &workspace);
+    editor.update(cx, |e, cx| e.move_to(7, cx));
+    act(cx, window, |window, cx| window.press("cmd-enter", cx));
+    assert_eq!(current_title(cx, &workspace), "other.md");
+    act(cx, window, |window, cx| window.press("cmd-[", cx));
+    assert_eq!(current_title(cx, &workspace), "notes.md");
+    let editor = editor_of(cx, &workspace);
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.selection(), 7..7, "the caret is back");
+    });
+    act(cx, window, |window, cx| window.press("cmd-[", cx));
+    assert_eq!(
+        current_title(cx, &workspace),
+        "notes.md",
+        "nothing more to go back to"
+    );
+}
+
+#[gpui_kit::test]
+fn an_unresolved_wiki_link_opens_a_new_file(cx: &mut TestAppContext) {
+    let root = linked_folder("wiki-new", "Plan [[Next Steps|later]].");
+    let (window, workspace) = open_folder(cx, &root);
+    editor_of(cx, &workspace).update(cx, |e, cx| e.move_to(8, cx));
+    act(cx, window, |window, cx| window.press("cmd-enter", cx));
+    assert_eq!(current_title(cx, &workspace), "Next Steps.md");
+    let editor = editor_of(cx, &workspace);
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.path(), Some(root.join("Next Steps.md").as_path()));
+    });
+}
+
+#[gpui_kit::test]
+fn an_anchor_link_moves_to_its_heading(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "[go](#next-steps)\n\n## Next Steps\n");
+    editor.update(cx, |e, cx| e.move_to(2, cx));
+    act(cx, window, |window, cx| window.press("cmd-enter", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 22..22));
+}

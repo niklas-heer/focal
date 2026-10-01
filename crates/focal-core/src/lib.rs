@@ -14,6 +14,7 @@ pub mod display;
 pub mod editing;
 pub mod fuzzy;
 mod lines;
+pub mod links;
 pub mod table;
 pub mod text_stats;
 

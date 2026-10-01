@@ -14,15 +14,19 @@ use gpui_kit::{
 
 use crate::bar;
 use crate::document::Document;
-use crate::editor::Editor;
+use crate::editor::{Editor, EditorEvent};
 use crate::folder;
+use crate::instance::Request;
 use crate::switcher::{QuickOpen, Switcher, SwitcherEvent};
 use crate::theme::Theme;
 
-actions!(focal, [ToggleSidebar]);
+actions!(focal, [ToggleSidebar, GoBack]);
 
 pub fn bind_keys(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new("ctrl-cmd-s", ToggleSidebar, None)]);
+    cx.bind_keys([
+        KeyBinding::new("ctrl-cmd-s", ToggleSidebar, None),
+        KeyBinding::new("cmd-[", GoBack, None),
+    ]);
 }
 
 const SIDEBAR_WIDTH: f32 = 240.;
@@ -57,6 +61,11 @@ pub struct Workspace {
     bar_timer: Option<Task<()>>,
     folder: Option<Folder>,
     switcher: Option<(Entity<Switcher>, gpui_kit::Subscription)>,
+    /// Kept alive to receive the editor's events.
+    editor_events: gpui_kit::Subscription,
+    /// Where followed links and jumps came from, for "back": the file and
+    /// the selection in it.
+    history: Vec<(Option<PathBuf>, std::ops::Range<usize>)>,
 }
 
 impl Workspace {
@@ -68,6 +77,7 @@ impl Workspace {
     ) -> Self {
         let editor = cx.new(|cx| Editor::new(document, text, window, cx));
         crate::settings::follow_appearance(window, cx);
+        let events = cx.subscribe_in(&editor, window, Self::editor_event);
         Self {
             editor,
             bar: Bar::Hidden,
@@ -75,6 +85,62 @@ impl Workspace {
             bar_timer: None,
             folder: None,
             switcher: None,
+            editor_events: events,
+            history: Vec::new(),
+        }
+    }
+
+    fn editor_event(
+        &mut self,
+        _: &Entity<Editor>,
+        event: &EditorEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let editor = self.editor.read(cx);
+        let here = editor.path().map(PathBuf::from);
+        match event {
+            EditorEvent::Jumped(from) => self.history.push((here, from.clone())),
+            EditorEvent::Open(path) => {
+                let in_folder = self
+                    .folder
+                    .as_ref()
+                    .is_some_and(|folder| path.starts_with(&folder.root));
+                if in_folder {
+                    self.history.push((here, editor.selection.clone()));
+                    self.open_file(path.clone(), window, cx);
+                } else {
+                    // The window list reads every workspace, this one too.
+                    let request = Request {
+                        path: Some(path.clone()),
+                        ..Request::default()
+                    };
+                    cx.defer(move |cx| crate::windows::open(request, None, cx));
+                }
+            }
+        }
+    }
+
+    /// Returns to where the last followed link or jump came from.
+    fn go_back(&mut self, _: &GoBack, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((path, selection)) = self.history.pop() else {
+            return;
+        };
+        if let Some(path) = path
+            && self.editor.read(cx).path() != Some(path.as_path())
+        {
+            self.open_file(path, window, cx);
+        }
+        self.editor
+            .update(cx, |editor, cx| editor.select(selection, cx));
+    }
+
+    /// Tells the editor which files its wiki links can reach.
+    fn share_files(&self, cx: &mut Context<Self>) {
+        if let Some(folder) = &self.folder {
+            let (root, files) = (folder.root.clone(), folder.files.clone().into());
+            self.editor
+                .update(cx, |editor, cx| editor.set_link_files(root, files, cx));
         }
     }
 
@@ -116,6 +182,7 @@ impl Workspace {
             sidebar: false,
             _watch: watch,
         });
+        this.share_files(cx);
         this
     }
 
@@ -137,6 +204,7 @@ impl Workspace {
                 let updated = this.update(cx, |this, cx| {
                     if let Some(folder) = &mut this.folder {
                         folder.files = files;
+                        this.share_files(cx);
                         cx.notify();
                     }
                 });
@@ -163,6 +231,8 @@ impl Workspace {
         };
         let title = document.title();
         self.editor = cx.new(|cx| Editor::new(document, text, window, cx));
+        self.editor_events = cx.subscribe_in(&self.editor, window, Self::editor_event);
+        self.share_files(cx);
         window.set_window_title(&title);
         let handle = self.editor.read(cx).focus_handle(cx);
         window.focus(&handle, cx);
@@ -391,6 +461,7 @@ impl Render for Workspace {
             // The bar never shows while you type.
             .capture_key_down(cx.listener(|this, _: &KeyDownEvent, _, cx| this.hide_bar(cx)))
             .on_action(cx.listener(Self::toggle_sidebar))
+            .on_action(cx.listener(Self::go_back))
             .on_action(cx.listener(Self::quick_open))
             .children(sidebar)
             .child(main)
