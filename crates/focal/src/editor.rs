@@ -1823,7 +1823,7 @@ impl Editor {
     /// Watches the document's file through FSEvents and reloads it on change.
     fn watch_document(&mut self, cx: &mut Context<Self>) {
         self.watch = None;
-        let Some(path) = self.document.path.clone() else {
+        let Some(path) = self.document.path.clone().filter(|_| document::WATCH_FILES) else {
             return;
         };
         let (watcher, events) = match document::watch(&path) {

@@ -19,7 +19,7 @@ pub const EX: f32 = 0.442;
 /// Retina displays (GPUI rasterizes SVG images at scale 1).
 const OVERSAMPLE: f32 = 3.;
 
-type Reply = async_channel::Sender<Result<String, String>>;
+type Reply = mpsc::Sender<Result<String, String>>;
 
 struct Engine {
     _runtime: Runtime,
@@ -69,7 +69,7 @@ fn worker() -> &'static mpsc::Sender<(String, Reply)> {
                         Ok(engine) => engine.typeset(&tex),
                         Err(error) => Err(error.clone()),
                     };
-                    let _ = reply.send_blocking(result);
+                    let _ = reply.send(result);
                 }
             });
         if let Err(error) = spawned {
@@ -79,18 +79,14 @@ fn worker() -> &'static mpsc::Sender<(String, Reply)> {
     })
 }
 
-/// Typesets `tex` on the worker thread.
-pub fn typeset(tex: &str) -> async_channel::Receiver<Result<String, String>> {
-    let (reply, result) = async_channel::bounded(1);
+/// The SVG of `tex`, or `MathJax`'s error message, typeset on the worker
+/// thread; blocks until it is done, so call it from a background task. The
+/// worker never touches GPUI, which keeps UI tests deterministic.
+pub fn typeset(tex: &str) -> Result<String, String> {
+    let (reply, result) = mpsc::channel();
     let _ = worker().send((tex.to_owned(), reply));
     result
-}
-
-/// The SVG of `tex`, or `MathJax`'s error message, waiting for the worker.
-#[cfg(test)]
-pub fn typeset_now(tex: &str) -> Result<String, String> {
-    typeset(tex)
-        .recv_blocking()
+        .recv()
         .unwrap_or_else(|_| Err("the typesetter stopped".into()))
 }
 
@@ -138,12 +134,12 @@ mod tests {
 
     #[test]
     fn tex_becomes_svg_and_errors_say_why() {
-        let svg = typeset_now(r"E = mc^2").unwrap();
+        let svg = typeset(r"E = mc^2").unwrap();
         assert!(
             svg.starts_with("<svg") && svg.contains("currentColor"),
             "{svg}"
         );
-        let error = typeset_now(r"\frac{").unwrap_err();
+        let error = typeset(r"\frac{").unwrap_err();
         assert!(error.contains("close brace"), "{error}");
     }
 

@@ -79,6 +79,12 @@ impl Document {
     }
 }
 
+/// Whether windows watch their files and folders. UI tests do not: FSEvents
+/// reports on its own thread, which GPUI's deterministic test scheduler
+/// rejects, so they call `check_disk` and rescan directly instead. The
+/// watchers themselves have their own tests.
+pub const WATCH_FILES: bool = !cfg!(test);
+
 /// Watches `path` for changes, including being replaced by a rename (editors
 /// and agents often write a temporary file and rename it over the original).
 /// The file's folder is watched, because a rename replaces the file itself;

@@ -172,8 +172,12 @@ impl Workspace {
             this.editor
                 .update(cx, |editor, cx| editor.show_error(failure, cx));
         }
-        let watch = match folder::watch(&root) {
-            Ok((watcher, events)) => Some((watcher, Self::rescan_on(events, root.clone(), cx))),
+        let watching = crate::document::WATCH_FILES.then(|| folder::watch(&root));
+        let watch = match watching.transpose() {
+            Ok(Some((watcher, events))) => {
+                Some((watcher, Self::rescan_on(events, root.clone(), cx)))
+            }
+            Ok(None) => None,
             Err(error) => {
                 eprintln!(
                     "focal: not watching {} for changes: {error:#}",

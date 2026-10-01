@@ -482,12 +482,14 @@ impl Editor {
 
     fn typeset_math(&self, tex: String, cx: &Context<Self>) {
         remember(&mut self.math.borrow_mut(), tex.clone(), Typeset::Pending);
-        let result = math::typeset(&tex);
+        let source = tex.clone();
+        let result = cx
+            .background_executor()
+            .spawn(async move { math::typeset(&source) });
         cx.spawn(async move |this, cx| {
-            let typeset = match result.recv().await {
-                Ok(Ok(svg)) => Typeset::Svg(svg),
-                Ok(Err(message)) => Typeset::Error(message),
-                Err(_) => Typeset::Error("the typesetter stopped".into()),
+            let typeset = match result.await {
+                Ok(svg) => Typeset::Svg(svg),
+                Err(message) => Typeset::Error(message),
             };
             this.update(cx, |this, cx| {
                 remember(&mut this.math.borrow_mut(), tex, typeset);
