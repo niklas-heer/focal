@@ -2023,6 +2023,7 @@ dependencies = [
  "serde",
  "serde_json",
  "svgbob",
+ "ttf-parser 0.25.1",
  "unicode-segmentation",
  "wavedrom",
 ]

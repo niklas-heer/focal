@@ -19,6 +19,8 @@ pikchr = "0.1.4"
 wavedrom = "0.1.0"
 # 0.7.4 and later pin `futures` 0.3.30 through `sauron`, which GPUI outgrew.
 svgbob = "=0.7.2"
+# Glyph advances for Vega text widths; the version fontdb uses.
+ttf-parser = "0.25.1"
 # Pictures of math and diagrams for Copy as HTML; the SVG renderer GPUI uses.
 resvg = { version = "0.46.0", default-features = false, features = ["text", "system-fonts"] }
 notify = "7.0.0"
