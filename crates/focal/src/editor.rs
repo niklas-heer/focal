@@ -451,6 +451,7 @@ impl Editor {
             cx.notify();
         })
         .detach();
+        let fold_overrides = remembered_folds(&document, cx);
         let mut editor = Self {
             focus_handle: cx.focus_handle(),
             buffer: Buffer::new(text),
@@ -499,7 +500,7 @@ impl Editor {
             table_source: None,
             pixel_scale: 1.,
             draft: None,
-            fold_overrides: HashMap::new(),
+            fold_overrides,
             query: None,
             found: Rc::default(),
             found_for: None,
@@ -2995,6 +2996,12 @@ impl Editor {
         };
         let folded = !fold.folded;
         self.fold_overrides.insert(key.to_owned(), folded);
+        if let Some(path) = self.document.path.clone()
+            && cx.has_global::<crate::fold_memory::FoldMemory>()
+        {
+            cx.global_mut::<crate::fold_memory::FoldMemory>()
+                .set(&path, key, folded);
+        }
         let head_line = self.snapshot.analysis.lines.line_of(self.head());
         if folded && fold.body.contains(&head_line) {
             let end = self.snapshot.analysis.lines.range(title).end;
@@ -3317,6 +3324,18 @@ fn restyle(
 }
 
 /// Dims the runs outside `keep`, a display range of the line.
+/// The folds opened or closed by hand when `document` was last open.
+fn remembered_folds(document: &Document, cx: &App) -> HashMap<String, bool> {
+    document
+        .path
+        .as_deref()
+        .and_then(|path| {
+            cx.try_global::<crate::fold_memory::FoldMemory>()
+                .map(|memory| memory.get(path))
+        })
+        .unwrap_or_default()
+}
+
 /// Gives the text in `range` a background.
 pub(crate) fn tint(runs: Vec<TextRun>, range: &Range<usize>, color: Hsla) -> Vec<TextRun> {
     restyle(runs, range, true, |part| {

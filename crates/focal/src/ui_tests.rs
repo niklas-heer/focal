@@ -1573,3 +1573,23 @@ fn down_from_a_folded_title_skips_its_body(cx: &mut TestAppContext) {
     });
     assert!(!shows_line(cx, &editor, 1), "still folded");
 }
+
+#[gpui_kit::test]
+fn folds_opened_by_hand_stay_open_when_the_file_opens_again(cx: &mut TestAppContext) {
+    let dir = std::env::temp_dir().join(format!("focal-fold-memory-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("faq.md");
+    std::fs::write(&path, "> [!faq]- Why?\n> Because.\n").unwrap();
+    let (document, text) = Document::open(path.clone()).unwrap();
+    let (window, workspace) = open_document(cx, document, &text);
+    cx.update(|cx| cx.set_global(crate::fold_memory::FoldMemory::default()));
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    act(cx, window, |window, cx| {
+        window.click(("fold-toggle", 0usize), cx);
+    });
+    assert!(shows_line(cx, &editor, 1));
+    let (document, text) = Document::open(path).unwrap();
+    let (_, again) = open_document(cx, document, &text);
+    let editor = again.read_with(cx, |w, _| w.editor().clone());
+    assert!(shows_line(cx, &editor, 1), "opened as it was left");
+}

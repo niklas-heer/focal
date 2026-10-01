@@ -10,6 +10,7 @@ mod drafts;
 mod editor;
 mod export;
 mod find_bar;
+mod fold_memory;
 mod folder;
 mod grid;
 mod highlight;
@@ -219,6 +220,7 @@ fn run_app(launch: Launch) {
         updates::init(cx);
         recent::init(cx);
         drafts::init(cx);
+        fold_memory::init(cx);
         menus::init(cx);
         serve(cx);
         drafts::restore(cx);
