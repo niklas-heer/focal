@@ -120,6 +120,44 @@ pub fn math_blocks(analysis: &Analysis, text: &str) -> Vec<MathBlock> {
         .collect()
 }
 
+/// A fenced `mermaid` code block.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiagramBlock {
+    /// Its lines, fences included.
+    pub lines: Range<usize>,
+    /// The diagram's source between the fences.
+    pub source: String,
+}
+
+/// The fenced code blocks whose language is `mermaid`, in any case.
+pub fn diagram_blocks(analysis: &Analysis, text: &str) -> Vec<DiagramBlock> {
+    analysis
+        .code_blocks
+        .iter()
+        .filter(|block| {
+            block
+                .language
+                .as_deref()
+                .is_some_and(|language| language.eq_ignore_ascii_case("mermaid"))
+        })
+        .map(|block| {
+            let lines = block.lines.clone();
+            let closed = lines.len() > 1
+                && analysis.info(lines.end - 1).kind == (LineKind::CodeFence { opening: false });
+            let inner = lines.start + 1..if closed { lines.end - 1 } else { lines.end };
+            let source = inner
+                .clone()
+                .map(|line| &text[analysis.lines.range(line)])
+                .collect::<Vec<_>>()
+                .join("\n");
+            DiagramBlock {
+                lines,
+                source: source.trim_end().to_owned(),
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,6 +197,25 @@ mod tests {
                 MathBlock {
                     lines: 6..7,
                     tex: "E = mc^2".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn mermaid_code_blocks_are_diagrams() {
+        let text = "```mermaid\nflowchart TD\n  A --> B\n```\n\n```rust\nfn x() {}\n```\n\n```Mermaid\npie\n";
+        let blocks = diagram_blocks(&analyze(text), text);
+        assert_eq!(
+            blocks,
+            [
+                DiagramBlock {
+                    lines: 0..4,
+                    source: "flowchart TD\n  A --> B".into()
+                },
+                DiagramBlock {
+                    lines: 9..11,
+                    source: "pie".into()
                 },
             ]
         );
