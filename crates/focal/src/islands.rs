@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use focal_core::Analysis;
+use focal_core::analysis::Alert;
 use focal_core::blocks::{block_image, diagram_blocks, front_matter, math_blocks};
 use focal_core::links;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -70,6 +71,52 @@ pub(crate) enum Typeset {
     Error(String),
 }
 
+/// What a math or diagram island shows.
+#[derive(Debug, PartialEq, Eq)]
+enum Shown<'a> {
+    Svg(&'a str),
+    Pending,
+    Error(&'a str),
+}
+
+/// The current picture, or while a changed block renders, its last one; an
+/// error always shows, so a stale picture never passes for current.
+fn shown<'a>(state: Option<&'a Typeset>, last: Option<&'a String>) -> Shown<'a> {
+    match state {
+        Some(Typeset::Svg(svg)) => Shown::Svg(svg),
+        Some(Typeset::Error(message)) => Shown::Error(message),
+        Some(Typeset::Pending) | None => last.map_or(Shown::Pending, |svg| Shown::Svg(svg)),
+    }
+}
+
+/// A math or diagram island: its content, centered.
+fn island_frame(
+    id: &'static str,
+    line: usize,
+    label: String,
+    content: impl IntoElement,
+) -> AnyElement {
+    div()
+        .id((id, line))
+        .test_support()
+        .aria_label(label)
+        .w_full()
+        .py(px(8.))
+        .flex()
+        .justify_center()
+        .cursor_pointer()
+        .child(content)
+        .into_any_element()
+}
+
+/// A quiet note in place of a picture.
+fn quiet(text: String, size: f32, theme: &Theme) -> impl IntoElement {
+    div()
+        .text_size(px(size * 0.8))
+        .text_color(theme.marker)
+        .child(text)
+}
+
 /// Focal's colors for a diagram in this appearance.
 fn palette(theme: &Theme) -> diagram::Palette {
     let hex = |color: gpui_kit::Hsla| {
@@ -88,6 +135,18 @@ fn palette(theme: &Theme) -> diagram::Palette {
         surface: hex(theme.code_background),
         text: hex(theme.text),
         line: hex(theme.marker),
+        // Charts take Focal's accents, softened toward the page.
+        series: [
+            theme.link,
+            theme.alert(Alert::Tip),
+            theme.alert(Alert::Warning),
+            theme.alert(Alert::Important),
+            theme.alert(Alert::Caution),
+            theme.alert(Alert::Note),
+        ]
+        .into_iter()
+        .map(|color| hex(color.opacity(0.75)))
+        .collect(),
     }
 }
 
@@ -374,8 +433,9 @@ impl Editor {
         }
     }
 
-    /// The display math starting on `line`, typeset and centered; its TeX
-    /// while it is being typeset, and `MathJax`'s message if it cannot be.
+    /// The display math starting on `line`, typeset and centered; while a
+    /// changed formula is typeset, its last picture (or its TeX); the typesetter's
+    /// message if it cannot be typeset.
     pub(crate) fn render_math(
         &self,
         line: usize,
@@ -390,24 +450,13 @@ impl Editor {
             return div().into_any_element();
         };
         let state = self.math.borrow().get(&block.tex).cloned();
+        if state.is_none() {
+            self.typeset_math(block.tex.clone(), cx);
+        }
+        let last = self.remember_picture(("math", line), state.as_ref());
         let size = self.typography.size;
-        let frame = div()
-            .id((id, line))
-            .test_support()
-            .aria_label(block.tex.clone())
-            .w_full()
-            .py(px(8.))
-            .flex()
-            .justify_center()
-            .cursor_pointer();
-        let quiet = |text: String| {
-            div()
-                .text_size(px(size * 0.8))
-                .text_color(theme.marker)
-                .child(text)
-        };
-        match state {
-            Some(Typeset::Svg(svg)) => {
+        let content = match shown(state.as_ref(), last.as_ref()) {
+            Shown::Svg(svg) => {
                 let color = theme.text.to_rgb();
                 let hex = format!(
                     "#{:02x}{:02x}{:02x}",
@@ -415,50 +464,56 @@ impl Editor {
                     channel(color.g),
                     channel(color.b)
                 );
-                match math::sized(&svg, &hex, size) {
-                    Some(sized) => frame
-                        .child(
-                            img(Arc::new(Image::from_bytes(ImageFormat::Svg, sized.svg)))
-                                .w(px(sized.width))
-                                .h(px(sized.height)),
-                        )
+                match math::sized(svg, &hex, size) {
+                    Some(sized) => img(Arc::new(Image::from_bytes(ImageFormat::Svg, sized.svg)))
+                        .w(px(sized.width))
+                        .h(px(sized.height))
                         .into_any_element(),
-                    None => frame.child(quiet(block.tex)).into_any_element(),
+                    None => quiet(block.tex.clone(), size, theme).into_any_element(),
                 }
             }
-            Some(Typeset::Error(message)) => frame
-                .child(quiet(format!("Math: {message}")))
-                .into_any_element(),
-            Some(Typeset::Pending) => frame.child(quiet(block.tex)).into_any_element(),
-            None => {
-                remember(
-                    &mut self.math.borrow_mut(),
-                    block.tex.clone(),
-                    Typeset::Pending,
-                );
-                let result = math::typeset(&block.tex);
-                let tex = block.tex.clone();
-                cx.spawn(async move |this, cx| {
-                    let typeset = match result.recv().await {
-                        Ok(Ok(svg)) => Typeset::Svg(svg),
-                        Ok(Err(message)) => Typeset::Error(message),
-                        Err(_) => Typeset::Error("the typesetter stopped".into()),
-                    };
-                    this.update(cx, |this, cx| {
-                        remember(&mut this.math.borrow_mut(), tex, typeset);
-                        cx.notify();
-                    })
-                    .ok();
-                })
-                .detach();
-                frame.child(quiet(block.tex)).into_any_element()
+            Shown::Error(message) => {
+                quiet(format!("Math: {message}"), size, theme).into_any_element()
             }
+            Shown::Pending => quiet(block.tex.clone(), size, theme).into_any_element(),
+        };
+        island_frame(id, line, block.tex, content)
+    }
+
+    fn typeset_math(&self, tex: String, cx: &Context<Self>) {
+        remember(&mut self.math.borrow_mut(), tex.clone(), Typeset::Pending);
+        let result = math::typeset(&tex);
+        cx.spawn(async move |this, cx| {
+            let typeset = match result.recv().await {
+                Ok(Ok(svg)) => Typeset::Svg(svg),
+                Ok(Err(message)) => Typeset::Error(message),
+                Err(_) => Typeset::Error("the typesetter stopped".into()),
+            };
+            this.update(cx, |this, cx| {
+                remember(&mut this.math.borrow_mut(), tex, typeset);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Keeps a block's newest picture, and returns the one it had before.
+    fn remember_picture(
+        &self,
+        block: (&'static str, usize),
+        state: Option<&Typeset>,
+    ) -> Option<String> {
+        let last = self.last_pictures.borrow().get(&block).cloned();
+        if let Some(Typeset::Svg(svg)) = state {
+            remember(&mut self.last_pictures.borrow_mut(), block, svg.clone());
         }
+        last
     }
 
     /// The Mermaid diagram whose block starts on `line`, scaled to fit the
-    /// column; its source while it renders, and the parser's message if it
-    /// cannot be drawn.
+    /// column; while a changed diagram is drawn, its last picture; the
+    /// parser's message if it cannot be drawn.
     pub(crate) fn render_diagram(
         &self,
         line: usize,
@@ -472,79 +527,59 @@ impl Editor {
         else {
             return div().into_any_element();
         };
-        let palette = palette(theme);
-        let key = (block.source.clone(), palette.clone());
+        let key = (block.source.clone(), palette(theme));
         let state = self.diagrams.borrow().get(&key).cloned();
-        let frame = div()
-            .id((id, line))
-            .test_support()
-            .aria_label("Mermaid diagram")
-            .w_full()
-            .py(px(8.))
-            .flex()
-            .justify_center()
-            .cursor_pointer();
-        let quiet = |text: String| {
-            div()
-                .text_size(px(self.typography.size * 0.8))
-                .text_color(theme.marker)
-                .child(text)
-        };
-        match state {
-            Some(Typeset::Svg(svg)) => match diagram::svg_size(&svg) {
+        if state.is_none() {
+            self.draw_diagram(key, cx);
+        }
+        let last = self.remember_picture(("diagram", line), state.as_ref());
+        let size = self.typography.size;
+        let content = match shown(state.as_ref(), last.as_ref()) {
+            Shown::Svg(svg) => match diagram::svg_size(svg) {
                 Some((width, height)) => {
                     let (width, height) =
                         fit(width, height, self.typography.column, MAX_IMAGE_HEIGHT);
-                    let sharp = diagram::with_size(&svg, width * 2., height * 2.);
-                    frame
-                        .child(
-                            img(Arc::new(Image::from_bytes(
-                                ImageFormat::Svg,
-                                sharp.into_bytes(),
-                            )))
-                            .w(px(width))
-                            .h(px(height)),
-                        )
-                        .into_any_element()
-                }
-                None => frame
-                    .child(quiet("Mermaid diagram".into()))
-                    .into_any_element(),
-            },
-            Some(Typeset::Error(message)) => frame
-                .child(quiet(format!("Mermaid: {message}")))
-                .into_any_element(),
-            Some(Typeset::Pending) => frame
-                .child(quiet("Drawing the diagram…".into()))
-                .into_any_element(),
-            None => {
-                remember(
-                    &mut self.diagrams.borrow_mut(),
-                    key.clone(),
-                    Typeset::Pending,
-                );
-                let task = cx
-                    .background_executor()
-                    .spawn(async move { diagram::render(&key.0, &key.1).map(|svg| (key, svg)) });
-                let source = block.source.clone();
-                let fallback = palette;
-                cx.spawn(async move |this, cx| {
-                    let (key, typeset) = match task.await {
-                        Ok((key, svg)) => (key, Typeset::Svg(svg)),
-                        Err(message) => ((source, fallback), Typeset::Error(message)),
-                    };
-                    this.update(cx, |this, cx| {
-                        remember(&mut this.diagrams.borrow_mut(), key, typeset);
-                        cx.notify();
-                    })
-                    .ok();
-                })
-                .detach();
-                frame
-                    .child(quiet("Drawing the diagram…".into()))
+                    let sharp = diagram::with_size(svg, width * 2., height * 2.);
+                    img(Arc::new(Image::from_bytes(
+                        ImageFormat::Svg,
+                        sharp.into_bytes(),
+                    )))
+                    .w(px(width))
+                    .h(px(height))
                     .into_any_element()
+                }
+                None => quiet("Mermaid diagram".into(), size, theme).into_any_element(),
+            },
+            Shown::Error(message) => {
+                quiet(format!("Mermaid: {message}"), size, theme).into_any_element()
             }
-        }
+            Shown::Pending => quiet("Drawing the diagram…".into(), size, theme).into_any_element(),
+        };
+        island_frame(id, line, "Mermaid diagram".into(), content)
+    }
+
+    fn draw_diagram(&self, key: (String, diagram::Palette), cx: &Context<Self>) {
+        remember(
+            &mut self.diagrams.borrow_mut(),
+            key.clone(),
+            Typeset::Pending,
+        );
+        let failed = key.clone();
+        let task = cx
+            .background_executor()
+            .spawn(async move { diagram::render(&key.0, &key.1).map(|svg| (key, svg)) });
+        cx.spawn(async move |this, cx| {
+            let (key, typeset) = match task.await {
+                Ok((key, svg)) => (key, Typeset::Svg(svg)),
+                Err(message) => (failed, Typeset::Error(message)),
+            };
+            this.update(cx, |this, cx| {
+                remember(&mut this.diagrams.borrow_mut(), key, typeset);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Front matter as one quiet line of keys and values.
@@ -581,7 +616,7 @@ impl Editor {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::{CACHE_LIMIT, fit, remember, retry_due};
+    use super::{CACHE_LIMIT, Shown, Typeset, fit, remember, retry_due, shown};
 
     #[test]
     fn images_fit_the_column_and_the_height_cap_keeping_their_shape() {
@@ -616,6 +651,25 @@ mod tests {
             "a full cache starts over with the new entry"
         );
         assert_eq!(cache.get(&CACHE_LIMIT), Some(&CACHE_LIMIT));
+    }
+
+    #[test]
+    fn a_changed_block_keeps_its_last_picture_while_it_renders() {
+        let last = Some("<svg old/>".to_owned());
+        let ready = Typeset::Svg("<svg new/>".into());
+        assert_eq!(shown(Some(&ready), last.as_ref()), Shown::Svg("<svg new/>"));
+        assert_eq!(
+            shown(Some(&Typeset::Pending), last.as_ref()),
+            Shown::Svg("<svg old/>")
+        );
+        assert_eq!(shown(None, last.as_ref()), Shown::Svg("<svg old/>"));
+        assert_eq!(shown(Some(&Typeset::Pending), None), Shown::Pending);
+        let error = Typeset::Error("bad".into());
+        assert_eq!(
+            shown(Some(&error), last.as_ref()),
+            Shown::Error("bad"),
+            "an error is current"
+        );
     }
 
     #[test]

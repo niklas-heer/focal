@@ -369,6 +369,8 @@ pub struct Editor {
     /// Drawn Mermaid diagrams, by their source and palette.
     pub(crate) diagrams:
         RefCell<HashMap<(String, crate::diagram::Palette), crate::islands::Typeset>>,
+    /// The last picture each math or diagram block showed, by kind and line.
+    pub(crate) last_pictures: RefCell<HashMap<(&'static str, usize), String>>,
     /// Typeset display math, by its TeX.
     pub(crate) math: RefCell<HashMap<String, crate::islands::Typeset>>,
     /// Remote images being downloaded, and those that failed, by URL.
@@ -449,6 +451,7 @@ impl Editor {
             watch: None,
             grid: None,
             next_grid_session: 0,
+            last_pictures: RefCell::default(),
             math: RefCell::default(),
             diagrams: RefCell::default(),
             fetching_images: RefCell::default(),

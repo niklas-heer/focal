@@ -10,6 +10,8 @@ pub struct Palette {
     pub surface: String,
     pub text: String,
     pub line: String,
+    /// Colors for chart series, such as pie slices.
+    pub series: Vec<String>,
 }
 
 /// Draws `source` as SVG in `palette`, or says why it cannot.
@@ -27,6 +29,7 @@ pub fn render(source: &str, palette: &Palette) -> Result<String, String> {
             note_text: Some(palette.text.clone()),
             ..HostThemeRoles::default()
         })
+        .series_palette(palette.series.iter().cloned())
         .output(HostThemeOutput::resvg_safe_editor())
         .build();
     HeadlessRenderer::new()
@@ -96,7 +99,17 @@ mod tests {
             surface: "#262626".into(),
             text: "#e6e6e6".into(),
             line: "#9a9a9a".into(),
+            series: vec!["#4a7fd6".into(), "#3f9a5a".into(), "#c9952e".into()],
         }
+    }
+
+    #[test]
+    fn charts_use_the_series_colors() {
+        let svg = render("pie\n  \"a\" : 2\n  \"b\" : 1\n", &palette()).unwrap();
+        assert!(
+            svg.to_lowercase().contains("#4a7fd6"),
+            "the first series color is used"
+        );
     }
 
     #[test]
