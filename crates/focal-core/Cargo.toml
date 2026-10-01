@@ -9,6 +9,7 @@ license.workspace = true
 
 [dependencies]
 emojis = "0.9.0"
+encoding_rs = "0.8.42"
 pulldown-cmark = { workspace = true, features = ["html"] }
 unicode-segmentation.workspace = true
 unicode-width = "0.2.2"

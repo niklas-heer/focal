@@ -804,12 +804,6 @@ impl Editor {
         self.after_selection(cx);
     }
 
-    /// The error shown in the banner, if any.
-    #[cfg(test)]
-    pub(crate) fn error(&self) -> Option<&str> {
-        self.error.as_deref()
-    }
-
     pub(crate) fn show_error(&mut self, message: String, cx: &mut Context<Self>) {
         self.error = Some(message);
         cx.notify();
@@ -1613,8 +1607,16 @@ impl Editor {
                 words
             }
         };
+        // A file that is not plain UTF-8 says how it is stored.
+        let format = &self.document.format;
+        let stored = [format.name(), format.cr_only.then_some("CR line endings")];
+        let mut file_name = self.title();
+        for note in stored.into_iter().flatten() {
+            file_name.push_str(" · ");
+            file_name.push_str(note);
+        }
         BarState {
-            file_name: self.title().into(),
+            file_name: file_name.into(),
             heading,
             words,
             selected_words: word_count(&self.text()[self.selection.clone()]),
@@ -1951,7 +1953,8 @@ impl Editor {
         }
         let version = self.buffer.version();
         match self.document.save(self.buffer.text(), version) {
-            Ok(()) => self.error = None,
+            // A notice (saved as UTF-8 after all) shows in the banner.
+            Ok(()) => self.error = self.document.notice.take(),
             Err(error) => self.error = Some(format!("Could not save: {error:#}")),
         }
         cx.notify();
@@ -1992,7 +1995,7 @@ impl Editor {
         if stamp.is_none() || stamp == self.document.stamp {
             return;
         }
-        let Ok(text) = document::read(&path) else {
+        let Ok((text, format)) = document::read(&path) else {
             return;
         };
         if text == self.text() {
@@ -2004,10 +2007,17 @@ impl Editor {
             cx.notify();
             return;
         }
-        self.load_theirs(&text, stamp, cx);
+        self.load_theirs(&text, format, stamp, cx);
     }
 
-    fn load_theirs(&mut self, text: &str, stamp: Option<Stamp>, cx: &mut Context<Self>) {
+    fn load_theirs(
+        &mut self,
+        text: &str,
+        format: focal_core::encoding::Format,
+        stamp: Option<Stamp>,
+        cx: &mut Context<Self>,
+    ) {
+        self.document.format = format;
         self.grid = None;
         let len = text.len();
         let selection = self.selection.start.min(len)..self.selection.end.min(len);
@@ -2031,7 +2041,7 @@ impl Editor {
             return;
         };
         match document::read(&path) {
-            Ok(text) => self.load_theirs(&text, Stamp::of(&path), cx),
+            Ok((text, format)) => self.load_theirs(&text, format, Stamp::of(&path), cx),
             Err(error) => {
                 self.error = Some(format!("Could not reload: {error:#}"));
                 cx.notify();

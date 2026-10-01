@@ -14,6 +14,7 @@ pub mod buffer;
 pub mod callouts;
 pub mod display;
 pub mod editing;
+pub mod encoding;
 pub mod export;
 pub mod find;
 pub mod fuzzy;

@@ -781,25 +781,36 @@ fn a_larger_text_size_makes_lines_taller(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn a_folder_whose_newest_file_is_not_utf8_opens_a_savable_untitled(cx: &mut TestAppContext) {
+fn a_folder_whose_newest_file_is_latin1_opens_it(cx: &mut TestAppContext) {
     let root = crate::folder::tests::temp_folder("latin1");
     std::fs::write(root.join("latin1.md"), b"caf\xe9").unwrap();
+    let (_, workspace) = open_folder(cx, &root);
+    assert_eq!(current_title(cx, &workspace), "latin1.md");
+    workspace.read_with(cx, |w, cx| {
+        let editor = w.editor().read(cx);
+        assert_eq!(editor.text(), "café");
+        assert!(editor.bar_state().file_name.contains("Windows-1252"));
+    });
+}
+
+#[gpui_kit::test]
+fn a_folder_whose_newest_file_cannot_be_read_opens_a_savable_untitled(cx: &mut TestAppContext) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let root = crate::folder::tests::temp_folder("unreadable");
+    let file = root.join("locked.md");
+    std::fs::write(&file, "secret").unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
     let (window, workspace) = open_folder(cx, &root);
     assert_eq!(current_title(cx, &workspace), "Untitled.md");
     act(cx, window, |window, _| {
         let banner = window.find("error-banner");
         let label = banner.label().unwrap_or_default();
-        assert!(label.starts_with("Could not open"), "{label}");
-    });
-    workspace.read_with(cx, |w, cx| {
-        let editor = w.editor().read(cx);
-        assert_eq!(editor.path(), Some(root.join("Untitled.md").as_path()));
         assert!(
-            editor.error().is_some_and(|e| e.contains("latin1.md")),
-            "{:?}",
-            editor.error()
+            label.starts_with("Could not open") && label.contains("locked.md"),
+            "{label}"
         );
     });
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
 }
 
 #[gpui_kit::test]

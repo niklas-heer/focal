@@ -1,12 +1,14 @@
 //! Reading and writing the file behind a document. The file's bytes are the
-//! document: nothing is normalized on the way in or out.
+//! document: its encoding and line endings are detected when it is read and
+//! kept when it is written, so an unedited file saves back byte for byte.
 
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result};
+use focal_core::encoding::{self, Encoding, Format};
 
 /// What the file looked like when Focal last read or wrote it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,14 +34,18 @@ pub struct Document {
     pub stamp: Option<Stamp>,
     /// The buffer version that matches the file on disk.
     pub saved_version: u64,
+    /// How the file stores its text.
+    pub format: Format,
+    /// Something the last save had to change, to tell the user.
+    pub notice: Option<String>,
 }
 
 impl Document {
     /// Opens `path`. A missing file opens empty and is created on first save.
     pub fn open(path: PathBuf) -> Result<(Self, String)> {
-        let text = match read(&path) {
-            Ok(text) => text,
-            Err(error) if is_not_found(&error) => String::new(),
+        let (text, format) = match read(&path) {
+            Ok(read) => read,
+            Err(error) if is_not_found(&error) => (String::new(), Format::default()),
             Err(error) => return Err(error),
         };
         let stamp = Stamp::of(&path);
@@ -48,6 +54,8 @@ impl Document {
                 path: Some(path),
                 stamp,
                 saved_version: 0,
+                format,
+                notice: None,
             },
             text,
         ))
@@ -58,6 +66,12 @@ impl Document {
             path: None,
             stamp: None,
             saved_version: 0,
+            format: Format {
+                encoding: Encoding::Utf8,
+                bom: false,
+                cr_only: false,
+            },
+            notice: None,
         }
     }
 
@@ -72,7 +86,20 @@ impl Document {
         let Some(path) = &self.path else {
             return Ok(());
         };
-        fs::write(path, text).with_context(|| format!("writing {}", path.display()))?;
+        let bytes = if let Some(bytes) = encoding::encode(text, &self.format) {
+            bytes
+        } else {
+            let name = self.format.name().unwrap_or("its encoding");
+            self.notice = Some(format!(
+                "Saved as UTF-8: {name} cannot hold every character of the text."
+            ));
+            self.format = Format {
+                cr_only: self.format.cr_only,
+                ..Format::default()
+            };
+            encoding::encode(text, &self.format).unwrap_or_else(|| text.as_bytes().to_vec())
+        };
+        fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))?;
         self.stamp = Stamp::of(path);
         self.saved_version = version;
         Ok(())
@@ -112,14 +139,11 @@ pub fn watch(path: &Path) -> Result<(notify::RecommendedWatcher, async_channel::
     Ok((watcher, rx))
 }
 
-/// Reads a file as UTF-8. Other encodings are refused rather than guessed, so
-/// saving can never change bytes Focal did not understand.
-pub fn read(path: &Path) -> Result<String> {
+/// Reads a file in whatever encoding it uses (see
+/// [`focal_core::encoding`]), and how it stores its text.
+pub fn read(path: &Path) -> Result<(String, Format)> {
     let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    match String::from_utf8(bytes) {
-        Ok(text) => Ok(text),
-        Err(_) => bail!("{} is not UTF-8 text", path.display()),
-    }
+    Ok(encoding::decode(&bytes))
 }
 
 fn is_not_found(error: &anyhow::Error) -> bool {
@@ -182,10 +206,32 @@ mod tests {
     }
 
     #[test]
-    fn refuses_non_utf8() {
+    fn other_encodings_open_and_save_back_as_they_were() {
         let path = std::env::temp_dir().join(format!("focal-latin1-{}.md", std::process::id()));
-        fs::write(&path, [0x63, 0x61, 0x66, 0xe9]).unwrap();
-        assert!(Document::open(path.clone()).is_err());
+        fs::write(&path, b"caf\xe9\n").unwrap();
+        let (mut document, text) = Document::open(path.clone()).unwrap();
+        assert_eq!(text, "café\n");
+        assert_eq!(document.format.name(), Some("Windows-1252"));
+        document.save("café!\n", 1).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"caf\xe9!\n");
+        assert_eq!(document.notice, None);
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn a_character_the_encoding_cannot_hold_saves_as_utf8_and_says_so() {
+        let path = std::env::temp_dir().join(format!("focal-latin1-up-{}.md", std::process::id()));
+        fs::write(&path, b"caf\xe9\n").unwrap();
+        let (mut document, _) = Document::open(path.clone()).unwrap();
+        document.save("café ✓\n", 1).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "café ✓\n");
+        assert_eq!(document.format.name(), None, "now UTF-8");
+        assert!(
+            document
+                .notice
+                .as_deref()
+                .is_some_and(|n| n.contains("UTF-8"))
+        );
         fs::remove_file(&path).unwrap();
     }
 }

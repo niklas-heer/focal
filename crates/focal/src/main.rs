@@ -111,11 +111,12 @@ fn request(args: &Args) -> Result<Request> {
         None => None,
     };
     let untitled = if path.is_none() && !std::io::stdin().is_terminal() {
-        let mut text = String::new();
+        let mut bytes = Vec::new();
         std::io::stdin()
-            .read_to_string(&mut text)
-            .context("reading standard input as UTF-8")?;
-        Some(text)
+            .read_to_end(&mut bytes)
+            .context("reading standard input")?;
+        // Piped text may come in any encoding, as files do.
+        Some(focal_core::encoding::decode(&bytes).0)
     } else {
         None
     };

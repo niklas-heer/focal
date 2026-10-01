@@ -2021,6 +2021,7 @@ name = "focal-core"
 version = "0.0.0"
 dependencies = [
  "emojis",
+ "encoding_rs",
  "pulldown-cmark 0.13.4",
  "unicode-segmentation",
  "unicode-width",
