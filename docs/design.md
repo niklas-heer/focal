@@ -68,9 +68,12 @@ Built in M6: Sparkle 2.10, as in Keywink and Spokn, with an appcast attached to 
 
 ### Documents
 
-- One document per window, managed by Focal itself. There is no `NSDocument`, so macOS versions ("Revert to…"), native window tabs and the recent-documents menu are not provided unless built later.
+- One document per window, managed by Focal itself. There is no `NSDocument`, so macOS versions ("Revert to…") and native window tabs are not provided unless built later.
+- Built in M7: ⌘N opens an untitled window, ⌘O the open panel (files and folders, several at once; an open file's window comes forward). File ▸ Open Recent lists the last ten files and folders opened (kept in `recent.json` beside the settings, missing ones left out) and macOS's Dock menu gets them too.
+- Untitled text is never dropped silently: closing an untitled document with unsaved text asks Save…, Don't Save or Cancel; quitting with such documents asks before discarding them. Logging out does not ask (GPUI cannot cancel termination).
 - **Autosave**, no ⌘S required.
 - **Live reload.** When the file changes on disk and there are no unsaved local edits, Focal reloads quietly and keeps the scroll position. The spike polls the file every second; M1 watches it through FSEvents. When both sides changed, a banner offers "Keep mine" or "Load theirs". Focal never silently overwrites.
+- **Find and replace** (M7): ⌘F opens a find bar seeded with the selected text; matches ignore case (character by character, without full case folding), are highlighted as you type and follow edits. Return and ⇧Return, or ⌘G and ⇧⌘G, step through them and wrap; ⌘G still works after the bar closes. ⌥⌘F adds a replacement field: Replace changes the selected match only when one is selected, Replace All is one undo step.
 - **Exact round-trip.** Line endings (LF or CRLF), the trailing newline and all whitespace are preserved. Files are read and written as UTF-8. The open question of non-UTF-8 input is in section 10.
 
 ### Folder mode
@@ -207,6 +210,7 @@ Built in M4 unless marked otherwise.
 | **M4 — Extras** | Done: islands (blocks drawn in place of their source while the caret is elsewhere) for front matter, images and display math; footnote previews and jumps; following wiki links, file links and anchors with ⌘[ to go back; alert icons. |
 | **M5 — Mermaid** | Done: native rendering with `merman`, cache by source and appearance, island with live preview. |
 | **M6 — Distribution** | Done: `Focal.app` bundle with an icon and Markdown document types, one running instance that `focal` forwards to (with `--wait`), Finder's Open With, "Install Command Line Tool…", Sparkle updates with a setting and a download prompt, About panel, Developer ID signing, and a release script with notarization and a Homebrew cask template. The first public release is still to be published. |
+| **M7 — Everyday editing** | Done: find and replace with a find bar, New, Open… and Open Recent, and asking before untitled text is lost. |
 
 Each milestone gets its own implementation plan before work starts.
 

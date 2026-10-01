@@ -79,18 +79,22 @@ pub fn confirm_discard(count: usize) -> bool {
     let Some(mtm) = MainThreadMarker::new() else {
         return false;
     };
-    let documents = if count == 1 {
-        "1 untitled document".to_owned()
+    let (documents, detail) = if count == 1 {
+        (
+            "1 untitled document".to_owned(),
+            "Its text has not been saved. Cancel to save it first.",
+        )
     } else {
-        format!("{count} untitled documents")
+        (
+            format!("{count} untitled documents"),
+            "Their text has not been saved. Cancel to save it first.",
+        )
     };
     let alert = NSAlert::new(mtm);
     alert.setMessageText(&NSString::from_str(&format!(
         "Quit and discard {documents}?"
     )));
-    alert.setInformativeText(&NSString::from_str(
-        "Their text has not been saved. Cancel to save it first.",
-    ));
+    alert.setInformativeText(&NSString::from_str(detail));
     alert.setAlertStyle(NSAlertStyle::Warning);
     alert.addButtonWithTitle(&NSString::from_str("Cancel"));
     alert.addButtonWithTitle(&NSString::from_str("Discard and Quit"));
