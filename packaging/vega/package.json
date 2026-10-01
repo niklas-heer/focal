@@ -1,0 +1,9 @@
+{
+  "name": "focal-vega",
+  "private": true,
+  "description": "Vega and Vega-Lite's spec-to-SVG pipeline, bundled for QuickJS. Rebuild with scripts/vega.",
+  "dependencies": {
+    "vega": "6.4.0",
+    "vega-lite": "6.4.3"
+  }
+}

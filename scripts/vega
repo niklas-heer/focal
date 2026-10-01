@@ -1,0 +1,12 @@
+#!/bin/bash
+# Rebuild assets/vega/vega.js: Vega and Vega-Lite's spec-to-SVG pipeline in one
+# script that Focal runs in an embedded QuickJS (no web view). Needs bun.
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+work="$(mktemp -d "${TMPDIR:-/tmp}/focal-vega.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+cp "$root/packaging/vega/package.json" "$root/packaging/vega/entry.js" "$work/"
+(cd "$work" && bun install --silent && bun build entry.js --minify --format=iife --target=browser --outfile vega.js)
+cp "$work/vega.js" "$root/assets/vega/vega.js"
+cp "$work/node_modules/vega/LICENSE" "$root/assets/vega/LICENSE"
+echo "Wrote assets/vega/vega.js ($(wc -c < "$root/assets/vega/vega.js") bytes)"

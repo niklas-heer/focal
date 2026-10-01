@@ -47,9 +47,8 @@ pub fn render(
         }
         DiagramLanguage::PlantUml => tool("plantuml", &["-tsvg", "-pipe"], source),
         DiagramLanguage::Stl => crate::stl::render(source, palette),
-        DiagramLanguage::Vega | DiagramLanguage::VegaLite => {
-            Err(format!("{} charts are not drawn yet.", language.name()))
-        }
+        DiagramLanguage::Vega => crate::vega::draw(source, false),
+        DiagramLanguage::VegaLite => crate::vega::draw(source, true),
     }))
     .unwrap_or_else(|_| Err(format!("{} could not draw this.", language.name())))?;
     if matches!(
@@ -78,8 +77,9 @@ pub fn can_draw(language: DiagramLanguage) -> bool {
         | DiagramLanguage::WaveDrom
         | DiagramLanguage::GeoJson
         | DiagramLanguage::TopoJson
-        | DiagramLanguage::Stl => true,
-        DiagramLanguage::Vega | DiagramLanguage::VegaLite => false,
+        | DiagramLanguage::Stl
+        | DiagramLanguage::Vega
+        | DiagramLanguage::VegaLite => true,
         DiagramLanguage::PlantUml => crate::tools::find("plantuml").is_some(),
         DiagramLanguage::D2 => crate::tools::find("d2").is_some(),
     }
@@ -211,8 +211,13 @@ fn recolor(svg: &str, palette: &Palette) -> String {
             out = replace_ignoring_case(&out, name, color);
         }
     }
-    // Short hex forms, only as whole attribute or property values.
-    for (short, color) in [("#000", &palette.text), ("#fff", &palette.canvas)] {
+    // Short hex forms, only as whole attribute or property values; on a dark
+    // page, light grays (Vega's grid) become the line color too.
+    let mut shorts = vec![("#000", &palette.text), ("#fff", &palette.canvas)];
+    if dark(palette) {
+        shorts.extend([("#ddd", &palette.line), ("#dddddd", &palette.line)]);
+    }
+    for (short, color) in shorts {
         for (before, after) in [("\"", "\""), (":", ";"), (":", "\""), (": ", ";")] {
             out = replace_ignoring_case(
                 &out,
@@ -456,6 +461,39 @@ mod tests {
         let svg =
             r#"<svg viewBox="0 0 1 1"><style>.a14 { font-family: Times, serif; }</style></svg>"#;
         assert!(!recolor(svg, &palette()).contains("Times"));
+    }
+
+    #[test]
+    fn light_grays_darken_on_a_dark_page() {
+        let dark = Palette {
+            canvas: "#1a1a1a".into(),
+            surface: "#262626".into(),
+            text: "#dadad7".into(),
+            line: "#555555".into(),
+            series: vec![],
+        };
+        let svg = r##"<svg viewBox="0 0 1 1"><path stroke="#ddd"/></svg>"##;
+        assert!(recolor(svg, &dark).contains(r##"stroke="#555555""##));
+        assert!(
+            recolor(
+                svg,
+                &Palette {
+                    canvas: "#ffffff".into(),
+                    ..dark.clone()
+                }
+            )
+            .contains(r##"stroke="#ddd""##),
+            "kept in the light"
+        );
+    }
+
+    #[test]
+    fn vega_lite_charts_draw_in_the_palette() {
+        let spec = r#"{"data":{"values":[{"a":"A","b":2},{"a":"B","b":5}]},"mark":"bar","encoding":{"x":{"field":"a","type":"nominal"},"y":{"field":"b","type":"quantitative"}}}"#;
+        assert!(can_draw(DiagramLanguage::VegaLite));
+        let svg = render(DiagramLanguage::VegaLite, spec, &palette()).unwrap();
+        assert!(svg_size(&svg).is_some(), "{svg}");
+        assert!(svg.contains("text{fill:"), "recolored");
     }
 
     #[test]

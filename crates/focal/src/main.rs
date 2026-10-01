@@ -31,6 +31,7 @@ mod tools;
 #[cfg(test)]
 mod ui_tests;
 mod updates;
+mod vega;
 mod windows;
 mod workspace;
 
