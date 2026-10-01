@@ -8,7 +8,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-base64 = "0.22.1"
+base64 = "0.23.1"
 anyhow = "1.0.104"
 async-channel = "2.5.0"
 focal-core.workspace = true
@@ -22,8 +22,8 @@ svgbob = "=0.7.2"
 # Glyph advances for Vega text widths; the version fontdb uses.
 ttf-parser = "0.25.1"
 # Pictures of math and diagrams for Copy as HTML; the SVG renderer GPUI uses.
-resvg = { version = "0.46.0", default-features = false, features = ["text", "system-fonts"] }
-notify = "7.0.0"
+resvg = { version = "0.48.1", default-features = false, features = ["text", "system-fonts"] }
+notify = "8.2.0"
 rquickjs = "0.14.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
