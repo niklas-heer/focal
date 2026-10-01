@@ -121,10 +121,14 @@ pub fn confirm_discard(count: usize) -> bool {
 }
 
 /// Puts `html` and its `plain` text on the general pasteboard, so rich text
-/// editors paste the HTML and others the text. Tests (off AppKit's main
-/// thread) leave the pasteboard alone.
+/// editors paste the HTML and others the text. Test builds record the copy
+/// instead (see [`copied_html`]) and leave the pasteboard alone.
 pub fn copy_html(html: &str, plain: &str) {
-    if MainThreadMarker::new().is_none() {
+    #[cfg(test)]
+    {
+        COPIED.with(|copied| *copied.borrow_mut() = Some((html.to_owned(), plain.to_owned())));
+    }
+    if cfg!(test) || MainThreadMarker::new().is_none() {
         return;
     }
     let pasteboard = NSPasteboard::generalPasteboard();
@@ -137,6 +141,17 @@ pub fn copy_html(html: &str, plain: &str) {
         &NSString::from_str(plain),
         &NSString::from_str("public.utf8-plain-text"),
     );
+}
+
+#[cfg(test)]
+thread_local! {
+    static COPIED: std::cell::RefCell<Option<(String, String)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// What [`copy_html`] last copied on this thread, as HTML and as text.
+#[cfg(test)]
+pub fn copied_html() -> Option<(String, String)> {
+    COPIED.with(|copied| copied.borrow().clone())
 }
 
 /// The standard About panel, with the bundle's name, version and icon.

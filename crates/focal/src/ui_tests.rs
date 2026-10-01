@@ -1338,3 +1338,35 @@ fn matches_in_table_cells_are_highlighted(cx: &mut TestAppContext) {
         );
     });
 }
+
+// ---- Export and copy as HTML ---------------------------------------------------
+
+#[gpui_kit::test]
+fn export_as_html_writes_a_page_where_chosen(cx: &mut TestAppContext) {
+    let dir = std::env::temp_dir().join(format!("focal-export-ui-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let page = dir.join("out.html");
+    let _ = std::fs::remove_file(&page);
+    let (window, _) = open_editor(cx, "# Hello\n\nSome *text* and $x^2$.\n");
+    act(cx, window, |window, cx| window.press("cmd-shift-e", cx));
+    cx.simulate_new_path_selection(|_| Some(page.clone()));
+    cx.run_until_parked();
+    let html = std::fs::read_to_string(&page).expect("the page was written");
+    assert!(
+        html.contains("<title>Hello</title>"),
+        "named after its heading"
+    );
+    assert!(html.contains("<em>text</em>") && html.contains(r#"<span class="math"><svg"#));
+}
+
+#[gpui_kit::test]
+fn copy_as_html_copies_the_selection_as_html_and_markdown(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "Keep **this** part. Not this.");
+    editor.update(cx, |e, cx| e.select(0..19, cx));
+    act(cx, window, |window, cx| window.press("cmd-alt-shift-c", cx));
+    cx.run_until_parked();
+    let (html, plain) = crate::mac::copied_html().expect("something was copied");
+    assert!(html.contains("<strong>this</strong>"), "{html}");
+    assert!(!html.contains("Not this"), "{html}");
+    assert_eq!(plain, "Keep **this** part.");
+}

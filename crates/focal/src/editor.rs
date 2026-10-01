@@ -590,7 +590,7 @@ impl Editor {
         let plain = text.clone();
         let html = cx
             .background_executor()
-            .spawn(async move { crate::export::html(&text, &sources, None) });
+            .spawn(async move { crate::export::pasteboard_html(&text, &sources) });
         cx.spawn(async move |_, cx| {
             let html = html.await;
             cx.update(|_| crate::mac::copy_html(&html, &plain));
