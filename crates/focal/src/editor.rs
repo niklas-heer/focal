@@ -343,6 +343,12 @@ pub struct Editor {
     save_task: Option<Task<()>>,
     /// Watches the file for changes on disk; dropping it stops watching.
     watch: Option<(notify::RecommendedWatcher, Task<()>)>,
+    /// The pointer's last position, where a footnote preview appears.
+    pointer: Point<Pixels>,
+    /// The editor's bounds in the window, from the last frame.
+    frame: Rc<Cell<Bounds<Pixels>>>,
+    /// The footnote reference (by its start) under the pointer, and its note.
+    footnote_preview: Option<(usize, SharedString)>,
     /// The folder wiki links resolve in, and its Markdown files relative to it.
     link_root: Option<PathBuf>,
     link_files: Rc<[PathBuf]>,
@@ -412,6 +418,9 @@ impl Editor {
             watch: None,
             grid: None,
             next_grid_session: 0,
+            pointer: Point::default(),
+            frame: Rc::default(),
+            footnote_preview: None,
             link_root: None,
             link_files: Rc::from([]),
             table_source: None,
@@ -508,6 +517,9 @@ impl Editor {
     /// wiki links in Focal (a missing wiki link target as a new file beside
     /// this one), anchors move the caret. Returns whether there was a link.
     fn follow_link(&mut self, offset: usize, cx: &mut Context<Self>) -> bool {
+        if self.follow_footnote(offset, cx) {
+            return true;
+        }
         let Some(link) = self.snapshot.analysis.link_at(offset).cloned() else {
             return false;
         };
@@ -549,6 +561,98 @@ impl Editor {
             }
         }
         true
+    }
+
+    /// A footnote reference leads to its note, a note's label back to the
+    /// first reference. Returns whether `offset` was on either.
+    fn follow_footnote(&mut self, offset: usize, cx: &mut Context<Self>) -> bool {
+        let analysis = &self.snapshot.analysis;
+        let Some(note) = analysis.footnote_at(offset) else {
+            return false;
+        };
+        let target = if note.definition {
+            analysis
+                .footnote_reference(&note.label)
+                .map(|reference| reference.range.start)
+        } else {
+            analysis
+                .footnote_definition(&note.label)
+                .map(|definition| definition.body.start)
+        };
+        if let Some(at) = target {
+            let from = self.selection.clone();
+            self.move_to(at, cx);
+            cx.emit(EditorEvent::Jumped(from));
+        }
+        true
+    }
+
+    /// The text of the note a footnote reference at `offset` points to, with
+    /// Markdown markers hidden.
+    fn footnote_text(&self, offset: usize) -> Option<SharedString> {
+        let analysis = &self.snapshot.analysis;
+        let note = analysis
+            .footnote_at(offset)
+            .filter(|note| !note.definition)?;
+        let body = analysis.footnote_definition(&note.label)?.body.clone();
+        let text: Vec<String> = analysis
+            .lines
+            .lines_of(&body)
+            .map(|line| {
+                let range = analysis.lines.range(line);
+                let part = body.start.max(range.start)..body.end.min(range.end);
+                range_view(analysis, self.text(), line, part, None)
+                    .text
+                    .trim()
+                    .to_owned()
+            })
+            .collect();
+        Some(text.join(" ").into())
+    }
+
+    /// Shows the note of the footnote reference at `offset` beside the
+    /// pointer, or hides the preview.
+    pub(crate) fn preview_footnote_at(&mut self, offset: Option<usize>, cx: &mut Context<Self>) {
+        let preview = offset.and_then(|offset| {
+            let start = self.snapshot.analysis.footnote_at(offset)?.range.start;
+            Some((start, self.footnote_text(offset)?))
+        });
+        let unchanged = self.footnote_preview.as_ref().map(|(start, _)| *start)
+            == preview.as_ref().map(|(start, _)| *start);
+        if !unchanged {
+            self.footnote_preview = preview;
+            cx.notify();
+        }
+    }
+
+    fn render_footnote_preview(&self, theme: &Theme) -> Option<impl IntoElement> {
+        let (_, text) = self.footnote_preview.as_ref()?;
+        // Beside the pointer, kept inside the editor.
+        let frame = self.frame.get();
+        let width = px(380.);
+        let at = self.pointer - frame.origin;
+        let left = at.x.min(frame.size.width - width - px(16.)).max(px(16.));
+        Some(
+            div()
+                .id("footnote-preview")
+                .test_support()
+                .aria_label(text.clone())
+                .absolute()
+                .left(left)
+                .top(at.y + px(20.))
+                .max_w(width)
+                .px(px(12.))
+                .py(px(8.))
+                .bg(theme.background)
+                .border_1()
+                .border_color(theme.rule)
+                .rounded(px(6.))
+                .shadow_md()
+                .text_size(px(self.typography.size * 0.85))
+                .line_height(relative(1.45))
+                .text_color(theme.text)
+                .child(text.clone()),
+        )
     }
 
     fn open_link(&mut self, _: &OpenLink, _: &mut Window, cx: &mut Context<Self>) {
@@ -1726,6 +1830,12 @@ impl Editor {
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
         let Some((granularity, anchor)) = self.selecting.clone() else {
+            self.pointer = event.position;
+            let offset = match self.hit_test(event.position) {
+                Some(Hit::Text { offset }) => Some(offset),
+                _ => None,
+            };
+            self.preview_footnote_at(offset, cx);
             return;
         };
         if event.pressed_button != Some(MouseButton::Left) {
@@ -2755,6 +2865,8 @@ impl Render for Editor {
         self.painted.borrow_mut().clear();
         let entity = cx.entity();
         let focus = self.focus_handle.clone();
+        let frame = self.frame.clone();
+        let preview = self.render_footnote_preview(&theme);
         let banner = self.render_banner(&theme, cx);
         let title = self.title();
         let a11y = self.a11y_source();
@@ -2859,6 +2971,7 @@ impl Render for Editor {
                 canvas(
                     |_, _, _| {},
                     move |bounds, (), window, cx| {
+                        frame.set(bounds);
                         window.handle_input(
                             &focus,
                             ElementInputHandler::new(bounds, entity.clone()),
@@ -2896,5 +3009,6 @@ impl Render for Editor {
                     .child(title),
             )
             .children(banner)
+            .children(preview)
     }
 }

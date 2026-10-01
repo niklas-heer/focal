@@ -18,6 +18,7 @@ pub fn open_workspace(cx: &mut TestAppContext, text: &str) -> (AnyWindowHandle, 
     cx.update(|cx| {
         gpui_kit::init(cx);
         editor::bind_keys(cx);
+        crate::workspace::bind_keys(cx);
         // Tests never read or write the user's settings file.
         cx.set_global(Settings::default());
         let bounds = Bounds {
@@ -891,4 +892,50 @@ fn an_anchor_link_moves_to_its_heading(cx: &mut TestAppContext) {
     editor.update(cx, |e, cx| e.move_to(2, cx));
     act(cx, window, |window, cx| window.press("cmd-enter", cx));
     editor.read_with(cx, |e, _| assert_eq!(e.selection(), 22..22));
+}
+
+const NOTES: &str = "One[^a] and two[^b].\n\n[^a]: The *first* note.\n";
+
+#[gpui_kit::test]
+fn a_footnote_reference_jumps_to_its_note_and_back(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, NOTES);
+    editor.update(cx, |e, cx| e.move_to(4, cx));
+    act(cx, window, |window, cx| window.press("cmd-enter", cx));
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.selection(), 28..28, "at the note's text");
+    });
+    act(cx, window, |window, cx| window.press("cmd-enter", cx));
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.selection(), 28..28, "inside the note, not on its label");
+    });
+    editor.update(cx, |e, cx| e.move_to(23, cx));
+    act(cx, window, |window, cx| window.press("cmd-enter", cx));
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.selection(), 3..3, "the label leads to the reference");
+    });
+    act(cx, window, |window, cx| window.press("cmd-[", cx));
+    act(cx, window, |window, cx| window.press("cmd-[", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 4..4, "back twice"));
+}
+
+#[gpui_kit::test]
+fn hovering_a_footnote_previews_it(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, NOTES);
+    editor.update(cx, |e, cx| e.preview_footnote_at(Some(4), cx));
+    act(cx, window, |window, _| {
+        let preview = window.find("footnote-preview");
+        assert_eq!(preview.label(), Some("The first note."));
+    });
+    editor.update(cx, |e, cx| e.preview_footnote_at(Some(16), cx));
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find("footnote-preview").is_none(),
+            "b has no note"
+        );
+    });
+    editor.update(cx, |e, cx| e.move_to(16, cx));
+    act(cx, window, |window, cx| window.press("cmd-enter", cx));
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.selection(), 16..16, "no jump without a note");
+    });
 }

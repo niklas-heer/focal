@@ -213,6 +213,18 @@ pub struct Link {
     pub wiki: bool,
 }
 
+/// A footnote reference (`[^label]`) or the label of its definition
+/// (`[^label]:`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Footnote {
+    pub label: String,
+    /// The reference, or the definition's `[^label]:`.
+    pub range: Range<usize>,
+    pub definition: bool,
+    /// For a definition, its text after the label.
+    pub body: Range<usize>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ColumnAlignment {
     None,
@@ -253,6 +265,7 @@ pub struct Analysis {
     pub markers: Vec<Marker>,
     pub styles: Vec<StyleSpan>,
     pub links: Vec<Link>,
+    pub footnotes: Vec<Footnote>,
     pub tables: Vec<Table>,
     pub code_blocks: Vec<CodeBlock>,
     pub(crate) line_markers: Vec<Vec<Piece>>,
@@ -300,6 +313,26 @@ impl Analysis {
             .min_by_key(|link| link.range.len())
     }
 
+    /// The footnote reference or definition label containing `offset`.
+    pub fn footnote_at(&self, offset: usize) -> Option<&Footnote> {
+        self.footnotes
+            .iter()
+            .find(|note| note.range.start <= offset && offset < note.range.end)
+    }
+
+    pub fn footnote_definition(&self, label: &str) -> Option<&Footnote> {
+        self.footnotes
+            .iter()
+            .find(|note| note.definition && note.label == label)
+    }
+
+    /// The first reference to the footnote `label`.
+    pub fn footnote_reference(&self, label: &str) -> Option<&Footnote> {
+        self.footnotes
+            .iter()
+            .find(|note| !note.definition && note.label == label)
+    }
+
     /// The table whose source contains `offset`, ends included.
     pub fn table_at(&self, offset: usize) -> Option<usize> {
         self.tables
@@ -332,6 +365,7 @@ pub fn analyze(text: &str) -> Analysis {
         markers: Vec::new(),
         styles: Vec::new(),
         links: Vec::new(),
+        footnotes: Vec::new(),
         tables: Vec::new(),
         code_blocks: Vec::new(),
         stack: Vec::new(),
@@ -382,6 +416,7 @@ struct Builder<'a> {
     markers: Vec<Marker>,
     styles: Vec<StyleSpan>,
     links: Vec<Link>,
+    footnotes: Vec<Footnote>,
     tables: Vec<Table>,
     code_blocks: Vec<CodeBlock>,
     stack: Vec<Frame<'a>>,
@@ -486,7 +521,15 @@ impl<'a> Builder<'a> {
             Event::InlineMath(_) => self.wrap(range, 1, 1, InlineStyle::MATH),
             Event::DisplayMath(_) => self.wrap(range, 2, 2, InlineStyle::MATH),
             Event::InlineHtml(_) | Event::Html(_) => self.style(range.clone(), InlineStyle::HTML),
-            Event::FootnoteReference(_) => self.wrap(range, 2, 1, InlineStyle::FOOTNOTE),
+            Event::FootnoteReference(label) => {
+                self.wrap(range, 2, 1, InlineStyle::FOOTNOTE);
+                self.footnotes.push(Footnote {
+                    label: label.to_string(),
+                    range: range.clone(),
+                    definition: false,
+                    body: range.end..range.end,
+                });
+            }
             Event::Rule => {
                 let line = self.lines.line_of(range.start);
                 self.infos[line].kind = LineKind::ThematicBreak;
@@ -534,6 +577,21 @@ impl<'a> Builder<'a> {
                 });
             }
             Tag::Image { .. } => self.markers_around(&range, content, InlineStyle::IMAGE),
+            Tag::FootnoteDefinition(label) => {
+                let label_end = self.text[range.clone()]
+                    .find("]:")
+                    .map_or(range.start, |at| range.start + at + 2);
+                let body = &self.text[label_end..range.end];
+                let start = label_end + (body.len() - body.trim_start().len());
+                let end = start + body.trim().len();
+                self.style(range.start..label_end, InlineStyle::MARKER);
+                self.footnotes.push(Footnote {
+                    label: label.to_string(),
+                    range: range.start..label_end,
+                    definition: true,
+                    body: start..end,
+                });
+            }
             Tag::Heading { level, .. } => self.heading(&range, content, level),
             Tag::Item => self.item(&range, content.as_ref(), frame.task.as_ref()),
             Tag::CodeBlock(kind) => self.code_block(&range, content, &kind),
@@ -854,6 +912,7 @@ impl<'a> Builder<'a> {
             markers: self.markers,
             styles: self.styles,
             links: self.links,
+            footnotes: self.footnotes,
             tables: self.tables,
             code_blocks: self.code_blocks,
             line_markers,
@@ -982,6 +1041,34 @@ mod tests {
             .collect();
         assert_eq!(cells, [vec!["a", "b"], vec!["1", "**2**"]]);
         assert_eq!(analysis.infos[4].kind, LineKind::Text);
+    }
+
+    #[test]
+    fn footnotes_pair_references_with_definitions() {
+        let text = "One[^a] and two[^b].\n\n[^a]: The note.\n";
+        let analysis = analyze(text);
+        let reference = analysis.footnote_at(4).unwrap();
+        assert_eq!(
+            (reference.label.as_str(), reference.definition),
+            ("a", false)
+        );
+        let definition = analysis.footnote_definition("a").unwrap();
+        assert_eq!(&text[definition.range.clone()], "[^a]:");
+        assert_eq!(&text[definition.body.clone()], "The note.");
+        assert!(
+            analysis
+                .footnote_at(definition.range.start + 1)
+                .unwrap()
+                .definition
+        );
+        assert_eq!(
+            analysis.footnote_reference("a").map(|r| r.range.start),
+            Some(3)
+        );
+        assert!(
+            analysis.footnote_definition("b").is_none(),
+            "b has no definition"
+        );
     }
 
     #[test]
