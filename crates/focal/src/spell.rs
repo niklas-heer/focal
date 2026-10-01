@@ -260,7 +260,8 @@ mod tests {
     #[test]
     fn finds_misspelled_words_as_byte_ranges() {
         let checker = SpellChecker::new();
-        let text = "Grüße: thsi is a sentance with a tpyo.";
+        // Multi-byte characters that no dictionary judges, before the words.
+        let text = "→ “thsi” is a sentance with a tpyo.";
         assert_eq!(
             words(text, &checker.misspellings(text)),
             ["thsi", "sentance", "tpyo"]
