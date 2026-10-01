@@ -2770,8 +2770,28 @@ impl Editor {
         )
     }
 
+    /// The find matches inside a table `cell`, as ranges of its displayed
+    /// `view`, each with whether it is the selected (current) match.
+    pub(crate) fn cell_highlights(
+        &self,
+        cell: &Range<usize>,
+        view: &LineView,
+    ) -> Vec<(Range<usize>, bool)> {
+        self.found_on(cell)
+            .into_iter()
+            .filter(|m| m.start >= cell.start && m.end <= cell.end)
+            .map(|m| {
+                let current = m == self.selection;
+                (
+                    view.map.to_display(m.start)..view.map.to_display(m.end),
+                    current,
+                )
+            })
+            .collect()
+    }
+
     /// The matches that touch `line`.
-    fn found_on(&self, line: &Range<usize>) -> Vec<Range<usize>> {
+    pub(crate) fn found_on(&self, line: &Range<usize>) -> Vec<Range<usize>> {
         let first = self.found.partition_point(|m| m.end < line.start);
         self.found[first..]
             .iter()
@@ -3081,6 +3101,13 @@ fn restyle(
 }
 
 /// Dims the runs outside `keep`, a display range of the line.
+/// Gives the text in `range` a background.
+pub(crate) fn tint(runs: Vec<TextRun>, range: &Range<usize>, color: Hsla) -> Vec<TextRun> {
+    restyle(runs, range, true, |part| {
+        part.background_color = Some(color);
+    })
+}
+
 fn fade_outside(runs: Vec<TextRun>, keep: &Range<usize>) -> Vec<TextRun> {
     restyle(runs, keep, false, |part| {
         part.color = part.color.opacity(DIMMED);

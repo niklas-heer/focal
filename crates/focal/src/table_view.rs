@@ -13,7 +13,7 @@ use gpui_kit::{
     TextRun, Window, canvas, div, font, point, px, relative,
 };
 
-use crate::editor::{Editor, PaintedRow, Row, text_runs};
+use crate::editor::{Editor, PaintedRow, Row, text_runs, tint};
 use crate::grid::{TableOp, TableOpKind};
 use crate::theme::{DIMMED, Theme};
 
@@ -544,6 +544,40 @@ impl Editor {
         )
     }
 
+    /// A cell's displayed text, with find matches tinted.
+    fn cell_text(&self, table_ix: usize, r: usize, c: usize, theme: &Theme) -> Option<StyledText> {
+        let analysis = &self.snapshot.analysis;
+        analysis.tables[table_ix].rows[r].get(c).map(|cell| {
+            let line = analysis.lines.line_of(cell.start);
+            let view = range_view(analysis, self.text(), line, cell.clone(), None);
+            let weight = if r == 0 {
+                FontWeight::BOLD
+            } else {
+                FontWeight::NORMAL
+            };
+            let mut runs = text_runs(
+                &view.runs,
+                self.typography.prose,
+                weight,
+                theme.text,
+                theme,
+                None,
+                false,
+            );
+            // Find matches: the grid draws no text selection, so the current
+            // match takes the selection color.
+            for (range, current) in self.cell_highlights(cell, &view) {
+                let color = if current {
+                    theme.selection
+                } else {
+                    theme.found
+                };
+                runs = tint(runs, &range, color);
+            }
+            StyledText::new(view.text.clone()).with_runs(runs)
+        })
+    }
+
     fn render_cell(
         &self,
         table_ix: usize,
@@ -562,24 +596,7 @@ impl Editor {
             .as_ref()
             .filter(|g| g.table == table_ix && g.row == r && g.column == c)
             .map(|g| g.input.clone());
-        let content = table.rows[r].get(c).map(|cell| {
-            let line = analysis.lines.line_of(cell.start);
-            let view = range_view(analysis, self.text(), line, cell.clone(), None);
-            let weight = if r == 0 {
-                FontWeight::BOLD
-            } else {
-                FontWeight::NORMAL
-            };
-            StyledText::new(view.text.clone()).with_runs(text_runs(
-                &view.runs,
-                self.typography.prose,
-                weight,
-                theme.text,
-                theme,
-                None,
-                false,
-            ))
-        });
+        let content = self.cell_text(table_ix, r, c, theme);
         div()
             .id(("cell", c))
             .test_support()

@@ -1302,3 +1302,39 @@ fn go_to_heading_without_headings_does_nothing(cx: &mut TestAppContext) {
     act(cx, window, |window, cx| window.press("enter", cx));
     editor.read_with(cx, |e, _| assert_eq!(e.selection(), 0..0));
 }
+
+#[gpui_kit::test]
+fn matches_in_table_cells_are_highlighted(cx: &mut TestAppContext) {
+    let (_, editor) = open_editor(
+        cx,
+        "Intro\n\n| Pet | Sound |\n|---|---|\n| cat | meow |\n| dog | woof cat |\n",
+    );
+    find(cx, &editor, "cat");
+    editor.read_with(cx, |e, _| {
+        let table = &e.snapshot.analysis.tables[0];
+        let cell = table.rows[1][0].clone();
+        let line = e.snapshot.analysis.lines.line_of(cell.start);
+        let view = focal_core::range_view(&e.snapshot.analysis, e.text(), line, cell.clone(), None);
+        assert_eq!(
+            e.cell_highlights(&cell, &view),
+            [(0..3, true)],
+            "the current match"
+        );
+        let other = table.rows[2][1].clone();
+        let line = e.snapshot.analysis.lines.line_of(other.start);
+        let view =
+            focal_core::range_view(&e.snapshot.analysis, e.text(), line, other.clone(), None);
+        assert_eq!(e.cell_highlights(&other, &view), [(5..8, false)]);
+    });
+    editor.update(cx, |e, cx| e.find_step(true, cx));
+    editor.read_with(cx, |e, _| {
+        let cell = e.snapshot.analysis.tables[0].rows[2][1].clone();
+        let line = e.snapshot.analysis.lines.line_of(cell.start);
+        let view = focal_core::range_view(&e.snapshot.analysis, e.text(), line, cell.clone(), None);
+        assert_eq!(
+            e.cell_highlights(&cell, &view),
+            [(5..8, true)],
+            "the next match"
+        );
+    });
+}
