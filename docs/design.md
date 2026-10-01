@@ -219,28 +219,28 @@ Principles:
 | CommonMark core, tables, task lists, strikethrough, autolinks, footnotes, alerts `> [!NOTE]` | CommonMark, GFM | Built (M1 to M4). |
 | Raw HTML | everywhere | See below. |
 | Math `$…$`, `$$…$$` | GitHub, GitLab, Obsidian, Typora, Pandoc | Built (M4). |
-| Math `\(…\)`, `\[…\]` | MathJax, Pandoc, LLM answers | M9: as math. |
-| Math fences `` ```math `` and `` $`…`$ `` | GitHub, GitLab | M9: as math. |
-| Callouts `> [!type] Title`, any type, `+`/`-` folding | Obsidian, GitHub (five types) | M9: every type, mapped to the five colors, custom titles. |
-| Containers `::: type Title` … `:::` | Docusaurus, VitePress, Pandoc fenced divs, markdown-it | M9: as callouts. |
-| Admonitions `!!! type "Title"` with indented body, `???` collapsible | MkDocs, Python-Markdown | M9: as callouts. |
-| `>>>` multi-line quotes | GitLab | M9: as quotes. |
-| Front matter YAML `---`, TOML `+++`, JSON `;;;` / `{…}` | Jekyll, Hugo, Zola, GitLab | YAML built (M4); M9: TOML and JSON. |
-| Definition lists | PHP Markdown Extra, Pandoc, GitLab, kramdown | M9. |
-| Superscript `^x^` | Pandoc, MultiMarkdown, markdown-it | M9. Subscript `~x~` stays strikethrough, as on GitHub. |
-| Heading attributes `{#id .class}` | Pandoc, kramdown, Markdown Extra | M9: hidden away from the caret. |
-| Abbreviations `*[HTML]: …` | Markdown Extra, MultiMarkdown, kramdown | M9: quiet lines. |
-| Wiki links `[[note#heading\|alias]]`, embeds `![[image.png]]`, `![[note]]` | Obsidian, Foam, Logseq | Links built (M4); M9: image embeds as images, note embeds as links. |
-| Comments `%%…%%`, `<!-- … -->` | Obsidian, HTML | M9: quiet. |
-| Tags `#tag/sub` | Obsidian, Bear | M9: styled. |
-| Emoji shortcodes `:tada:` | GitHub, GitLab, Slack | M9: shown as emoji away from the caret. |
-| Table of contents `[TOC]`, `[[_TOC_]]`, `[[toc]]`, `{:toc}` | GitLab, Markdown Extra, kramdown, VitePress | M9: drawn as the outline. |
+| Math `\(…\)`, `\[…\]` | MathJax, Pandoc, LLM answers | Built (M9). |
+| Math fences `` ```math `` and `` $`…`$ `` | GitHub, GitLab | Built (M9). |
+| Callouts `> [!type] Title`, any type, `+`/`-` folding | Obsidian, GitHub (five types) | Built (M9): every type, mapped to the five colors, written titles. |
+| Containers `::: type Title` … `:::` | Docusaurus, VitePress, Pandoc fenced divs, markdown-it | Built (M9): titled callouts. |
+| Admonitions `!!! type "Title"` with indented body, `???` collapsible | MkDocs, Python-Markdown | Built (M9): titled callouts. |
+| `>>>` multi-line quotes | GitLab | Built (M9). |
+| Front matter YAML `---`, TOML `+++`, JSON `;;;` / `{…}` | Jekyll, Hugo, Zola, GitLab | Built (M4, M9). |
+| Definition lists | PHP Markdown Extra, Pandoc, GitLab, kramdown | Built (M9). |
+| Superscript `^x^` | Pandoc, MultiMarkdown, markdown-it | Built (M9), also inside words. Subscript `~x~` stays strikethrough, as on GitHub. |
+| Heading attributes `{#id .class}` | Pandoc, kramdown, Markdown Extra | Built (M9): hidden away from the caret. |
+| Abbreviations `*[HTML]: …` | Markdown Extra, MultiMarkdown, kramdown | Built (M9): quiet lines; export writes `<abbr>`. |
+| Wiki links `[[note#heading\|alias]]`, embeds `![[image.png]]`, `![[note]]` | Obsidian, Foam, Logseq | Built (M4, M9): image embeds as images (found anywhere in the folder), note embeds as links. |
+| Comments `%%…%%`, `<!-- … -->` | Obsidian, HTML | Built (M9): quiet; export leaves them out. |
+| Tags `#tag/sub` | Obsidian, Bear | Built (M9). |
+| Emoji shortcodes `:tada:` | GitHub, GitLab, Slack | Built (M9). |
+| Table of contents `[TOC]`, `[[_TOC_]]`, `[[toc]]`, `{:toc}` | GitLab, Markdown Extra, kramdown, VitePress | Built (M9): the outline, each entry a link. |
 | Pandoc grid and simple tables, line blocks | Pandoc | Shown as monospaced source (later: grids). |
 | Template syntax `{{< … >}}`, `{% … %}`, MDX `import`/JSX | Hugo, Jekyll, MDX | Shown quietly as source. |
-| Encodings: UTF-8 with BOM, UTF-16, legacy 8-bit (Windows-1252) | older files, Windows | M9: detected and kept on save. |
-| Line endings LF, CRLF, CR | all | LF and CRLF built; M9: CR. |
+| Encodings: UTF-8 with BOM, UTF-16, legacy 8-bit (Windows-1252) | older files, Windows | Built (M9). |
+| Line endings LF, CRLF, CR | all | Built (M1, M9). |
 
-Raw HTML: CommonMark and GFM pass HTML through untouched, as blocks and inline; GFM's "tagfilter" extension escapes nine tags that could break a page (`title`, `textarea`, `style`, `xmp`, `iframe`, `noembed`, `noframes`, `script`, `plaintext`); GitHub and GitLab then sanitize the result with an allow-list (GitLab adds `span`, `abbr`, `details` and `summary`); Obsidian and Typora render HTML in their previews; Pandoc passes it through to HTML output. Focal (M9): the editor never runs HTML. It shows comments quietly, draws an `<img>` that stands alone as an image, styles inline formatting tags (`b`, `strong`, `i`, `em`, `u`, `ins`, `s`, `del`, `mark`, `kbd`, `sub`, `sup`, `code`, `br`, `a`) with the tags hidden away from the caret, hides layout wrappers (`<p align>`, `<div align>`, `<center>`) and shows `<details>`/`<summary>` as a titled block; other HTML stays quiet source. Export passes HTML through like CommonMark, with GFM's tagfilter applied.
+Raw HTML: CommonMark and GFM pass HTML through untouched, as blocks and inline; GFM's "tagfilter" extension escapes nine tags that could break a page (`title`, `textarea`, `style`, `xmp`, `iframe`, `noembed`, `noframes`, `script`, `plaintext`); GitHub and GitLab then sanitize the result with an allow-list (GitLab adds `span`, `abbr`, `details` and `summary`); Obsidian and Typora render HTML in their previews; Pandoc passes it through to HTML output. Focal (built in M9): the editor never runs HTML. It shows comments quietly, draws an `<img>` that stands alone as an image, styles inline formatting tags (`b`, `strong`, `i`, `em`, `u`, `ins`, `s`, `del`, `mark`, `kbd`, `sub`, `sup`, `code`, `br`, `a`) with the tags hidden away from the caret, hides layout wrappers (`<p align>`, `<div align>`, `<center>`) and shows `<details>`/`<summary>` as a titled block; other HTML stays quiet source. Export passes HTML through like CommonMark, with GFM's tagfilter applied.
 
 ### Diagrams (Milestone 10)
 
@@ -270,6 +270,7 @@ Raw HTML: CommonMark and GFM pass HTML through untouched, as blocks and inline; 
 | **M6 — Distribution** | Done: `Focal.app` bundle with an icon and Markdown document types, one running instance that `focal` forwards to (with `--wait`), Finder's Open With, "Install Command Line Tool…", Sparkle updates with a setting and a download prompt, About panel, Developer ID signing, and a release script with notarization and a Homebrew cask template. The first public release is still to be published. |
 | **M7 — Everyday editing** | Done: find and replace with a find bar, New, Open… and Open Recent, and asking before untitled text is lost. |
 | **M8 — Outline and sharing** | Done: Go to Heading, Export as HTML…, Copy as HTML. |
+| **M9 — Dialects** | Done: math in every notation, callouts in every style, TOML and JSON front matter, Pandoc and Markdown Extra extensions, Obsidian syntax, emoji shortcodes, tables of contents, README-style HTML, and any encoding; see section 7a. |
 
 Each milestone gets its own implementation plan before work starts.
 
