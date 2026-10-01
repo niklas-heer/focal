@@ -37,6 +37,8 @@ impl InlineStyle {
     pub const LABEL: Self = Self(1 << 15);
     /// A word the spell checker does not know.
     pub const MISSPELLED: Self = Self(1 << 16);
+    /// A tag such as `#idea` or `#project/focal` (Obsidian, Bear).
+    pub const TAG: Self = Self(1 << 17);
 
     pub const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0 && other.0 != 0
@@ -200,6 +202,8 @@ pub enum Replacement {
     Label(String),
     /// Inline math written in Unicode.
     Math(String),
+    /// An emoji for its shortcode, such as 🎉 for `:tada:`.
+    Emoji(String),
 }
 
 impl Replacement {
@@ -212,13 +216,16 @@ impl Replacement {
 
     pub fn text(&self) -> String {
         match self {
-            Self::Callout(_, text) | Self::Label(text) | Self::Math(text) => text.clone(),
+            Self::Callout(_, text) | Self::Label(text) | Self::Math(text) | Self::Emoji(text) => {
+                text.clone()
+            }
         }
     }
 
     pub const fn style(&self) -> InlineStyle {
         match self {
             Self::Callout(..) => InlineStyle::ALERT_TITLE,
+            Self::Emoji(_) => InlineStyle::NONE,
             Self::Label(_) => InlineStyle::LABEL,
             Self::Math(_) => InlineStyle::MATH,
         }
@@ -253,6 +260,19 @@ pub struct Image {
     pub range: Range<usize>,
     pub destination: String,
     pub alt: String,
+    /// An Obsidian embed `![[file.png]]`, found anywhere in the folder.
+    pub wiki: bool,
+    /// The width asked for, as in `![[file.png|300]]`.
+    pub width: Option<u32>,
+}
+
+/// Whether `destination` names an image file, by its extension.
+pub fn is_image_file(destination: &str) -> bool {
+    let extension = destination.rsplit_once('.').map_or("", |(_, ext)| ext);
+    matches!(
+        extension.to_ascii_lowercase().as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp" | "tif" | "tiff" | "avif" | "heic"
+    )
 }
 
 /// A footnote reference (`[^label]`) or the label of its definition
@@ -636,23 +656,9 @@ impl<'a> Builder<'a> {
             Tag::Emphasis => self.markers_around(&range, content, InlineStyle::EMPHASIS),
             Tag::Strong => self.markers_around(&range, content, InlineStyle::STRONG),
             Tag::Strikethrough => self.markers_around(&range, content, InlineStyle::STRIKETHROUGH),
+            // Superscript is read by `apply_inline_extras`, also inside words.
             Tag::Superscript | Tag::Subscript => {
-                self.markers_around(&range, content.clone(), InlineStyle::NONE);
-                // Away from the caret, superscript reads raised when every
-                // character has a Unicode superscript.
-                if let Some(content) = content
-                    && matches!(frame.tag, Tag::Superscript)
-                    && let Some(raised) = self.text[content.clone()]
-                        .chars()
-                        .map(crate::texmath::superscript_of)
-                        .collect::<Option<String>>()
-                {
-                    self.markers.push(Marker {
-                        range: content,
-                        reveal: Reveal::Touching(range.clone()),
-                        replacement: Some(Replacement::Math(raised)),
-                    });
-                }
+                self.markers_around(&range, content, InlineStyle::NONE);
             }
             Tag::Link {
                 link_type,
@@ -666,18 +672,11 @@ impl<'a> Builder<'a> {
                     wiki: matches!(link_type, LinkType::WikiLink { .. }),
                 });
             }
-            Tag::Image { dest_url, .. } => {
-                let alt = content
-                    .as_ref()
-                    .map_or("", |content| &self.text[content.clone()])
-                    .to_owned();
-                self.images.push(Image {
-                    range: range.clone(),
-                    destination: dest_url.to_string(),
-                    alt,
-                });
-                self.markers_around(&range, content, InlineStyle::IMAGE);
-            }
+            Tag::Image {
+                dest_url,
+                link_type,
+                ..
+            } => self.image(range, content, &dest_url, link_type),
             Tag::FootnoteDefinition(label) => {
                 let label_end = self.text[range.clone()]
                     .find("]:")
@@ -888,6 +887,48 @@ impl<'a> Builder<'a> {
                 marker_range: start..end,
             },
         });
+    }
+
+    /// An image, or an Obsidian embed: `![[pic.png|300]]` is an image with
+    /// a width, and `![[note]]` a link to the note.
+    fn image(
+        &mut self,
+        range: Range<usize>,
+        content: Option<Range<usize>>,
+        dest_url: &str,
+        link_type: LinkType,
+    ) {
+        let wiki = matches!(link_type, LinkType::WikiLink { .. });
+        let written = content
+            .as_ref()
+            .map_or("", |content| &self.text[content.clone()])
+            .to_owned();
+        if wiki && !is_image_file(dest_url) {
+            self.markers_around(&range, content, InlineStyle::LINK);
+            self.links.push(Link {
+                range,
+                destination: dest_url.to_owned(),
+                wiki: true,
+            });
+            return;
+        }
+        let width = wiki
+            .then(|| {
+                written
+                    .split('x')
+                    .next()
+                    .and_then(|w| w.trim().parse().ok())
+            })
+            .flatten();
+        let alt = if wiki { dest_url.to_owned() } else { written };
+        self.images.push(Image {
+            range: range.clone(),
+            destination: dest_url.to_owned(),
+            alt,
+            wiki,
+            width,
+        });
+        self.markers_around(&range, content, InlineStyle::IMAGE);
     }
 
     /// A definition list's definition, `: text`: the colon is a hidden prefix
@@ -1217,13 +1258,51 @@ fn apply_inline_extras(
                     || s.style.contains(InlineStyle::HTML))
         })
     };
+    // Inside an Obsidian `%%` block comment.
+    let mut commented = false;
     for (line, info) in infos.iter().enumerate() {
-        if !matches!(info.kind, LineKind::Text | LineKind::Heading(_)) {
-            continue;
-        }
         let range = lines.range(line);
         let source = &text[range.clone()];
         let content = source.trim_start();
+        let code = matches!(info.kind, LineKind::Code | LineKind::CodeFence { .. });
+        if !code && (commented || content.trim_end() == "%%") {
+            if content.trim_end() == "%%" {
+                commented = !commented;
+            }
+            styles.push(StyleSpan {
+                range,
+                style: InlineStyle::HTML,
+            });
+            continue;
+        }
+        if !matches!(info.kind, LineKind::Text | LineKind::Heading(_)) {
+            continue;
+        }
+        for comment in pairs(source, "%%") {
+            styles.push(StyleSpan {
+                range: range.start + comment.start..range.start + comment.end,
+                style: InlineStyle::HTML,
+            });
+        }
+        for tag in tags(source) {
+            let tag = range.start + tag.start..range.start + tag.end;
+            if !covered(styles, tag.start) {
+                styles.push(StyleSpan {
+                    range: tag,
+                    style: InlineStyle::TAG,
+                });
+            }
+        }
+        for (shortcode, emoji) in emoji_shortcodes(source) {
+            let shortcode = range.start + shortcode.start..range.start + shortcode.end;
+            if !covered(styles, shortcode.start) {
+                markers.push(Marker {
+                    range: shortcode.clone(),
+                    reveal: Reveal::Touching(shortcode),
+                    replacement: Some(Replacement::Emoji(emoji.to_owned())),
+                });
+            }
+        }
         if content.starts_with("*[") && content.contains("]:") {
             styles.push(StyleSpan {
                 range: range.start + (source.len() - content.len())..range.end,
@@ -1258,6 +1337,76 @@ fn apply_inline_extras(
             }
         }
     }
+}
+
+/// The spans of `line` between pairs of `delimiter`, delimiters included.
+fn pairs(line: &str, delimiter: &str) -> Vec<Range<usize>> {
+    let mut found = Vec::new();
+    let mut at = 0;
+    while let Some(open) = line[at..].find(delimiter).map(|ix| ix + at) {
+        let inner = open + delimiter.len();
+        let Some(close) = line[inner..].find(delimiter).map(|ix| ix + inner) else {
+            break;
+        };
+        found.push(open..close + delimiter.len());
+        at = close + delimiter.len();
+    }
+    found
+}
+
+/// Tags `#name` or `#name/sub` (Obsidian, Bear): after a space or at the
+/// start, not only digits, so `#123` and `url#anchor` are not tags.
+pub(crate) fn tags(line: &str) -> Vec<Range<usize>> {
+    let mut found = Vec::new();
+    for (at, _) in line.match_indices('#') {
+        let before = line[..at].chars().next_back();
+        if before.is_some_and(|c| !c.is_whitespace() && !matches!(c, '(' | ',')) {
+            continue;
+        }
+        let name: usize = line[at + 1..]
+            .chars()
+            .take_while(|&c| c.is_alphanumeric() || matches!(c, '_' | '-' | '/'))
+            .map(char::len_utf8)
+            .sum();
+        let tag = &line[at + 1..at + 1 + name];
+        if !tag.is_empty() && !tag.chars().all(|c| c.is_ascii_digit()) {
+            found.push(at..at + 1 + name);
+        }
+    }
+    found
+}
+
+/// Emoji shortcodes `:name:` (GitHub, GitLab, Slack) with their emoji; not
+/// times such as `10:30:00` or paths such as `std::io`.
+pub(crate) fn emoji_shortcodes(line: &str) -> Vec<(Range<usize>, &'static str)> {
+    let bytes = line.as_bytes();
+    let mut found = Vec::new();
+    let mut at = 0;
+    while let Some(open) = line[at..].find(':').map(|ix| ix + at) {
+        at = open + 1;
+        if open > 0 && (bytes[open - 1].is_ascii_alphanumeric() || bytes[open - 1] == b':') {
+            continue;
+        }
+        let name_len = line[open + 1..]
+            .bytes()
+            .take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'+' | b'-'))
+            .count();
+        let close = open + 1 + name_len;
+        if name_len == 0 || bytes.get(close) != Some(&b':') {
+            continue;
+        }
+        if bytes
+            .get(close + 1)
+            .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b':')
+        {
+            continue;
+        }
+        if let Some(emoji) = emojis::get_by_shortcode(&line[open + 1..close]) {
+            found.push((open..close + 1, emoji.as_str()));
+            at = close + 1;
+        }
+    }
+    found
 }
 
 /// The `^` pairs around superscripts in `line`: no spaces or brackets
@@ -1802,6 +1951,64 @@ mod tests {
                 .styles
                 .iter()
                 .any(|s| s.style.contains(InlineStyle::EMPHASIS))
+        );
+    }
+
+    fn styled<'t>(text: &'t str, analysis: &Analysis, style: InlineStyle) -> Vec<&'t str> {
+        analysis
+            .styles
+            .iter()
+            .filter(|s| s.style.contains(style))
+            .map(|s| &text[s.range.clone()])
+            .collect()
+    }
+
+    #[test]
+    fn obsidian_comments_are_quiet() {
+        let text = "a %%hidden%% b\n\n%%\nblock comment\n%%\n";
+        let analysis = analyze(text);
+        let quiet = styled(text, &analysis, InlineStyle::HTML);
+        assert!(quiet.contains(&"%%hidden%%"), "{quiet:?}");
+        assert!(quiet.contains(&"block comment"), "{quiet:?}");
+    }
+
+    #[test]
+    fn tags_are_styled_but_not_headings_numbers_or_anchors() {
+        let text = "#tag and #tag/sub-two, not #123 or https://x.y/#frag\n\n# Heading\n";
+        assert_eq!(
+            styled(text, &analyze(text), InlineStyle::TAG),
+            ["#tag", "#tag/sub-two"]
+        );
+    }
+
+    #[test]
+    fn emoji_shortcodes_read_as_emoji() {
+        let text = "Done :tada: at 10:30:00 in std::io :not_an_emoji:";
+        let analysis = analyze(text);
+        let emoji: Vec<(&str, String)> = analysis
+            .markers
+            .iter()
+            .filter_map(|m| {
+                m.replacement
+                    .as_ref()
+                    .map(|r| (&text[m.range.clone()], r.text()))
+            })
+            .collect();
+        assert_eq!(emoji, [(":tada:", "🎉".to_owned())]);
+    }
+
+    #[test]
+    fn note_embeds_are_links_and_image_embeds_images() {
+        let analysis = analyze("![[Some Note]]\n\n![[pic.png|300]]\n");
+        assert_eq!(analysis.images.len(), 1);
+        assert_eq!(analysis.images[0].destination, "pic.png");
+        assert_eq!(analysis.images[0].width, Some(300));
+        assert!(analysis.images[0].wiki);
+        assert!(
+            analysis
+                .links
+                .iter()
+                .any(|l| l.wiki && l.destination == "Some Note")
         );
     }
 }

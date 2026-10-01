@@ -266,6 +266,8 @@ pub(crate) enum IslandKind {
     Image,
     /// Display math alone on its lines.
     Math,
+    /// A table-of-contents marker such as `[TOC]`.
+    Toc,
     /// A fenced Mermaid code block.
     Diagram,
 }
@@ -381,6 +383,8 @@ pub struct Editor {
     /// Remote images being downloaded, and those that failed, by URL.
     pub(crate) fetching_images: RefCell<std::collections::HashSet<String>>,
     pub(crate) failed_images: RefCell<HashMap<String, Instant>>,
+    /// Image embeds found in the folder, by name, and when they were looked for.
+    pub(crate) found_files: RefCell<HashMap<String, (Option<PathBuf>, Instant)>>,
     /// The pointer's last position, where a footnote preview appears.
     pointer: Point<Pixels>,
     /// The editor's bounds in the window, from the last frame.
@@ -388,7 +392,7 @@ pub struct Editor {
     /// The footnote reference (by its start) under the pointer, and its note.
     footnote_preview: Option<(usize, SharedString)>,
     /// The folder wiki links resolve in, and its Markdown files relative to it.
-    link_root: Option<PathBuf>,
+    pub(crate) link_root: Option<PathBuf>,
     link_files: std::sync::Arc<[PathBuf]>,
     /// The table cell being edited, if any.
     pub(crate) grid: Option<crate::grid::GridSession>,
@@ -474,6 +478,7 @@ impl Editor {
             diagrams: RefCell::default(),
             fetching_images: RefCell::default(),
             failed_images: RefCell::default(),
+            found_files: RefCell::default(),
             pointer: Point::default(),
             frame: Rc::default(),
             footnote_preview: None,
@@ -666,9 +671,7 @@ impl Editor {
         } else if let Some(slug) = destination.strip_prefix('#') {
             let analysis = self.snapshot.analysis.clone();
             if let Some(at) = links::find_heading(&analysis, self.text(), slug) {
-                let from = self.selection.clone();
-                self.move_to(at, cx);
-                cx.emit(EditorEvent::Jumped(from));
+                self.jump_to(at, cx);
             }
         } else if destination.contains("://") || destination.starts_with("mailto:") {
             cx.open_url(&destination);
@@ -691,6 +694,13 @@ impl Editor {
 
     /// A footnote reference leads to its note, a note's label back to the
     /// first reference. Returns whether `offset` was on either.
+    /// Moves the caret to `offset`, which "back" returns from.
+    pub(crate) fn jump_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        let from = self.selection.clone();
+        self.move_to(offset, cx);
+        cx.emit(EditorEvent::Jumped(from));
+    }
+
     fn follow_footnote(&mut self, offset: usize, cx: &mut Context<Self>) -> bool {
         let analysis = &self.snapshot.analysis;
         let Some(note) = analysis.footnote_at(offset) else {
@@ -3039,6 +3049,7 @@ pub(crate) fn text_runs(
             } else if style.contains(InlineStyle::ALERT_TITLE) {
                 alert.unwrap_or(base)
             } else if style.contains(InlineStyle::LINK)
+                || style.contains(InlineStyle::TAG)
                 || style.contains(InlineStyle::FOOTNOTE)
                 || style.contains(InlineStyle::IMAGE)
                 || style.contains(InlineStyle::MATH)

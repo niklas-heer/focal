@@ -1463,3 +1463,32 @@ fn bracket_and_fenced_math_are_islands(cx: &mut TestAppContext) {
         );
     });
 }
+
+#[gpui_kit::test]
+fn an_obsidian_image_embed_is_found_anywhere_in_the_folder(cx: &mut TestAppContext) {
+    let root = crate::folder::tests::temp_folder("embed");
+    std::fs::create_dir_all(root.join("attachments")).unwrap();
+    std::fs::write(root.join("attachments/pixel.png"), PIXEL).unwrap();
+    std::fs::write(root.join("notes.md"), "Above\n\n![[pixel.png|40]]\n").unwrap();
+    let (window, _) = open_folder(cx, &root);
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find(("image-island", 2usize)).is_some(),
+            "found in attachments/"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn a_table_of_contents_lists_the_headings_and_jumps(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "# Guide\n\n[TOC]\n\n## First\n\n## Second\n");
+    act(cx, window, |window, _| {
+        assert!(window.try_find(("toc-island", 2usize)).is_some());
+    });
+    act(cx, window, |window, cx| {
+        window.click(("toc-entry", 2usize), cx);
+    });
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 29..29, "at “Second”"));
+    act(cx, window, |window, cx| window.press("cmd-[", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 0..0, "back"));
+}

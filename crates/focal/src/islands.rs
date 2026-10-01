@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use focal_core::Analysis;
 use focal_core::analysis::Alert;
-use focal_core::blocks::{block_image, diagram_blocks, front_matter, math_blocks};
+use focal_core::blocks::{block_image, diagram_blocks, front_matter, math_blocks, toc_blocks};
 use focal_core::links;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -21,6 +21,9 @@ use gpui_kit::{
 use crate::editor::{Editor, Island, IslandKind, PaintedRow, Row};
 use crate::theme::Theme;
 use crate::{diagram, math};
+
+/// Entries an embed search looks at before giving up.
+const FIND_LIMIT: usize = 20_000;
 
 /// The islands of this version of the text.
 pub(crate) fn islands(analysis: &Analysis, text: &str) -> Vec<Island> {
@@ -44,6 +47,13 @@ pub(crate) fn islands(analysis: &Analysis, text: &str) -> Vec<Island> {
             kind: IslandKind::Math,
             start: block.lines.start,
             end: block.lines.end,
+        });
+    }
+    for lines in toc_blocks(analysis, text) {
+        islands.push(Island {
+            kind: IslandKind::Toc,
+            start: lines.start,
+            end: lines.end,
         });
     }
     // Only lines that hold an image can be image islands.
@@ -248,7 +258,8 @@ impl Editor {
             IslandKind::FrontMatter
             | IslandKind::Image
             | IslandKind::Math
-            | IslandKind::Diagram => island.start,
+            | IslandKind::Diagram
+            | IslandKind::Toc => island.start,
         };
         self.snapshot.analysis.lines.range(line).start
     }
@@ -279,6 +290,7 @@ impl Editor {
             IslandKind::Image => self.render_image(island.start, "image-island", theme, cx),
             IslandKind::Math => self.render_math(island.start, "math-island", theme, cx),
             IslandKind::Diagram => self.render_diagram(island.start, "diagram-island", theme, cx),
+            IslandKind::Toc => self.render_toc(island.start, theme, cx),
         };
         div()
             .relative()
@@ -300,6 +312,49 @@ impl Editor {
                 .left_0()
                 .size_full(),
             )
+            .into_any_element()
+    }
+
+    /// A table of contents: the outline, each heading a link that moves the
+    /// caret there (and ⌘[ comes back).
+    fn render_toc(&self, line: usize, theme: &Theme, cx: &Context<Self>) -> AnyElement {
+        let size = self.typography.size;
+        let entries = focal_core::outline::outline(self.text())
+            .into_iter()
+            .enumerate()
+            .map(|(ix, heading)| {
+                let offset = heading.offset;
+                div()
+                    .id(("toc-entry", ix))
+                    .test_support()
+                    .aria_label(heading.title.clone())
+                    .pl(px(f32::from(heading.level.saturating_sub(1)) * size))
+                    .text_color(theme.link)
+                    .cursor_pointer()
+                    .child(heading.title)
+                    .on_mouse_down(
+                        gpui_kit::MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.jump_to(offset, cx);
+                        }),
+                    )
+            });
+        div()
+            .id(("toc-island", line))
+            .test_support()
+            .aria_label("Contents")
+            .py(px(6.))
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .child(
+                div()
+                    .text_size(px(size * 0.8))
+                    .text_color(theme.marker)
+                    .child("Contents"),
+            )
+            .children(entries)
             .into_any_element()
     }
 
@@ -326,7 +381,11 @@ impl Editor {
                 .child(text)
                 .into_any_element()
         };
-        match self.picture(&image.destination, cx) {
+        // A width asked for (`![[pic.png|300]]`) narrows the column.
+        let column = image.width.map_or(self.typography.column, |w| {
+            self.typography.column.min(w as f32)
+        });
+        match self.picture(&image.destination, image.wiki, cx) {
             Picture::Ready(path) => {
                 let missing = format!("Image not found: {}", image.destination);
                 let marker = theme.marker;
@@ -344,7 +403,7 @@ impl Editor {
                                         let (width, height) = fit(
                                             size.width as f32,
                                             size.height as f32,
-                                            self.typography.column,
+                                            column,
                                             MAX_IMAGE_HEIGHT,
                                         );
                                         image.w(px(width)).h(px(height))
@@ -373,7 +432,7 @@ impl Editor {
 
     /// Finds an image's file: next to the document for a relative path, in
     /// the cache for a remote one, starting its download if needed.
-    fn picture(&self, destination: &str, cx: &Context<Self>) -> Picture {
+    fn picture(&self, destination: &str, wiki: bool, cx: &Context<Self>) -> Picture {
         if destination.starts_with("http://") || destination.starts_with("https://") {
             let Some(path) = cached_path(destination) else {
                 return Picture::Missing;
@@ -429,8 +488,32 @@ impl Editor {
         };
         match path {
             Some(path) if path.is_file() => Picture::Ready(path),
+            // Obsidian finds an embed anywhere in the vault.
+            _ if wiki => self
+                .found_file(local)
+                .map_or(Picture::Missing, Picture::Ready),
             _ => Picture::Missing,
         }
+    }
+
+    /// The file named `name` anywhere in the folder links resolve in; a
+    /// search that found nothing is repeated a minute later at the soonest.
+    fn found_file(&self, name: &str) -> Option<PathBuf> {
+        let root = self.link_root.as_ref()?;
+        let known = self.found_files.borrow().get(name).cloned();
+        if let Some((found, when)) = known
+            && (found.as_ref().is_some_and(|path| path.is_file())
+                || !retry_due(when, Instant::now()))
+        {
+            return found;
+        }
+        let found = links::find_file(root, &links::percent_decode(name), FIND_LIMIT);
+        remember(
+            &mut self.found_files.borrow_mut(),
+            name.to_owned(),
+            (found.clone(), Instant::now()),
+        );
+        found
     }
 
     /// The display math starting on `line`, typeset and centered; while a

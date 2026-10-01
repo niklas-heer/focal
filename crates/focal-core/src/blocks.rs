@@ -96,6 +96,10 @@ fn unquote(value: &str) -> String {
 pub struct ImageRef {
     pub alt: String,
     pub destination: String,
+    /// An Obsidian embed, found anywhere in the folder.
+    pub wiki: bool,
+    /// The width asked for, in points.
+    pub width: Option<u32>,
 }
 
 /// The image on `line` if nothing else is (beyond quote or list markers).
@@ -111,6 +115,8 @@ pub fn block_image(analysis: &Analysis, text: &str, line: usize) -> Option<Image
         .map(|image| ImageRef {
             alt: image.alt.clone(),
             destination: image.destination.clone(),
+            wiki: image.wiki,
+            width: image.width,
         })
 }
 
@@ -179,6 +185,34 @@ pub fn diagram_blocks(analysis: &Analysis, text: &str) -> Vec<DiagramBlock> {
         .collect()
 }
 
+/// The lines of each table-of-contents marker: `[TOC]` (Markdown Extra,
+/// GitLab), `[[_TOC_]]` (GitLab), `[[toc]]` (VitePress), and kramdown's
+/// `{:toc}` with its `* TOC` line above.
+pub fn toc_blocks(analysis: &Analysis, text: &str) -> Vec<Range<usize>> {
+    let mut found = Vec::new();
+    for line in 0..analysis.line_count() {
+        if !matches!(analysis.info(line).kind, LineKind::Text) {
+            continue;
+        }
+        let content = text[analysis.lines.range(line)].trim();
+        let marker = matches!(
+            content.to_ascii_lowercase().as_str(),
+            "[toc]" | "[[_toc_]]" | "[[toc]]" | "{:toc}"
+        );
+        if !marker {
+            continue;
+        }
+        let kramdown_list = content == "{:toc}"
+            && line > 0
+            && matches!(
+                text[analysis.lines.range(line - 1)].trim(),
+                "* TOC" | "- TOC" | "1. TOC"
+            );
+        found.push(if kramdown_list { line - 1 } else { line }..line + 1);
+    }
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,7 +226,9 @@ mod tests {
             block_image(&analysis, text, 0),
             Some(ImageRef {
                 alt: "A cat".into(),
-                destination: "cat%20one.png".into()
+                destination: "cat%20one.png".into(),
+                wiki: false,
+                width: None,
             })
         );
         assert_eq!(block_image(&analysis, text, 1), None, "inside text");
@@ -279,5 +315,12 @@ mod tests {
                 ("draft".into(), "false".into())
             ]
         );
+    }
+
+    #[test]
+    fn table_of_contents_markers() {
+        let text = "[TOC]\n\n[[_TOC_]]\n\n[[toc]]\n\n* TOC\n{:toc}\n\n```\n[TOC]\n```\n";
+        let found = toc_blocks(&analyze(text), text);
+        assert_eq!(found, [0..1, 2..3, 4..5, 6..8]);
     }
 }

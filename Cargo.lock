@@ -1674,6 +1674,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "emojis"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b1514ced566c94991ed9563258ecf61e311fd773bf0a3f20606830386bf66e3"
+dependencies = [
+ "phf 0.13.1",
+]
+
+[[package]]
 name = "ena"
 version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2011,6 +2020,7 @@ dependencies = [
 name = "focal-core"
 version = "0.0.0"
 dependencies = [
+ "emojis",
  "pulldown-cmark 0.13.4",
  "unicode-segmentation",
  "unicode-width",

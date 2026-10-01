@@ -25,6 +25,8 @@ pub enum Embed<'a> {
 /// `href`); `None` falls back to the escaped source.
 pub fn to_html(text: &str, render: &mut dyn FnMut(Embed<'_>) -> Option<String>) -> String {
     use crate::callouts::{Style, callouts};
+    let prepared = prepare(text);
+    let text = prepared.as_str();
     let lines = crate::shadow::line_ranges(text);
     let mut html = String::new();
     // Callouts are rendered on their own, each body as Markdown of its own.
@@ -86,6 +88,63 @@ pub fn to_html(text: &str, render: &mut dyn FnMut(Embed<'_>) -> Option<String>) 
     html
 }
 
+/// `text` without Obsidian block comments (`%%` lines and what is between
+/// them), and with each table-of-contents marker replaced by the outline
+/// as HTML.
+fn prepare(text: &str) -> String {
+    let lines = crate::shadow::line_ranges(text);
+    let outline = crate::outline::outline(text);
+    let mut out = String::with_capacity(text.len());
+    let mut fence: Option<(u8, usize)> = None;
+    let mut commented = false;
+    for line in &lines {
+        let source = &text[line.clone()];
+        let body = source.trim_start();
+        if let Some((ch, count)) = fence {
+            if crate::shadow::closes_fence(body, ch, count) {
+                fence = None;
+            }
+        } else if let Some((ch, count, _)) = crate::shadow::opening_fence(body) {
+            fence = Some((ch, count));
+        } else if body.trim_end() == "%%" {
+            commented = !commented;
+            out.push('\n');
+            continue;
+        } else if commented {
+            out.push('\n');
+            continue;
+        } else if matches!(
+            body.trim().to_ascii_lowercase().as_str(),
+            "[toc]" | "[[_toc_]]" | "[[toc]]" | "{:toc}"
+        ) {
+            out.push('\n');
+            out.push_str(&toc(&outline));
+            out.push_str("\n\n");
+            continue;
+        }
+        out.push_str(source);
+        out.push('\n');
+    }
+    out.pop();
+    out
+}
+
+/// The outline as a navigation list, each entry linking to its heading.
+fn toc(outline: &[crate::outline::Heading]) -> String {
+    let mut html = String::from("<nav class=\"toc\"><ul>");
+    for heading in outline {
+        let _ = write!(
+            html,
+            "<li class=\"toc-{}\"><a href=\"#{}\">{}</a></li>",
+            heading.level,
+            crate::links::heading_slug(&heading.title),
+            escape(&heading.title)
+        );
+    }
+    html.push_str("</ul></nav>");
+    html
+}
+
 /// The source of `lines`, each followed by a line break.
 fn join(text: &str, lines: &[std::ops::Range<usize>], range: std::ops::Range<usize>) -> String {
     let mut joined = String::new();
@@ -124,8 +183,29 @@ fn markdown(text: &str, render: &mut dyn FnMut(Embed<'_>) -> Option<String>) -> 
     let mut diagram: Option<String> = None;
     let mut in_metadata = false;
     let mut in_code = false;
+    // The open heading, by its index in `events`, and its text so far.
+    let mut heading: Option<(usize, String)> = None;
+    // An `![[…]]` embed being replaced: of a note (a link) or of an image
+    // with a width (an `<img>`), until its end.
+    let mut embed: Option<bool> = None;
     let shadowed = crate::shadow::shadow(&text);
     for event in Parser::new_ext(&shadowed, crate::analysis::options()) {
+        if let Some((_, title)) = &mut heading
+            && let Event::Text(text) | Event::Code(text) = &event
+        {
+            title.push_str(text);
+        }
+        if let Some(note) = embed {
+            if matches!(event, Event::End(TagEnd::Image)) {
+                embed = None;
+                if note {
+                    events.push(Event::End(TagEnd::Link));
+                }
+            } else if note {
+                events.push(event);
+            }
+            continue;
+        }
         if let Event::Text(text) = &event
             && !in_code
             && !in_metadata
@@ -138,6 +218,34 @@ fn markdown(text: &str, render: &mut dyn FnMut(Embed<'_>) -> Option<String>) -> 
             events.extend(inline_extras(&std::mem::take(&mut pending), &abbreviations));
         }
         match event {
+            Event::Start(Tag::Heading { .. }) => {
+                heading = Some((events.len(), String::new()));
+                events.push(event);
+            }
+            Event::End(TagEnd::Heading(_)) => {
+                if let Some((ix, title)) = heading.take() {
+                    anchor(&mut events[ix], &title);
+                }
+                events.push(event);
+            }
+            Event::Start(Tag::Image {
+                link_type: link_type @ LinkType::WikiLink { has_pothole },
+                dest_url,
+                title,
+                id,
+            }) => {
+                let note = !crate::analysis::is_image_file(&dest_url);
+                events.push(wiki_embed(
+                    &shadowed,
+                    link_type,
+                    has_pothole,
+                    &dest_url,
+                    title,
+                    id,
+                    render,
+                ));
+                embed = Some(note);
+            }
             Event::Start(Tag::MetadataBlock(_)) => in_metadata = true,
             Event::End(TagEnd::MetadataBlock(_)) => in_metadata = false,
             _ if in_metadata => {}
@@ -153,14 +261,7 @@ fn markdown(text: &str, render: &mut dyn FnMut(Embed<'_>) -> Option<String>) -> 
             }
             Event::End(TagEnd::CodeBlock) if diagram.is_some() => {
                 let source = diagram.take().unwrap_or_default();
-                let html = match render(Embed::Diagram(&source)) {
-                    Some(svg) => format!(r#"<figure class="diagram">{svg}</figure>"#),
-                    None => format!(
-                        r#"<pre><code class="language-mermaid">{}</code></pre>"#,
-                        escape(&source)
-                    ),
-                };
-                events.push(Event::Html(html.into()));
+                events.push(diagram_html(&source, render));
             }
             Event::Start(Tag::CodeBlock(kind)) => {
                 in_code = true;
@@ -235,6 +336,73 @@ fn embedded<'a>(
     }
 }
 
+/// A Mermaid diagram drawn by the app, or its source when it cannot be.
+fn diagram_html(
+    source: &str,
+    render: &mut dyn FnMut(Embed<'_>) -> Option<String>,
+) -> Event<'static> {
+    let html = match render(Embed::Diagram(source)) {
+        Some(svg) => format!(r#"<figure class="diagram">{svg}</figure>"#),
+        None => format!(
+            r#"<pre><code class="language-mermaid">{}</code></pre>"#,
+            escape(source)
+        ),
+    };
+    Event::Html(html.into())
+}
+
+/// Gives a heading without an id GitHub's anchor for `title`, so a table of
+/// contents can link to it.
+fn anchor(start: &mut Event<'_>, title: &str) {
+    if let Event::Start(Tag::Heading { id: id @ None, .. }) = start {
+        *id = Some(crate::links::heading_slug(title.trim()).into());
+    }
+}
+
+/// An Obsidian embed: `![[note]]` as the start of a link to the note,
+/// `![[pic.png|300]]` as an `<img>` with its width.
+fn wiki_embed<'a>(
+    shadowed: &str,
+    link_type: LinkType,
+    has_pothole: bool,
+    dest_url: &str,
+    title: CowStr<'a>,
+    id: CowStr<'a>,
+    render: &mut dyn FnMut(Embed<'_>) -> Option<String>,
+) -> Event<'a> {
+    if !crate::analysis::is_image_file(dest_url) {
+        let href = render(Embed::WikiLink(dest_url)).unwrap_or_else(|| format!("{dest_url}.md"));
+        return Event::Start(Tag::Link {
+            link_type,
+            dest_url: href.into(),
+            title,
+            id,
+        });
+    }
+    let source = render(Embed::Image(dest_url)).unwrap_or_else(|| dest_url.to_owned());
+    let width = shadowed_width(shadowed, has_pothole, dest_url);
+    Event::InlineHtml(
+        format!(
+            r#"<img src="{}" alt="{}"{}>"#,
+            escape(&source),
+            escape(dest_url),
+            width.map_or_else(String::new, |w| format!(r#" width="{w}""#))
+        )
+        .into(),
+    )
+}
+
+/// The width asked for by an image embed `![[dest|300]]`, read from the
+/// source around it.
+fn shadowed_width(text: &str, has_pothole: bool, destination: &str) -> Option<u32> {
+    if !has_pothole {
+        return None;
+    }
+    let after = text.split(&format!("[[{destination}|")).nth(1)?;
+    let written = after.split("]]").next()?;
+    written.split('x').next()?.trim().parse().ok()
+}
+
 /// Abbreviation definitions `*[HTML]: Hyper Text Markup Language`, taken
 /// out of `text`.
 fn abbreviations(text: &str) -> (std::borrow::Cow<'_, str>, Vec<(String, String)>) {
@@ -271,6 +439,25 @@ enum Piece {
 /// `<mark>`), superscript `^x^` in words, and abbreviations (as `<abbr>`).
 fn inline_extras(text: &str, abbreviations: &[(String, String)]) -> Vec<Event<'static>> {
     let mut pieces = vec![Piece::Text(text.to_owned())];
+    // Obsidian comments are left out; emoji shortcodes become emoji.
+    pieces = replace(pieces, |text| {
+        let mut found: Vec<(std::ops::Range<usize>, Option<Piece>)> = Vec::new();
+        let mut at = 0;
+        while let Some(open) = text[at..].find("%%").map(|ix| ix + at) {
+            let Some(close) = text[open + 2..].find("%%").map(|ix| ix + open + 2) else {
+                break;
+            };
+            found.push((open..close + 2, None));
+            at = close + 2;
+        }
+        found
+    });
+    pieces = replace(pieces, |text| {
+        crate::analysis::emoji_shortcodes(text)
+            .into_iter()
+            .map(|(range, emoji)| (range, Some(Piece::Text(emoji.to_owned()))))
+            .collect()
+    });
     pieces = split(pieces, |text| {
         let mut found = Vec::new();
         let mut at = 0;
@@ -294,6 +481,12 @@ fn inline_extras(text: &str, abbreviations: &[(String, String)]) -> Vec<Event<'s
             .map(|(open, close)| (open, 1, close, 1, "sup".to_owned()))
             .collect()
     });
+    pieces = split(pieces, |text| {
+        crate::analysis::tags(text)
+            .into_iter()
+            .map(|tag| (tag.start, 0, tag.end, 0, "span class=\"tag\"".to_owned()))
+            .collect()
+    });
     for (word, title) in abbreviations {
         pieces = split(pieces, |text| {
             let bytes = text.as_bytes();
@@ -314,6 +507,29 @@ fn inline_extras(text: &str, abbreviations: &[(String, String)]) -> Vec<Event<'s
             Piece::Html(html) => Event::InlineHtml(html.into()),
         })
         .collect()
+}
+
+/// Replaces the spans `find` reports in each text piece (in order) with a
+/// piece, or with nothing.
+fn replace(
+    pieces: Vec<Piece>,
+    find: impl Fn(&str) -> Vec<(std::ops::Range<usize>, Option<Piece>)>,
+) -> Vec<Piece> {
+    let mut out = Vec::new();
+    for piece in pieces {
+        let Piece::Text(text) = piece else {
+            out.push(piece);
+            continue;
+        };
+        let mut at = 0;
+        for (range, replacement) in find(&text) {
+            out.push(Piece::Text(text[at..range.start].to_owned()));
+            out.extend(replacement);
+            at = range.end;
+        }
+        out.push(Piece::Text(text[at..].to_owned()));
+    }
+    out
 }
 
 /// Splits each text piece where `find` reports spans: (open, its width,
@@ -418,7 +634,7 @@ mod tests {
     fn markdown_becomes_html() {
         let html =
             plain("# Title\n\nSome *emphasis* and ~~gone~~.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n");
-        assert!(html.contains("<h1>Title</h1>"), "{html}");
+        assert!(html.contains(r#"<h1 id="title">Title</h1>"#), "{html}");
         assert!(html.contains("<em>emphasis</em>"), "{html}");
         assert!(html.contains("<del>gone</del>"), "{html}");
         assert!(html.contains("<table>"), "{html}");
@@ -619,5 +835,38 @@ mod tests {
             "{html}"
         );
         assert!(!html.contains("*[HTML]"), "{html}");
+    }
+
+    #[test]
+    fn obsidian_syntax_and_emoji_export() {
+        let html = plain(
+            "Hi %%secret%% there :tada: #idea\n\n%%\nblock secret\n%%\n\n![[Some Note]]\n\n![[pic.png|300]]\n",
+        );
+        assert!(!html.contains("secret"), "comments are left out: {html}");
+        assert!(html.contains("🎉") && !html.contains(":tada:"), "{html}");
+        assert!(html.contains(r#"<span class="tag">#idea</span>"#), "{html}");
+        assert!(
+            html.contains(r#"<a href="Some%20Note.md">Some Note</a>"#),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"src="pic.png""#) && html.contains(r#"width="300""#),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn a_table_of_contents_links_to_the_headings() {
+        let html = plain("# Guide\n\n[TOC]\n\n## First step\n\n## Second step\n");
+        assert!(html.contains(r#"<nav class="toc">"#), "{html}");
+        assert!(
+            html.contains(r##"<a href="#first-step">First step</a>"##),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"<h2 id="first-step">First step</h2>"#),
+            "{html}"
+        );
+        assert!(!html.contains("[TOC]"), "{html}");
     }
 }

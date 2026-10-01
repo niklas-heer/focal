@@ -128,6 +128,41 @@ pub fn find_heading(analysis: &Analysis, text: &str, slug: &str) -> Option<usize
     })
 }
 
+/// The first file below `root` whose path ends with `name` (a file name,
+/// or a partial path such as `images/pic.png`), searching folder by folder
+/// and skipping hidden folders, `node_modules` and `target`; gives up after
+/// `limit` entries.
+pub fn find_file(root: &Path, name: &str, limit: usize) -> Option<PathBuf> {
+    let wanted = Path::new(name);
+    let mut folders = std::collections::VecDeque::from([root.to_path_buf()]);
+    let mut seen = 0;
+    while let Some(folder) = folders.pop_front() {
+        let Ok(entries) = std::fs::read_dir(&folder) else {
+            continue;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            seen += 1;
+            if seen > limit {
+                return None;
+            }
+            let path = entry.path();
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+            if path.is_dir() {
+                if !file_name.starts_with('.')
+                    && file_name != "node_modules"
+                    && file_name != "target"
+                {
+                    folders.push_back(path);
+                }
+            } else if path.ends_with(wanted) {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,5 +249,33 @@ mod tests {
             "the heading text"
         );
         assert_eq!(find_heading(&analysis, text, "missing"), None);
+    }
+
+    #[test]
+    fn files_are_found_by_name_anywhere_below_a_folder() {
+        let root = std::env::temp_dir().join(format!("focal-find-file-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("a/b")).unwrap();
+        std::fs::create_dir_all(root.join(".hidden")).unwrap();
+        std::fs::write(root.join("a/b/pic.png"), "").unwrap();
+        std::fs::write(root.join(".hidden/secret.png"), "").unwrap();
+        assert_eq!(
+            find_file(&root, "pic.png", 1000),
+            Some(root.join("a/b/pic.png"))
+        );
+        assert_eq!(
+            find_file(&root, "b/pic.png", 1000),
+            Some(root.join("a/b/pic.png"))
+        );
+        assert_eq!(
+            find_file(&root, "secret.png", 1000),
+            None,
+            "hidden folders are skipped"
+        );
+        assert_eq!(
+            find_file(&root, "pic.png", 1),
+            None,
+            "the search is bounded"
+        );
     }
 }

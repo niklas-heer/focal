@@ -152,10 +152,20 @@ fn image_source(source: &str, folder: Option<&Path>, destination: Option<&Path>)
     if source.contains("://") || source.starts_with('/') || source.starts_with("data:") {
         return None;
     }
-    if destination == Some(folder) {
+    let beside = folder.join(source);
+    if destination == Some(folder) && beside.exists() {
         return None;
     }
-    Some(format!("file://{}", folder.join(source).display()))
+    // Obsidian embeds `![[pic.png]]` may live anywhere in the folder.
+    let file = if beside.exists() {
+        beside
+    } else {
+        links::find_file(folder, &links::percent_decode(source), 20_000).unwrap_or(beside)
+    };
+    Some(match destination.and_then(|d| file.strip_prefix(d).ok()) {
+        Some(relative) => relative.display().to_string(),
+        None => format!("file://{}", file.display()),
+    })
 }
 
 #[cfg(test)]
