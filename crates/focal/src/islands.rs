@@ -464,7 +464,7 @@ impl Editor {
                     channel(color.g),
                     channel(color.b)
                 );
-                match math::sized(svg, &hex, size) {
+                match math::sized(svg, &hex, size, self.pixel_scale) {
                     Some(sized) => img(Arc::new(Image::from_bytes(ImageFormat::Svg, sized.svg)))
                         .w(px(sized.width))
                         .h(px(sized.height))
@@ -541,7 +541,9 @@ impl Editor {
                 Some((width, height)) => {
                     let (width, height) =
                         fit(width, height, self.typography.column, MAX_IMAGE_HEIGHT);
-                    let sharp = diagram::with_size(svg, width * 2., height * 2.);
+                    // Written to rasterize at the display's pixels; see `Editor::pixel_scale`.
+                    let scale = self.pixel_scale;
+                    let sharp = diagram::with_size(svg, width * scale, height * scale);
                     img(Arc::new(Image::from_bytes(
                         ImageFormat::Svg,
                         sharp.into_bytes(),

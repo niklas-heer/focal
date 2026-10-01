@@ -15,10 +15,6 @@ const MATHJAX: &str = include_str!("../../../assets/mathjax/mathjax.js");
 /// these units.
 pub const EX: f32 = 0.442;
 
-/// Rasterize at this multiple of the drawn size, so formulas stay sharp on
-/// Retina displays (GPUI rasterizes SVG images at scale 1).
-const OVERSAMPLE: f32 = 3.;
-
 type Reply = mpsc::Sender<Result<String, String>>;
 
 struct Engine {
@@ -90,8 +86,8 @@ pub fn typeset(tex: &str) -> Result<String, String> {
         .unwrap_or_else(|_| Err("the typesetter stopped".into()))
 }
 
-/// An SVG ready to draw: in the given color and rasterized larger than its
-/// drawn `width` × `height`.
+/// An SVG ready to draw: in the given color and rasterized at the display's
+/// scale, its drawn size being `width` × `height`.
 pub struct Sized {
     pub svg: Vec<u8>,
     pub width: f32,
@@ -100,7 +96,9 @@ pub struct Sized {
 
 /// Colors `MathJax`'s SVG with `color` (`#rrggbb`) and sizes it for text of
 /// `font_size`. `MathJax` measures in `ex`, which image renderers do not know.
-pub fn sized(svg: &str, color: &str, font_size: f32) -> Option<Sized> {
+/// The SVG's size is the drawn size times `scale`, chosen so that GPUI's
+/// rasterization matches the display's pixels (see `Editor::pixel_scale`).
+pub fn sized(svg: &str, color: &str, font_size: f32, scale: f32) -> Option<Sized> {
     let ex = font_size * EX;
     let attribute = |name: &str| -> Option<(std::ops::Range<usize>, f32)> {
         let start = svg.find(&format!(" {name}=\""))? + name.len() + 3;
@@ -117,9 +115,9 @@ pub fn sized(svg: &str, color: &str, font_size: f32) -> Option<Sized> {
         ((height_at, height), (width_at, width))
     };
     out.push_str(&svg[..first.0.start]);
-    out.push_str(&(first.1 * OVERSAMPLE).to_string());
+    out.push_str(&(first.1 * scale).to_string());
     out.push_str(&svg[first.0.end..second.0.start]);
-    out.push_str(&(second.1 * OVERSAMPLE).to_string());
+    out.push_str(&(second.1 * scale).to_string());
     out.push_str(&svg[second.0.end..]);
     Some(Sized {
         svg: out.replace("currentColor", color).into_bytes(),
@@ -146,14 +144,14 @@ mod tests {
     #[test]
     fn svgs_are_colored_and_sized_for_the_text() {
         let svg = r#"<svg style="vertical-align: -0.5ex;" xmlns="http://www.w3.org/2000/svg" width="10ex" height="2ex" viewBox="0 0 100 20"><g fill="currentColor" stroke="currentColor"></g></svg>"#;
-        let sized = sized(svg, "#112233", 20.).unwrap();
+        let sized = sized(svg, "#112233", 20., 2.).unwrap();
         let text = String::from_utf8(sized.svg).unwrap();
         assert!(!text.contains("currentColor") && text.contains("#112233"));
         let ex = 20. * EX;
         assert!((sized.width - 10. * ex).abs() < 0.01 && (sized.height - 2. * ex).abs() < 0.01);
         assert!(
-            text.contains(&format!(r#"width="{}""#, 10. * ex * 3.)),
-            "{text}"
+            text.contains(&format!(r#"width="{}""#, 10. * ex * 2.)),
+            "written at the given scale: {text}"
         );
     }
 }

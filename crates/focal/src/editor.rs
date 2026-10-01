@@ -391,6 +391,11 @@ pub struct Editor {
     pub(crate) next_grid_session: u64,
     /// A table shown as Markdown source until the caret leaves it.
     pub(crate) table_source: Option<usize>,
+    /// The size, relative to their drawn size, at which math and diagram
+    /// SVGs are written. GPUI rasterizes SVG images at twice their size and
+    /// shrinks them on the GPU, which drops hairlines (a minus sign in a
+    /// superscript); this makes the bitmap match the display's pixels.
+    pub(crate) pixel_scale: f32,
     /// What the find bar searches for.
     query: Option<String>,
     /// The query's matches in the current text, and the text version and
@@ -469,6 +474,7 @@ impl Editor {
             link_root: None,
             link_files: Rc::from([]),
             table_source: None,
+            pixel_scale: 1.,
             query: None,
             found: Rc::default(),
             found_for: None,
@@ -3161,6 +3167,7 @@ impl Render for Editor {
     #[allow(clippy::too_many_lines)]
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::for_appearance(window.appearance());
+        self.pixel_scale = window.scale_factor() / gpui_kit::SMOOTH_SVG_SCALE_FACTOR;
         self.keep_revealing(window);
         self.keep_centering(window);
         let height = window.viewport_size().height;
