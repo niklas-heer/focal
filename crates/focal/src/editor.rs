@@ -2893,9 +2893,20 @@ impl Editor {
             } else {
                 1.6
             });
+        // HTML centers README titles and badges.
+        let content = if info.centered {
+            div()
+                .w_full()
+                .flex()
+                .justify_center()
+                .child(content.max_w_full())
+                .into_any_element()
+        } else {
+            content.into_any_element()
+        };
         let content = match self.snapshot.folds.get(&line) {
-            Some(fold) => self.with_fold_toggle(content.into_any_element(), line, fold, theme, cx),
-            None => content.into_any_element(),
+            Some(fold) => self.with_fold_toggle(content, line, fold, theme, cx),
+            None => content,
         };
         crate::prefix::wrap(
             content,
@@ -2939,7 +2950,8 @@ impl Editor {
         let key = fold.key.clone();
         let hidden = fold.body.len();
         let (label, help) = if fold.folded {
-            (format!("▸ {hidden} more"), "Expand")
+            let lines = if hidden == 1 { "line" } else { "lines" };
+            (format!("▸ {hidden} {lines}"), "Expand")
         } else {
             ("▾".to_owned(), "Collapse")
         };

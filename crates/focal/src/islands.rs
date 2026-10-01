@@ -639,12 +639,21 @@ impl Editor {
                     // Written to rasterize at the display's pixels; see `Editor::pixel_scale`.
                     let scale = self.pixel_scale;
                     let sharp = diagram::with_size(svg, width * scale, height * scale);
+                    let marker = theme.marker;
                     img(Arc::new(Image::from_bytes(
                         ImageFormat::Svg,
                         sharp.into_bytes(),
                     )))
                     .w(px(width))
                     .h(px(height))
+                    // GPUI loads the picture after the frame that asks for it.
+                    .with_loading(move || {
+                        div()
+                            .text_size(px(size * 0.8))
+                            .text_color(marker)
+                            .child("Drawing…")
+                            .into_any_element()
+                    })
                     .into_any_element()
                 }
                 None => quiet(format!("{name} diagram"), size, theme).into_any_element(),

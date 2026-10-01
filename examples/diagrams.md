@@ -45,6 +45,104 @@ box "Write" fit; arrow; circle "Read" fit
 {"type":"Feature","geometry":{"type":"Polygon","coordinates":[[[13.0,52.3],[13.8,52.3],[13.8,52.7],[13.0,52.7],[13.0,52.3]]]}}
 ```
 
+## Vega-Lite
+
+```vega-lite
+{"data":{"values":[{"month":"Jan","words":1200},{"month":"Feb","words":3400},{"month":"Mar","words":2600}]},
+ "mark":"bar","encoding":{"x":{"field":"month","type":"nominal","sort":null},"y":{"field":"words","type":"quantitative"}}}
+```
+
+## STL
+
+```stl
+solid cube
+facet normal 0 0 0
+ outer loop
+  vertex 0 0 0
+  vertex 1 0 0
+  vertex 1 1 0
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 0 0
+  vertex 1 1 0
+  vertex 0 1 0
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 0 1
+  vertex 1 0 1
+  vertex 1 1 1
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 0 1
+  vertex 1 1 1
+  vertex 0 1 1
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 0 0
+  vertex 1 0 0
+  vertex 1 0 1
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 0 0
+  vertex 1 0 1
+  vertex 0 0 1
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 1 0
+  vertex 1 1 0
+  vertex 1 1 1
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 1 0
+  vertex 1 1 1
+  vertex 0 1 1
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 0 0
+  vertex 0 1 0
+  vertex 0 1 1
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 0 0 0
+  vertex 0 1 1
+  vertex 0 0 1
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 1 0 0
+  vertex 1 1 0
+  vertex 1 1 1
+ endloop
+endfacet
+facet normal 0 0 0
+ outer loop
+  vertex 1 0 0
+  vertex 1 1 1
+  vertex 1 0 1
+ endloop
+endfacet
+endsolid cube
+```
+
 ## D2 and PlantUML
 
 These draw when `d2` or `plantuml` is installed (`brew install d2 plantuml`); otherwise they stay code.

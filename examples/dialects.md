@@ -30,6 +30,9 @@ Dollars: $e^{i\pi} + 1 = 0$, parentheses: \(a^2 + b^2 = c^2\), and GitLab's $`\s
 > [!tip]- Obsidian with a *written* title
 > Any type, folded or not.
 
+> [!faq]- Folded until you open it
+> Click ▸ beside the title, or move the caret in.
+
 ::: warning Docusaurus and VitePress
 A container with **Markdown** inside.
 :::

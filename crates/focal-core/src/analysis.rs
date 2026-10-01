@@ -143,6 +143,9 @@ pub struct LineInfo {
     /// The code block with this index in [`Analysis::code_blocks`].
     pub code_block: Option<usize>,
     pub prefix: LinePrefix,
+    /// Centered by HTML: `<h1 align="center">`, or inside `<p
+    /// align="center">`, `<div align="center">` or `<center>`.
+    pub centered: bool,
 }
 
 /// A list item's marker, drawn in the item's marker column.
@@ -1121,6 +1124,7 @@ impl<'a> Builder<'a> {
             &mut styles,
         );
         apply_inline_extras(self.text, &self.lines, &infos, &mut markers, &mut styles);
+        apply_centering(self.text, &self.lines, &mut infos);
         let mut links = self.links;
         let mut images = self.images;
         apply_html(
@@ -1304,6 +1308,46 @@ impl Found<'_> {
 /// lines hide, an `<img>` alone on its line is an image, `<h1>` lines are
 /// headings, `<summary>` reads as a bold title, and formatting tags style
 /// their content with the tags hidden away from the caret.
+/// Marks the lines HTML centers, as README files center logos, badges and
+/// titles.
+fn apply_centering(text: &str, lines: &LineIndex, infos: &mut [LineInfo]) {
+    // The closing tag of the centering wrapper the lines are in.
+    let mut closing: Option<String> = None;
+    for (line, info) in infos.iter_mut().enumerate() {
+        if matches!(info.kind, LineKind::Code | LineKind::CodeFence { .. }) {
+            continue;
+        }
+        let source = text[lines.range(line)].trim().to_ascii_lowercase();
+        if let Some(close) = &closing {
+            info.centered = true;
+            if source.contains(close.as_str()) {
+                closing = None;
+            }
+            continue;
+        }
+        let name: String = source
+            .strip_prefix('<')
+            .unwrap_or("")
+            .chars()
+            .take_while(char::is_ascii_alphanumeric)
+            .collect();
+        let aligned = source.contains("align=\"center\"") || name == "center";
+        if !aligned
+            || !matches!(
+                name.as_str(),
+                "p" | "div" | "center" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
+            )
+        {
+            continue;
+        }
+        info.centered = true;
+        let close = format!("</{name}>");
+        if !source.contains(&close) {
+            closing = Some(close);
+        }
+    }
+}
+
 fn apply_html(text: &str, lines: &LineIndex, infos: &mut [LineInfo], found: &mut Found<'_>) {
     use crate::html_inline::{breaks, elements, heading, image, is_wrapper};
     for (line, info) in infos.iter_mut().enumerate() {
@@ -2268,5 +2312,13 @@ mod tests {
     fn html_in_code_is_left_alone() {
         let text = "`<b>code</b>`\n";
         assert!(styled(text, &analyze(text), InlineStyle::STRONG).is_empty());
+    }
+
+    #[test]
+    fn centered_html_lines_are_centered() {
+        let text = "<p align=\"center\">\n  <b>Badges</b>\n</p>\n<h1 align=\"center\">Title</h1>\n<h2>Left</h2>\nPlain\n";
+        let analysis = analyze(text);
+        let centered: Vec<bool> = (0..6).map(|line| analysis.info(line).centered).collect();
+        assert_eq!(centered, [true, true, true, true, false, false]);
     }
 }
