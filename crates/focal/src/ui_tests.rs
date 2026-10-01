@@ -1268,3 +1268,32 @@ fn edits_that_conflict_with_the_disk_are_not_closed_without_asking(cx: &mut Test
     assert_eq!(cx.update(|cx| cx.windows().len()), 1, "the window stays");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "theirs");
 }
+
+// ---- Go to Heading -------------------------------------------------------------
+
+#[gpui_kit::test]
+fn go_to_heading_moves_to_the_chosen_heading_and_back_returns(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "# Intro\n\ntext\n\n## Details\n\nmore\n\n## Summary\n");
+    cx.update(crate::switcher::bind_keys);
+    act(cx, window, |window, cx| window.press("cmd-shift-o", cx));
+    act(cx, window, |window, _| assert!(switcher_open(window)));
+    act(cx, window, |window, cx| window.input("summ", cx));
+    act(cx, window, |_, _| {});
+    act(cx, window, |window, cx| window.press("enter", cx));
+    act(cx, window, |window, _| assert!(!switcher_open(window)));
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 36..36, "at the title"));
+    act(cx, window, |window, cx| window.press("cmd-[", cx));
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.selection(), 0..0, "back where it was");
+    });
+}
+
+#[gpui_kit::test]
+fn go_to_heading_without_headings_does_nothing(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "no headings here");
+    cx.update(crate::switcher::bind_keys);
+    act(cx, window, |window, cx| window.press("cmd-shift-o", cx));
+    act(cx, window, |window, _| assert!(switcher_open(window)));
+    act(cx, window, |window, cx| window.press("enter", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 0..0));
+}

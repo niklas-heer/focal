@@ -1,7 +1,6 @@
-//! The quick switcher (Cmd-P in folder mode): type part of a file name,
-//! choose with the arrow keys and open with Return.
-
-use std::path::PathBuf;
+//! A picker: type part of a name, choose with the arrow keys, confirm with
+//! Return. It serves the quick switcher (⌘P in folder mode) and Go to
+//! Heading (⇧⌘O).
 
 use focal_core::fuzzy::fuzzy_rank;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -18,6 +17,7 @@ actions!(
     focal,
     [
         QuickOpen,
+        GoToHeading,
         SwitcherUp,
         SwitcherDown,
         SwitcherConfirm,
@@ -26,12 +26,13 @@ actions!(
 );
 
 const CONTEXT: &str = "FocalSwitcher > Input";
-/// Results shown at once.
+/// Results shown at once; the arrow keys move this window over the rest.
 const SHOWN: usize = 12;
 
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-p", QuickOpen, None),
+        KeyBinding::new("cmd-shift-o", GoToHeading, None),
         KeyBinding::new("up", SwitcherUp, Some(CONTEXT)),
         KeyBinding::new("down", SwitcherDown, Some(CONTEXT)),
         KeyBinding::new("enter", SwitcherConfirm, Some(CONTEXT)),
@@ -39,46 +40,50 @@ pub fn bind_keys(cx: &mut App) {
     ]);
 }
 
+/// One choice: what it is called, a quieter detail beside it, the text a
+/// query is matched against, and how far it is indented.
+pub struct PickItem {
+    pub label: String,
+    pub detail: String,
+    pub key: String,
+    pub indent: u8,
+}
+
 pub enum SwitcherEvent {
-    Open(PathBuf),
+    /// The item with this index was chosen.
+    Pick(usize),
     Dismiss,
 }
 
 pub struct Switcher {
     input: Entity<InputState>,
-    root: PathBuf,
-    /// Relative to `root`, the most recently changed first.
-    files: Vec<PathBuf>,
-    /// Indices into `files`, best match first.
+    items: Vec<PickItem>,
+    /// Indices into `items`, best match first.
     results: Vec<usize>,
     /// The query `results` were ranked for.
     query: String,
     selected: usize,
+    /// Shown when nothing matches.
+    empty: &'static str,
     _input: Subscription,
 }
 
 impl EventEmitter<SwitcherEvent> for Switcher {}
 
 impl Switcher {
+    /// A picker over `items`, in the order given until a query ranks them.
     pub fn new(
-        root: PathBuf,
-        files: &[PathBuf],
+        items: Vec<PickItem>,
+        placeholder: &'static str,
+        empty: &'static str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut files = files.to_vec();
-        files.sort_by_cached_key(|file| {
-            std::cmp::Reverse(
-                std::fs::metadata(root.join(file))
-                    .and_then(|m| m.modified())
-                    .ok(),
-            )
-        });
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Open a file…"));
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
         let subscription = cx.subscribe_in(&input, window, |this, _, event: &InputEvent, _, cx| {
             match event {
                 InputEvent::Change => this.filter(cx),
-                // A click elsewhere closes the switcher.
+                // A click elsewhere closes the picker.
                 InputEvent::Blur => cx.emit(SwitcherEvent::Dismiss),
                 _ => {}
             }
@@ -86,11 +91,11 @@ impl Switcher {
         input.update(cx, |input, cx| input.focus(window, cx));
         Self {
             input,
-            root,
-            results: (0..files.len()).collect(),
+            results: (0..items.len()).collect(),
+            items,
             query: String::new(),
-            files,
             selected: 0,
+            empty,
             _input: subscription,
         }
     }
@@ -100,18 +105,16 @@ impl Switcher {
         if query == self.query {
             return;
         }
-        let names: Vec<String> = self
-            .files
-            .iter()
-            .map(|file| file.to_string_lossy().into_owned())
-            .collect();
         self.results = if query.trim().is_empty() {
-            (0..self.files.len()).collect()
+            (0..self.items.len()).collect()
         } else {
-            fuzzy_rank(query.trim(), names.iter().map(String::as_str))
-                .into_iter()
-                .map(|(ix, _)| ix)
-                .collect()
+            fuzzy_rank(
+                query.trim(),
+                self.items.iter().map(|item| item.key.as_str()),
+            )
+            .into_iter()
+            .map(|(ix, _)| ix)
+            .collect()
         };
         self.query = query;
         self.selected = 0;
@@ -124,7 +127,7 @@ impl Switcher {
     }
 
     fn down(&mut self, _: &SwitcherDown, _: &mut Window, cx: &mut Context<Self>) {
-        let last = self.results.len().min(SHOWN).saturating_sub(1);
+        let last = self.results.len().saturating_sub(1);
         self.selected = (self.selected + 1).min(last);
         cx.notify();
     }
@@ -132,8 +135,8 @@ impl Switcher {
     fn confirm(&mut self, _: &SwitcherConfirm, _: &mut Window, cx: &mut Context<Self>) {
         // The input reports changes late; rank what it holds now.
         self.filter(cx);
-        if let Some(&file) = self.results.get(self.selected) {
-            cx.emit(SwitcherEvent::Open(self.root.join(&self.files[file])));
+        if let Some(&item) = self.results.get(self.selected) {
+            cx.emit(SwitcherEvent::Pick(item));
         }
     }
 }
@@ -141,42 +144,42 @@ impl Switcher {
 impl Render for Switcher {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::for_appearance(window.appearance());
+        // The shown results slide along with the selection.
+        let first = self.selected.saturating_sub(SHOWN - 1);
         let rows = self
             .results
             .iter()
-            .take(SHOWN)
             .enumerate()
-            .map(|(ix, &file)| {
-                let path = &self.files[file];
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                let parent = path
-                    .parent()
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                let target = self.root.join(path);
+            .skip(first)
+            .take(SHOWN)
+            .map(|(ix, &item)| {
+                let PickItem {
+                    label,
+                    detail,
+                    indent,
+                    ..
+                } = &self.items[item];
                 div()
                     .id(("switch-result", ix))
                     .test_support()
-                    .aria_label(name.clone())
-                    .px(px(14.))
+                    .aria_label(label.clone())
+                    .pl(px(14. + f32::from(*indent) * 16.))
+                    .pr(px(14.))
                     .py(px(6.))
                     .flex()
                     .gap(px(10.))
                     .items_baseline()
                     .cursor_pointer()
                     .when(ix == self.selected, |d| d.bg(theme.selection))
-                    .child(name)
+                    .child(label.clone())
                     .child(
                         div()
                             .text_size(px(12.))
                             .text_color(theme.marker)
-                            .child(parent),
+                            .child(detail.clone()),
                     )
                     .on_click(cx.listener(move |_, _, _, cx| {
-                        cx.emit(SwitcherEvent::Open(target.clone()));
+                        cx.emit(SwitcherEvent::Pick(item));
                     }))
             });
         div()
@@ -220,7 +223,7 @@ impl Render for Switcher {
                                 .px(px(14.))
                                 .py(px(6.))
                                 .text_color(theme.marker)
-                                .child("No matching files"),
+                                .child(self.empty),
                         )
                     }),
             )

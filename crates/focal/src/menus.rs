@@ -11,7 +11,7 @@ use crate::editor::{
 };
 use crate::find_bar::{Find, FindAndReplace, FindNext, FindPrevious};
 use crate::settings::OpenSettings;
-use crate::switcher::QuickOpen;
+use crate::switcher::{GoToHeading, QuickOpen};
 use crate::updates::{CheckForUpdates, OpenReleases};
 use crate::windows::{NewWindow, OpenFiles};
 use crate::workspace::{GoBack, ToggleSidebar};
@@ -97,6 +97,7 @@ pub fn set_menus(cx: &mut App) {
         Menu::new("View").items([
             MenuItem::action("Toggle Sidebar", ToggleSidebar),
             MenuItem::action("Quick Open…", QuickOpen),
+            MenuItem::action("Go to Heading…", GoToHeading),
             MenuItem::action("Focus Mode", ToggleFocusMode),
             MenuItem::separator(),
             MenuItem::action("Open Link", OpenLink),

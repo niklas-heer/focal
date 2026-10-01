@@ -18,7 +18,7 @@ use crate::editor::{Editor, EditorEvent};
 use crate::find_bar::{Find, FindAndReplace, FindBar, FindBarEvent, FindNext, FindPrevious};
 use crate::folder;
 use crate::instance::Request;
-use crate::switcher::{QuickOpen, Switcher, SwitcherEvent};
+use crate::switcher::{GoToHeading, PickItem, QuickOpen, Switcher, SwitcherEvent};
 use crate::theme::Theme;
 
 actions!(focal, [ToggleSidebar, GoBack]);
@@ -255,12 +255,89 @@ impl Workspace {
 
     fn quick_open(&mut self, _: &QuickOpen, window: &mut Window, cx: &mut Context<Self>) {
         let Some(folder) = &self.folder else { return };
-        let (root, files) = (folder.root.clone(), folder.files.clone());
-        let switcher = cx.new(|cx| Switcher::new(root, &files, window, cx));
-        let subscription = cx.subscribe_in(&switcher, window, |this, _, event, window, cx| {
+        let root = folder.root.clone();
+        let mut files = folder.files.clone();
+        // The most recently changed first.
+        files.sort_by_cached_key(|file| {
+            std::cmp::Reverse(
+                std::fs::metadata(root.join(file))
+                    .and_then(|m| m.modified())
+                    .ok(),
+            )
+        });
+        let items = files
+            .iter()
+            .map(|file| PickItem {
+                label: file
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                detail: file
+                    .parent()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                key: file.to_string_lossy().into_owned(),
+                indent: 0,
+            })
+            .collect();
+        let on_pick =
+            move |this: &mut Self, ix: usize, window: &mut Window, cx: &mut Context<Self>| {
+                this.open_file(root.join(&files[ix]), window, cx);
+            };
+        self.open_picker(
+            items,
+            "Open a file…",
+            "No matching files",
+            on_pick,
+            window,
+            cx,
+        );
+    }
+
+    /// Lists the document's headings; choosing one moves the caret there,
+    /// and ⌘[ comes back.
+    fn go_to_heading(&mut self, _: &GoToHeading, window: &mut Window, cx: &mut Context<Self>) {
+        let headings = focal_core::outline::outline(self.editor.read(cx).text());
+        let empty = if headings.is_empty() {
+            "No headings"
+        } else {
+            "No matching headings"
+        };
+        let offsets: Vec<usize> = headings.iter().map(|heading| heading.offset).collect();
+        let items = headings
+            .into_iter()
+            .map(|heading| PickItem {
+                key: heading.title.clone(),
+                label: heading.title,
+                detail: String::new(),
+                indent: heading.level.saturating_sub(1),
+            })
+            .collect();
+        let on_pick = move |this: &mut Self, ix: usize, _: &mut Window, cx: &mut Context<Self>| {
+            let editor = this.editor.read(cx);
+            this.history
+                .push((editor.path().map(PathBuf::from), editor.selection.clone()));
+            let at = offsets[ix];
+            this.editor
+                .update(cx, |editor, cx| editor.select(at..at, cx));
+        };
+        self.open_picker(items, "Go to a heading…", empty, on_pick, window, cx);
+    }
+
+    fn open_picker(
+        &mut self,
+        items: Vec<PickItem>,
+        placeholder: &'static str,
+        empty: &'static str,
+        on_pick: impl Fn(&mut Self, usize, &mut Window, &mut Context<Self>) + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let switcher = cx.new(|cx| Switcher::new(items, placeholder, empty, window, cx));
+        let subscription = cx.subscribe_in(&switcher, window, move |this, _, event, window, cx| {
             this.switcher = None;
-            if let SwitcherEvent::Open(path) = event {
-                this.open_file(path.clone(), window, cx);
+            if let SwitcherEvent::Pick(ix) = event {
+                on_pick(this, *ix, window, cx);
             }
             let handle = this.editor.read(cx).focus_handle(cx);
             window.focus(&handle, cx);
@@ -524,6 +601,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::go_back))
             .on_action(cx.listener(Self::quick_open))
+            .on_action(cx.listener(Self::go_to_heading))
             .on_action(cx.listener(Self::find))
             .on_action(cx.listener(Self::find_and_replace))
             .on_action(cx.listener(|this, _: &FindNext, _, cx| this.find_step(true, cx)))
