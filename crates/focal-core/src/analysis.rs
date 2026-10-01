@@ -398,7 +398,9 @@ pub fn analyze(text: &str) -> Analysis {
         stack: Vec::new(),
         containers: Vec::new(),
     };
-    for (event, range) in Parser::new_ext(text, options()).into_offset_iter() {
+    // Other dialects' syntax, rewritten in place; ranges stay those of `text`.
+    let shadowed = crate::shadow::shadow(text);
+    for (event, range) in Parser::new_ext(&shadowed, options()).into_offset_iter() {
         builder.event(event, range);
     }
     builder.finish()
@@ -548,23 +550,24 @@ impl<'a> Builder<'a> {
                 self.wrap(range, ticks, ticks, InlineStyle::CODE);
             }
             Event::InlineMath(tex) => {
-                self.wrap(range, 1, 1, InlineStyle::MATH);
+                let (outer, inner) = self.math_delimiters(range, false);
+                self.markers_around(&outer, Some(inner.clone()), InlineStyle::MATH);
                 // Away from the caret, the TeX reads as Unicode where it can.
-                let inner = range.start + 1..range.end - 1;
                 if let Some(text) = crate::texmath::tex_to_unicode(tex)
                     && text != tex.as_ref()
                     && !inner.is_empty()
                 {
                     self.markers.push(Marker {
                         range: inner,
-                        reveal: Reveal::Touching(range.clone()),
+                        reveal: Reveal::Touching(outer),
                         replacement: Some(Replacement::Math(text)),
                     });
                 }
             }
             Event::DisplayMath(tex) => {
-                self.wrap(range, 2, 2, InlineStyle::MATH);
-                self.display_math.push((range.clone(), tex.to_string()));
+                let (outer, inner) = self.math_delimiters(range, true);
+                self.markers_around(&outer, Some(inner), InlineStyle::MATH);
+                self.display_math.push((outer, tex.to_string()));
             }
             Event::InlineHtml(_) | Event::Html(_) => self.style(range.clone(), InlineStyle::HTML),
             Event::FootnoteReference(label) => {
@@ -689,6 +692,36 @@ impl<'a> Builder<'a> {
 
     /// Adds `open` and `close` byte markers around a leaf's content and styles
     /// the content.
+    /// The source extent of math the shadow text found at `range`, and its
+    /// content: `$…$`, `$$…$$`, or the `\(…\)`, `\[…\]`, `` $`…`$ `` and
+    /// `` ```math `` notations the shadow rewrote.
+    fn math_delimiters(&self, range: &Range<usize>, display: bool) -> (Range<usize>, Range<usize>) {
+        let text = self.text;
+        let width = if display { 2 } else { 1 };
+        let (mut start, mut content_start) = (range.start, range.start + width);
+        let (mut end, mut content_end) = (range.end, range.end - width);
+        let at = |from: usize, len: usize| text.get(from..from + len);
+        if display {
+            if matches!(at(range.start, 1), Some("`" | "~")) {
+                // A math fence: the whole opening and closing fence lines.
+                content_start = self.lines.range(self.lines.line_of(range.start)).end;
+                let closing = self.lines.range(self.lines.line_of(range.end - 1));
+                content_end = closing.start;
+                end = closing.start + text[closing.clone()].trim_end().len();
+            }
+        } else {
+            if range.start > 0 && matches!(at(range.start - 1, 2), Some("\\(" | "$`")) {
+                start = range.start - 1;
+                content_start = range.start + 1;
+            }
+            if matches!(at(range.end - 1, 2), Some("\\)" | "`$")) {
+                end = range.end + 1;
+                content_end = range.end - 1;
+            }
+        }
+        (start..end, content_start..content_end.max(content_start))
+    }
+
     fn wrap(&mut self, range: &Range<usize>, open: usize, close: usize, style: InlineStyle) {
         if range.len() < open + close {
             return;
@@ -1274,5 +1307,54 @@ mod tests {
         assert_eq!(analysis.snap(7, Bias::Left), 5);
         assert_eq!(analysis.snap(9, Bias::Left), 9);
         assert_eq!(analyze("- x").snap(0, Bias::Left), 2);
+    }
+
+    #[test]
+    fn parenthesis_math_hides_its_delimiters() {
+        let text = r"where \(x^2\) holds";
+        let analysis = analyze(text);
+        let markers = marker_texts(text, &analysis);
+        assert!(
+            markers.contains(&r"\(") && markers.contains(&r"\)"),
+            "{markers:?}"
+        );
+        assert!(
+            analysis
+                .markers
+                .iter()
+                .any(|m| matches!(&m.replacement, Some(Replacement::Math(t)) if t == "x²")),
+            "reads as Unicode"
+        );
+    }
+
+    #[test]
+    fn every_display_math_notation_is_display_math() {
+        for (text, tex) in [
+            ("\\[\nE = mc^2\n\\]\n", "E = mc^2"),
+            ("```math\nx = 1\n```\n", "x = 1"),
+            ("$$\ny\n$$\n", "y"),
+        ] {
+            let analysis = analyze(text);
+            assert_eq!(analysis.display_math.len(), 1, "{text:?}");
+            let (range, found) = &analysis.display_math[0];
+            assert_eq!(found.trim(), tex, "{text:?}");
+            assert_eq!(range.start, 0, "{text:?}");
+            assert_eq!(
+                range.end,
+                text.trim_end().len(),
+                "the whole fence: {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn gitlab_inline_math_hides_its_backticks() {
+        let text = "Inline $`a^2`$ here";
+        let analysis = analyze(text);
+        let markers = marker_texts(text, &analysis);
+        assert!(
+            markers.contains(&"$`") && markers.contains(&"`$"),
+            "{markers:?}"
+        );
     }
 }

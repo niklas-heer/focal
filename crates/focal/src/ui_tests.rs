@@ -1446,3 +1446,14 @@ fn drafts_reopen_as_unsaved_untitled_documents(cx: &mut TestAppContext) {
         assert!(editor.asks_before_closing(), "a restored draft is unsaved");
     });
 }
+
+// ---- Dialects ------------------------------------------------------------------
+
+#[gpui_kit::test]
+fn bracket_and_fenced_math_are_islands(cx: &mut TestAppContext) {
+    let (window, _) = open_editor(cx, "Intro\n\n\\[\nE = mc^2\n\\]\n\n```math\nx = 1\n```\n");
+    act(cx, window, |window, _| {
+        assert!(window.try_find(("math-island", 2usize)).is_some(), "\\[ … \\]");
+        assert!(window.try_find(("math-island", 6usize)).is_some(), "```math");
+    });
+}

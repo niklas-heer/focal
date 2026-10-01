@@ -25,7 +25,8 @@ pub fn to_html(text: &str, render: &mut dyn FnMut(Embed<'_>) -> Option<String>) 
     let mut diagram: Option<String> = None;
     let mut in_metadata = false;
     let mut in_code = false;
-    for event in Parser::new_ext(text, crate::analysis::options()) {
+    let shadowed = crate::shadow::shadow(text);
+    for event in Parser::new_ext(&shadowed, crate::analysis::options()) {
         match event {
             Event::Start(Tag::MetadataBlock(_)) => in_metadata = true,
             Event::End(TagEnd::MetadataBlock(_)) => in_metadata = false,
@@ -321,5 +322,27 @@ mod tests {
         );
         assert!(html.contains(r#"src="file:///notes/pic.png""#), "{html}");
         assert!(html.contains(r#"src="https://x/y.png""#), "{html}");
+    }
+
+    #[test]
+    fn every_math_notation_exports_as_math() {
+        let mut seen = Vec::new();
+        to_html(
+            "A \\(x\\) and $`y`$.\n\n\\[\nz\n\\]\n\n```math\nw\n```\n",
+            &mut |embed| {
+                seen.push(format!("{embed:?}"));
+                None
+            },
+        );
+        let joined = seen.join(" ");
+        for expected in [
+            r#"InlineMath("x")"#,
+            r#"InlineMath("y")"#,
+            "DisplayMath",
+            "z",
+            "w",
+        ] {
+            assert!(joined.contains(expected), "{expected} in {joined}");
+        }
     }
 }

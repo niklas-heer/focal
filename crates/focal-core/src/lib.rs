@@ -19,6 +19,7 @@ pub mod fuzzy;
 mod lines;
 pub mod links;
 pub mod outline;
+pub mod shadow;
 pub mod table;
 pub mod texmath;
 pub mod text_stats;

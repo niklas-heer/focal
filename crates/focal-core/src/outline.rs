@@ -15,7 +15,9 @@ pub struct Heading {
 pub fn outline(text: &str) -> Vec<Heading> {
     let mut headings = Vec::new();
     let mut open: Option<Heading> = None;
-    for (event, range) in Parser::new_ext(text, crate::analysis::options()).into_offset_iter() {
+    let shadowed = crate::shadow::shadow(text);
+    for (event, range) in Parser::new_ext(&shadowed, crate::analysis::options()).into_offset_iter()
+    {
         match event {
             Event::Start(Tag::Heading { level, .. }) => {
                 open = Some(Heading {
@@ -42,7 +44,12 @@ pub fn outline(text: &str) -> Vec<Heading> {
         }
     }
     for heading in &mut headings {
-        heading.title = heading.title.trim().to_owned();
+        // One space between words, whatever the source's spacing.
+        heading.title = heading
+            .title
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
     }
     headings
 }
@@ -95,5 +102,10 @@ mod tests {
     fn no_headings() {
         assert!(outline("").is_empty());
         assert!(outline("just text\n").is_empty());
+    }
+
+    #[test]
+    fn math_in_any_notation_reads_in_titles() {
+        assert_eq!(titles("## Area \\(r^2\\)\n"), [(2, "Area r^2".into())]);
     }
 }
