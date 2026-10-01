@@ -110,6 +110,22 @@ fn fit(width: f32, height: f32, max_width: f32, max_height: f32) -> (f32, f32) {
     (width * scale, height * scale)
 }
 
+/// Typeset formulas and drawn diagrams kept at most: every keystroke in a
+/// block being edited makes a new entry.
+const CACHE_LIMIT: usize = 64;
+
+/// Inserts into a cache, starting it over when it is full.
+fn remember<K: Eq + std::hash::Hash, V>(
+    cache: &mut std::collections::HashMap<K, V>,
+    key: K,
+    value: V,
+) {
+    if cache.len() >= CACHE_LIMIT && !cache.contains_key(&key) {
+        cache.clear();
+    }
+    cache.insert(key, value);
+}
+
 /// How long a failed download waits before the next try.
 const RETRY_AFTER: Duration = Duration::from_mins(1);
 
@@ -415,9 +431,11 @@ impl Editor {
                 .into_any_element(),
             Some(Typeset::Pending) => frame.child(quiet(block.tex)).into_any_element(),
             None => {
-                self.math
-                    .borrow_mut()
-                    .insert(block.tex.clone(), Typeset::Pending);
+                remember(
+                    &mut self.math.borrow_mut(),
+                    block.tex.clone(),
+                    Typeset::Pending,
+                );
                 let result = math::typeset(&block.tex);
                 let tex = block.tex.clone();
                 cx.spawn(async move |this, cx| {
@@ -427,7 +445,7 @@ impl Editor {
                         Err(_) => Typeset::Error("the typesetter stopped".into()),
                     };
                     this.update(cx, |this, cx| {
-                        this.math.borrow_mut().insert(tex, typeset);
+                        remember(&mut this.math.borrow_mut(), tex, typeset);
                         cx.notify();
                     })
                     .ok();
@@ -500,9 +518,11 @@ impl Editor {
                 .child(quiet("Drawing the diagram…".into()))
                 .into_any_element(),
             None => {
-                self.diagrams
-                    .borrow_mut()
-                    .insert(key.clone(), Typeset::Pending);
+                remember(
+                    &mut self.diagrams.borrow_mut(),
+                    key.clone(),
+                    Typeset::Pending,
+                );
                 let task = cx
                     .background_executor()
                     .spawn(async move { diagram::render(&key.0, &key.1).map(|svg| (key, svg)) });
@@ -514,7 +534,7 @@ impl Editor {
                         Err(message) => ((source, fallback), Typeset::Error(message)),
                     };
                     this.update(cx, |this, cx| {
-                        this.diagrams.borrow_mut().insert(key, typeset);
+                        remember(&mut this.diagrams.borrow_mut(), key, typeset);
                         cx.notify();
                     })
                     .ok();
@@ -561,7 +581,7 @@ impl Editor {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::{fit, retry_due};
+    use super::{CACHE_LIMIT, fit, remember, retry_due};
 
     #[test]
     fn images_fit_the_column_and_the_height_cap_keeping_their_shape() {
@@ -580,6 +600,22 @@ mod tests {
             (140., 560.),
             "tall images fit the cap"
         );
+    }
+
+    #[test]
+    fn caches_forget_old_entries_past_their_limit() {
+        let mut cache = std::collections::HashMap::new();
+        for n in 0..CACHE_LIMIT {
+            remember(&mut cache, n, n);
+        }
+        assert_eq!(cache.len(), CACHE_LIMIT);
+        remember(&mut cache, CACHE_LIMIT, CACHE_LIMIT);
+        assert_eq!(
+            cache.len(),
+            1,
+            "a full cache starts over with the new entry"
+        );
+        assert_eq!(cache.get(&CACHE_LIMIT), Some(&CACHE_LIMIT));
     }
 
     #[test]
