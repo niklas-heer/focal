@@ -37,6 +37,9 @@ pub struct Callout {
     pub head: Range<usize>,
     /// The written title in the source, shown as it stands (quote callouts).
     pub title_range: Option<Range<usize>>,
+    /// Whether it folds, and if so whether it starts folded: Obsidian's `-`
+    /// and `+`, MkDocs' `???` and `???+`, VitePress' `details`.
+    pub folded: Option<bool>,
 }
 
 /// The color family and default title of a callout type, if it is one.
@@ -171,6 +174,7 @@ struct Open {
     titled: bool,
     title: String,
     head: Range<usize>,
+    folded: Option<bool>,
 }
 
 impl Open {
@@ -185,6 +189,7 @@ impl Open {
             title: self.title,
             head: self.head,
             title_range: None,
+            folded: self.folded,
         }
     }
 }
@@ -235,6 +240,7 @@ fn container(rest: &str, colons: usize, ix: usize, line: Range<usize>) -> Open {
             .or_else(|| known.map(|(_, title)| title.to_owned()))
             .unwrap_or_default(),
         head: line,
+        folded: (name.eq_ignore_ascii_case("details")).then_some(true),
     }
 }
 
@@ -242,9 +248,9 @@ fn container(rest: &str, colons: usize, ix: usize, line: Range<usize>) -> Open {
 fn admonition(text: &str, lines: &[Range<usize>], ix: usize) -> Option<Callout> {
     let line = lines[ix].clone();
     let source = &text[line.clone()];
-    let rest = ["!!!", "???+", "???"]
+    let (rest, folded) = [("!!!", None), ("???+", Some(false)), ("???", Some(true))]
         .iter()
-        .find_map(|opener| source.strip_prefix(opener))?;
+        .find_map(|(opener, folded)| source.strip_prefix(opener).map(|rest| (rest, *folded)))?;
     let rest = rest.strip_prefix(' ')?.trim();
     let (name, after) = rest.split_once(' ').unwrap_or((rest, ""));
     if name.is_empty()
@@ -293,6 +299,7 @@ fn admonition(text: &str, lines: &[Range<usize>], ix: usize) -> Option<Callout> 
         title,
         head: line,
         title_range: None,
+        folded,
     })
 }
 
@@ -313,7 +320,12 @@ fn quote_callout(text: &str, lines: &[Range<usize>], ix: usize) -> Option<Callou
     let (alert, default) = kind(&after[..close])?;
     let head_start = line.start + at;
     let mut head_end = head_start + 2 + close + 1;
-    if text[head_end..line.end].starts_with(['+', '-']) {
+    let folded = match text[head_end..line.end].chars().next() {
+        Some('-') => Some(true),
+        Some('+') => Some(false),
+        _ => None,
+    };
+    if folded.is_some() {
         head_end += 1;
     }
     let written = text[head_end..line.end].trim();
@@ -345,6 +357,7 @@ fn quote_callout(text: &str, lines: &[Range<usize>], ix: usize) -> Option<Callou
         ),
         head: head_start..head_end,
         title_range,
+        folded,
     })
 }
 
@@ -476,5 +489,16 @@ mod tests {
     #[test]
     fn callout_syntax_in_code_is_ignored() {
         assert!(callouts("```\n::: note\n> [!tip]\n!!! note\n```\n").is_empty());
+    }
+
+    #[test]
+    fn fold_markers() {
+        assert_eq!(only("> [!faq]- Why\n> x\n").folded, Some(true));
+        assert_eq!(only("> [!faq]+ Why\n> x\n").folded, Some(false));
+        assert_eq!(only("> [!faq] Why\n> x\n").folded, None);
+        assert_eq!(only("??? note\n    x\n").folded, Some(true));
+        assert_eq!(only("???+ note\n    x\n").folded, Some(false));
+        assert_eq!(only("!!! note\n    x\n").folded, None);
+        assert_eq!(only("::: details More\nx\n:::\n").folded, Some(true));
     }
 }

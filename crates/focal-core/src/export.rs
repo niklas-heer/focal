@@ -25,68 +25,160 @@ pub enum Embed<'a> {
 /// `text` as an HTML fragment. `render` turns embeds into HTML (or an
 /// `href`); `None` falls back to the escaped source.
 pub fn to_html(text: &str, render: &mut dyn FnMut(Embed<'_>) -> Option<String>) -> String {
-    use crate::callouts::{Style, callouts};
-    let prepared = prepare(text);
-    let text = prepared.as_str();
-    let lines = crate::shadow::line_ranges(text);
-    let mut html = String::new();
-    // Callouts are rendered on their own, each body as Markdown of its own.
-    let mut at_line = 0;
-    for callout in callouts(text) {
-        if callout.lines.start < at_line {
-            continue; // Inside a callout already rendered.
+    markdown(&prepare(text), render)
+}
+
+/// Callouts rendered within the document's single pass, so footnotes and
+/// link references defined anywhere reach into them: their regions in the
+/// source, which are open, and which quote events are callout syntax.
+struct Callouts {
+    regions: Vec<Region>,
+    next: usize,
+    open: Vec<usize>,
+    quote_depth: usize,
+    skipped_quotes: Vec<usize>,
+}
+
+struct Region {
+    callout: crate::callouts::Callout,
+    start: usize,
+    end: usize,
+    /// Where the first line ends: a quote callout's title is left out.
+    head_end: usize,
+    /// Where each line starts, for the quotes an admonition's body became.
+    line_starts: Vec<usize>,
+    /// The HTML around the callout's content.
+    open: String,
+    close: &'static str,
+}
+
+impl Callouts {
+    fn new(text: &str, render: &mut dyn FnMut(Embed<'_>) -> Option<String>) -> Self {
+        let lines = crate::shadow::line_ranges(text);
+        let regions = crate::callouts::callouts(text)
+            .into_iter()
+            .map(|callout| {
+                let first = lines[callout.lines.start].clone();
+                // GitLab's `>>>` is a plain quote; other Pandoc divs, nothing.
+                let gitlab = text[first.clone()].trim() == ">>>";
+                let (open, close) = tags(&callout, gitlab, render);
+                Region {
+                    start: first.start,
+                    end: lines[callout.lines.end - 1].end,
+                    head_end: first.end,
+                    line_starts: lines[callout.lines.clone()]
+                        .iter()
+                        .map(|l| l.start)
+                        .collect(),
+                    callout,
+                    open,
+                    close,
+                }
+            })
+            .collect();
+        Self {
+            regions,
+            next: 0,
+            open: Vec::new(),
+            quote_depth: 0,
+            skipped_quotes: Vec::new(),
         }
-        html.push_str(&markdown(
-            &join(text, &lines, at_line..callout.lines.start),
-            render,
-        ));
-        let body_lines = match callout.style {
-            Style::Quote | Style::Indented => callout.lines.start + 1..callout.lines.end,
-            Style::Fenced { closing } => {
-                callout.lines.start + 1..closing.unwrap_or(callout.lines.end)
-            }
-        };
-        let mut body = String::new();
-        if callout.style == Style::Quote {
-            // Text after the title on the first line belongs to the body too.
-            for line in body_lines.clone() {
-                body.push_str(strip_quote(&text[lines[line].clone()]));
-                body.push('\n');
-            }
-        } else if callout.style == Style::Indented {
-            for line in body_lines.clone() {
-                let source = &text[lines[line].clone()];
-                let stripped = source
-                    .strip_prefix("    ")
-                    .or_else(|| source.strip_prefix('\t'))
-                    .unwrap_or(source);
-                body.push_str(stripped);
-                body.push('\n');
-            }
-        } else {
-            body = join(text, &lines, body_lines.clone());
-        }
-        let inner = to_html(&body, render);
-        if callout.titled {
-            let class = callout.alert.map_or("quote", |alert| alert.class());
-            let icon = callout.alert.map_or("❝", Alert::icon);
-            let title = inline(&callout.title, render);
-            let _ = write!(
-                html,
-                "<div class=\"callout callout-{class}\">\n<p class=\"callout-title\">{icon} {title}</p>\n{inner}</div>\n"
-            );
-        } else if text[lines[callout.lines.start].clone()]
-            .trim_start()
-            .starts_with('>')
-        {
-            let _ = write!(html, "<blockquote>\n{inner}</blockquote>\n");
-        } else {
-            html.push_str(&inner);
-        }
-        at_line = callout.lines.end;
     }
-    html.push_str(&markdown(&join(text, &lines, at_line..lines.len()), render));
-    html
+
+    /// The HTML that closes callouts ended before `at` and opens those
+    /// started by then.
+    fn before(&mut self, at: usize) -> String {
+        let mut html = String::new();
+        while let Some(&ix) = self.open.last()
+            && self.regions[ix].end <= at
+        {
+            self.open.pop();
+            html.push_str(self.regions[ix].close);
+        }
+        while self.next < self.regions.len() && self.regions[self.next].start <= at {
+            html.push_str(&self.regions[self.next].open);
+            self.open.push(self.next);
+            self.next += 1;
+        }
+        html
+    }
+
+    /// Whether `event` at `range` is callout syntax to leave out.
+    fn skips(&mut self, event: &Event<'_>, range: &std::ops::Range<usize>) -> bool {
+        use crate::callouts::Style;
+        let region = self.open.last().map(|&ix| &self.regions[ix]);
+        match event {
+            Event::Start(Tag::BlockQuote(_)) => {
+                self.quote_depth += 1;
+                let syntax = region.is_some_and(|r| match r.callout.style {
+                    Style::Quote => range.start < r.head_end,
+                    Style::Indented => r.line_starts.contains(&range.start),
+                    Style::Fenced { .. } => false,
+                });
+                if syntax {
+                    self.skipped_quotes.push(self.quote_depth);
+                }
+                syntax
+            }
+            Event::End(TagEnd::BlockQuote(_)) => {
+                let depth = self.quote_depth;
+                self.quote_depth = depth.saturating_sub(1);
+                let syntax = self.skipped_quotes.last() == Some(&depth);
+                if syntax {
+                    self.skipped_quotes.pop();
+                }
+                syntax
+            }
+            // A quote callout's first line is its title, drawn by its tags.
+            _ => region.is_some_and(|r| {
+                r.callout.style == Style::Quote
+                    && range.start >= r.start
+                    && range.end <= r.head_end + 1
+            }),
+        }
+    }
+
+    fn finish(&mut self) -> String {
+        let mut html = String::new();
+        while let Some(ix) = self.open.pop() {
+            html.push_str(self.regions[ix].close);
+        }
+        html
+    }
+}
+
+/// The HTML before and after a callout's content: a titled block (a
+/// `<details>` when it folds), a quote for GitLab's `>>>`, or nothing.
+fn tags(
+    callout: &crate::callouts::Callout,
+    gitlab: bool,
+    render: &mut dyn FnMut(Embed<'_>) -> Option<String>,
+) -> (String, &'static str) {
+    if !callout.titled {
+        return if gitlab {
+            ("<blockquote>\n".to_owned(), "</blockquote>\n")
+        } else {
+            (String::new(), "")
+        };
+    }
+    let class = callout.alert.map_or("quote", |alert| alert.class());
+    let icon = callout.alert.map_or("❝", Alert::icon);
+    let title = inline(&callout.title, render);
+    match callout.folded {
+        Some(folded) => (
+            format!(
+                "<details class=\"callout callout-{class}\"{}><summary class=\"callout-title\">{icon} {title}</summary>\n",
+                if folded { "" } else { " open" }
+            ),
+            "</details>\n",
+        ),
+        None => (
+            format!(
+                "<div class=\"callout callout-{class}\">\n<p class=\"callout-title\">{icon} {title}</p>\n"
+            ),
+            "</div>\n",
+        ),
+    }
 }
 
 /// `text` without Obsidian block comments (`%%` lines and what is between
@@ -146,23 +238,6 @@ fn toc(outline: &[crate::outline::Heading]) -> String {
     html
 }
 
-/// The source of `lines`, each followed by a line break.
-fn join(text: &str, lines: &[std::ops::Range<usize>], range: std::ops::Range<usize>) -> String {
-    let mut joined = String::new();
-    for line in range {
-        joined.push_str(&text[lines[line].clone()]);
-        joined.push('\n');
-    }
-    joined
-}
-
-/// A quote line without its `>` and the space after it.
-fn strip_quote(line: &str) -> &str {
-    let trimmed = line.trim_start_matches(' ');
-    let unquoted = trimmed.strip_prefix('>').unwrap_or(trimmed);
-    unquoted.strip_prefix(' ').unwrap_or(unquoted)
-}
-
 /// Markdown `text` as inline HTML, without the paragraph around it.
 fn inline(text: &str, render: &mut dyn FnMut(Embed<'_>) -> Option<String>) -> String {
     let html = markdown(text, render);
@@ -190,7 +265,18 @@ fn markdown(text: &str, render: &mut dyn FnMut(Embed<'_>) -> Option<String>) -> 
     // with a width (an `<img>`), until its end.
     let mut embed: Option<bool> = None;
     let shadowed = crate::shadow::shadow(&text);
-    for event in Parser::new_ext(&shadowed, crate::analysis::options()) {
+    let mut callouts = Callouts::new(&text, render);
+    for (event, range) in Parser::new_ext(&shadowed, crate::analysis::options()).into_offset_iter()
+    {
+        emit(
+            &mut pending,
+            &mut events,
+            &abbreviations,
+            callouts.before(range.start),
+        );
+        if callouts.skips(&event, &range) {
+            continue;
+        }
         if let Some((_, title)) = &mut heading
             && let Event::Text(text) | Event::Code(text) = &event
         {
@@ -208,9 +294,7 @@ fn markdown(text: &str, render: &mut dyn FnMut(Embed<'_>) -> Option<String>) -> 
             pending.push_str(text);
             continue;
         }
-        if !pending.is_empty() {
-            events.extend(inline_extras(&std::mem::take(&mut pending), &abbreviations));
-        }
+        flush(&mut pending, &mut events, &abbreviations);
         match event {
             Event::Start(Tag::Heading { .. }) => {
                 heading = Some((events.len(), String::new()));
@@ -222,22 +306,14 @@ fn markdown(text: &str, render: &mut dyn FnMut(Embed<'_>) -> Option<String>) -> 
                 }
                 events.push(event);
             }
-            Event::Start(Tag::Image {
-                link_type: link_type @ LinkType::WikiLink { has_pothole },
-                dest_url,
-                title,
-                id,
-            }) => {
-                let note = !crate::analysis::is_image_file(&dest_url);
-                events.push(wiki_embed(
-                    &shadowed,
-                    link_type,
-                    has_pothole,
-                    &dest_url,
-                    title,
-                    id,
-                    render,
-                ));
+            Event::Start(
+                tag @ Tag::Image {
+                    link_type: LinkType::WikiLink { .. },
+                    ..
+                },
+            ) => {
+                let (start, note) = wiki_embed(&shadowed, tag, render);
+                events.push(start);
                 embed = Some(note);
             }
             Event::Start(Tag::MetadataBlock(_)) => in_metadata = true,
@@ -269,9 +345,7 @@ fn markdown(text: &str, render: &mut dyn FnMut(Embed<'_>) -> Option<String>) -> 
             other => events.push(embedded(other, render)),
         }
     }
-    if !pending.is_empty() {
-        events.extend(inline_extras(&pending, &abbreviations));
-    }
+    emit(&mut pending, &mut events, &abbreviations, callouts.finish());
     let mut html = String::new();
     pulldown_cmark::html::push_html(&mut html, events.into_iter());
     html
@@ -383,36 +457,42 @@ fn inside_embed<'a>(note: bool, event: Event<'a>, events: &mut Vec<Event<'a>>) -
 }
 
 /// An Obsidian embed: `![[note]]` as the start of a link to the note,
-/// `![[pic.png|300]]` as an `<img>` with its width.
+/// `![[pic.png|300]]` as an `<img>` with its width; and whether it is a
+/// note, whose text stays in the link.
 fn wiki_embed<'a>(
     shadowed: &str,
-    link_type: LinkType,
-    has_pothole: bool,
-    dest_url: &str,
-    title: CowStr<'a>,
-    id: CowStr<'a>,
+    tag: Tag<'a>,
     render: &mut dyn FnMut(Embed<'_>) -> Option<String>,
-) -> Event<'a> {
-    if !crate::analysis::is_image_file(dest_url) {
-        let href = render(Embed::WikiLink(dest_url)).unwrap_or_else(|| format!("{dest_url}.md"));
-        return Event::Start(Tag::Link {
+) -> (Event<'a>, bool) {
+    let Tag::Image {
+        link_type,
+        dest_url,
+        title,
+        id,
+    } = tag
+    else {
+        return (Event::Start(tag), false);
+    };
+    if !crate::analysis::is_image_file(&dest_url) {
+        let href = render(Embed::WikiLink(&dest_url)).unwrap_or_else(|| format!("{dest_url}.md"));
+        let link = Tag::Link {
             link_type,
             dest_url: href.into(),
             title,
             id,
-        });
+        };
+        return (Event::Start(link), true);
     }
-    let source = render(Embed::Image(dest_url)).unwrap_or_else(|| dest_url.to_owned());
-    let width = shadowed_width(shadowed, has_pothole, dest_url);
-    Event::InlineHtml(
-        format!(
-            r#"<img src="{}" alt="{}"{}>"#,
-            escape(&source),
-            escape(dest_url),
-            width.map_or_else(String::new, |w| format!(r#" width="{w}""#))
-        )
-        .into(),
-    )
+    let has_pothole = matches!(link_type, LinkType::WikiLink { has_pothole: true });
+    let source = render(Embed::Image(&dest_url)).unwrap_or_else(|| dest_url.to_string());
+    let width = shadowed_width(shadowed, has_pothole, &dest_url);
+    let img = format!(
+        r#"<img src="{}" alt="{}"{}>"#,
+        escape(&source),
+        escape(&dest_url),
+        width.map_or_else(String::new, |w| format!(r#" width="{w}""#))
+    );
+    (Event::InlineHtml(img.into()), false)
 }
 
 /// The width asked for by an image embed `![[dest|300]]`, read from the
@@ -424,6 +504,26 @@ fn shadowed_width(text: &str, has_pothole: bool, destination: &str) -> Option<u3
     let after = text.split(&format!("[[{destination}|")).nth(1)?;
     let written = after.split("]]").next()?;
     written.split('x').next()?.trim().parse().ok()
+}
+
+/// Ends the text gathered so far, then adds `html` (callout tags), if any.
+fn emit(
+    pending: &mut String,
+    events: &mut Vec<Event<'_>>,
+    abbreviations: &[(String, String)],
+    html: String,
+) {
+    flush(pending, events, abbreviations);
+    if !html.is_empty() {
+        events.push(Event::Html(html.into()));
+    }
+}
+
+/// Turns the text gathered so far into events, with its extras.
+fn flush(pending: &mut String, events: &mut Vec<Event<'_>>, abbreviations: &[(String, String)]) {
+    if !pending.is_empty() {
+        events.extend(inline_extras(&std::mem::take(pending), abbreviations));
+    }
 }
 
 /// Abbreviation definitions `*[HTML]: Hyper Text Markup Language`, taken
@@ -924,6 +1024,28 @@ mod tests {
             seen.iter()
                 .any(|s| s.contains("Graphviz") && s.contains("digraph")),
             "{seen:?}"
+        );
+    }
+
+    #[test]
+    fn footnotes_and_references_reach_into_callouts() {
+        let html = plain(
+            "> [!note]\n> See[^1] and [the site][ref].\n\n::: tip\nAlso [the site][ref].\n:::\n\n[^1]: The note.\n\n[ref]: https://x.y\n",
+        );
+        assert!(html.contains("href=\"#1\""), "{html}");
+        assert_eq!(html.matches("The note.").count(), 1, "{html}");
+        assert_eq!(html.matches("href=\"https://x.y\"").count(), 2, "{html}");
+        assert!(!html.contains("[^1]") && !html.contains("[ref]"), "{html}");
+    }
+
+    #[test]
+    fn foldable_callouts_export_as_details() {
+        let html = plain("> [!faq]- Why?\n> Because.\n\n> [!tip]+ Open\n> Shown.\n");
+        assert!(html.contains(r#"<details class="callout callout-important"><summary class="callout-title">! Why?</summary>"#), "{html}");
+        assert!(html.contains(r#"<details class="callout callout-tip" open><summary class="callout-title">✦ Open</summary>"#), "{html}");
+        assert!(
+            html.contains("Because.") && html.contains("</details>"),
+            "{html}"
         );
     }
 }
