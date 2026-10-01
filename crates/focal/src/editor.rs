@@ -104,6 +104,8 @@ actions!(
         InsertMath,
         OpenLink,
         ExportHtml,
+        ExportPdf,
+        Print,
         CopyHtml,
     ]
 );
@@ -156,6 +158,8 @@ pub struct LearnSpelling {
 }
 
 pub(crate) const CONTEXT: &str = "FocalEditor";
+/// How long printing waits for a page and its images to load.
+const PRINT_LOAD_LIMIT: Duration = Duration::from_secs(20);
 /// Key bindings for the input of the table cell being edited.
 const CELL_CONTEXT: &str = "FocalCell > Input";
 /// Code blocks whose highlights are kept.
@@ -217,6 +221,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-e", InlineCode, context),
         KeyBinding::new("cmd-k", InsertLink, context),
         KeyBinding::new("cmd-shift-e", ExportHtml, context),
+        // ⌘P opens Quick Open, as in code editors.
+        KeyBinding::new("cmd-alt-p", Print, context),
         KeyBinding::new("cmd-alt-shift-c", CopyHtml, context),
         KeyBinding::new("cmd-enter", OpenLink, context),
         KeyBinding::new("cmd-0", SetHeading(0), context),
@@ -412,6 +418,8 @@ pub struct Editor {
     /// The folder wiki links resolve in, and its Markdown files relative to it.
     pub(crate) link_root: Option<PathBuf>,
     link_files: std::sync::Arc<[PathBuf]>,
+    /// The document being printed, kept until the next print.
+    printing: Option<crate::print::Job>,
     /// The table cell being edited, if any.
     pub(crate) grid: Option<crate::grid::GridSession>,
     pub(crate) next_grid_session: u64,
@@ -500,6 +508,7 @@ impl Editor {
             footnote_preview: None,
             link_root: None,
             link_files: std::sync::Arc::from([]),
+            printing: None,
             table_source: None,
             pixel_scale: 1.,
             draft: None,
@@ -567,8 +576,9 @@ impl Editor {
         }
     }
 
-    /// Asks where, then writes the document as a standalone HTML page.
-    fn export_html(&mut self, _: &ExportHtml, _: &mut Window, cx: &mut Context<Self>) {
+    /// The folder an export is offered in, the file's name without its
+    /// extension, and the title: the first heading, or else the name.
+    fn export_names(&self) -> (PathBuf, String, String) {
         let path = self.path();
         let folder = path.and_then(std::path::Path::parent).map_or_else(
             || std::env::current_dir().unwrap_or_default(),
@@ -578,13 +588,18 @@ impl Editor {
             || "Untitled".to_owned(),
             |s| s.to_string_lossy().into_owned(),
         );
-        let chosen = cx.prompt_for_new_path(&folder, Some(&format!("{stem}.html")));
-        let text = self.text().to_owned();
-        // The first heading names the page, or else the file.
-        let title = focal_core::outline::outline(&text)
+        let title = focal_core::outline::outline(self.text())
             .into_iter()
             .next()
-            .map_or(stem, |heading| heading.title);
+            .map_or_else(|| stem.clone(), |heading| heading.title);
+        (folder, stem, title)
+    }
+
+    /// Asks where, then writes the document as a standalone HTML page.
+    fn export_html(&mut self, _: &ExportHtml, _: &mut Window, cx: &mut Context<Self>) {
+        let (folder, stem, title) = self.export_names();
+        let chosen = cx.prompt_for_new_path(&folder, Some(&format!("{stem}.html")));
+        let text = self.text().to_owned();
         let sources = self.sources();
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(path))) = chosen.await else {
@@ -597,6 +612,76 @@ impl Editor {
             if let Err(error) = written {
                 this.update(cx, |this, cx| {
                     this.show_error(format!("Could not export: {error:#}"), cx);
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    /// Asks where, then writes the document as a PDF, set like a print.
+    fn export_pdf(&mut self, _: &ExportPdf, _: &mut Window, cx: &mut Context<Self>) {
+        let (folder, stem, _) = self.export_names();
+        let chosen = cx.prompt_for_new_path(&folder, Some(&format!("{stem}.pdf")));
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(path))) = chosen.await else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                this.print_to(crate::print::Output::Pdf(path), cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn print(&mut self, _: &Print, _: &mut Window, cx: &mut Context<Self>) {
+        self.print_to(crate::print::Output::Printer, cx);
+    }
+
+    /// Lays the document out for paper in the background, then prints it
+    /// once WebKit has loaded it, images included.
+    fn print_to(&mut self, output: crate::print::Output, cx: &mut Context<Self>) {
+        let (_, _, title) = self.export_names();
+        let text = self.text().to_owned();
+        let sources = self.sources();
+        let folder = std::env::temp_dir().join(format!("focal-print-{}", std::process::id()));
+        cx.spawn(async move |this, cx| {
+            let printed: anyhow::Result<()> = async {
+                let page =
+                    cx.background_executor()
+                        .spawn({
+                            let title = title.clone();
+                            async move {
+                                crate::export::write_print_page(&text, &title, &sources, &folder)
+                            }
+                        })
+                        .await?;
+                let job = crate::print::Job::load(&page, output, &title)?;
+                this.update(cx, |this, _| this.printing = Some(job))?;
+                let started = Instant::now();
+                let loading = |this: &Self| {
+                    this.printing
+                        .as_ref()
+                        .is_some_and(crate::print::Job::is_loading)
+                };
+                while this.read_with(cx, |this, _| loading(this))?
+                    && started.elapsed() < PRINT_LOAD_LIMIT
+                {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(50))
+                        .await;
+                }
+                this.update(cx, |this, _| {
+                    this.printing
+                        .as_ref()
+                        .map_or(Ok(()), crate::print::Job::print)
+                })?
+            }
+            .await;
+            if let Err(error) = printed {
+                this.update(cx, |this, cx| {
+                    this.show_error(format!("Could not print: {error:#}"), cx);
                 })
                 .ok();
             }
@@ -3755,6 +3840,8 @@ impl Render for Editor {
             .on_action(cx.listener(Self::insert_link))
             .on_action(cx.listener(Self::open_link))
             .on_action(cx.listener(Self::export_html))
+            .on_action(cx.listener(Self::export_pdf))
+            .on_action(cx.listener(Self::print))
             .on_action(cx.listener(Self::copy_html))
             .on_action(cx.listener(Self::set_heading))
             .on_action(cx.listener(Self::toggle_bullets))

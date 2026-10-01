@@ -5,9 +5,10 @@ use gpui_kit::{App, Menu, MenuItem, OsAction, actions};
 
 use crate::cli_install::{InstallCommand, UninstallCommand};
 use crate::editor::{
-    Bold, CloseWindow, Copy, CopyHtml, Cut, ExportHtml, InlineCode, InsertCodeBlock, InsertLink,
-    InsertMath, InsertTable, Italic, OpenLink, Paste, Quit, Redo, Save, SelectAll, SetHeading,
-    Strikethrough, ToggleBullets, ToggleFocusMode, ToggleNumbers, ToggleQuote, ToggleTask, Undo,
+    Bold, CloseWindow, Copy, CopyHtml, Cut, ExportHtml, ExportPdf, InlineCode, InsertCodeBlock,
+    InsertLink, InsertMath, InsertTable, Italic, OpenLink, Paste, Print, Quit, Redo, Save,
+    SelectAll, SetHeading, Strikethrough, ToggleBullets, ToggleFocusMode, ToggleNumbers,
+    ToggleQuote, ToggleTask, Undo,
 };
 use crate::find_bar::{Find, FindAndReplace, FindNext, FindPrevious};
 use crate::settings::OpenSettings;
@@ -56,6 +57,10 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::separator(),
             MenuItem::action("Save", Save),
             MenuItem::action("Export as HTML…", ExportHtml),
+            MenuItem::action("Export as PDF…", ExportPdf),
+            MenuItem::separator(),
+            MenuItem::action("Print…", Print),
+            MenuItem::separator(),
             MenuItem::action("Close Window", CloseWindow),
         ]),
         Menu::new("Edit").items([

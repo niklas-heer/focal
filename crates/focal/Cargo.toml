@@ -29,8 +29,9 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 gpui-kit = { version = "=0.7.0", default-features = false, features = ["component", "tree-sitter-bash", "tree-sitter-c", "tree-sitter-cpp", "tree-sitter-css", "tree-sitter-diff", "tree-sitter-go", "tree-sitter-html", "tree-sitter-java", "tree-sitter-javascript", "tree-sitter-kotlin", "tree-sitter-lua", "tree-sitter-make", "tree-sitter-php", "tree-sitter-python", "tree-sitter-ruby", "tree-sitter-rust", "tree-sitter-sql", "tree-sitter-swift", "tree-sitter-toml", "tree-sitter-tsx", "tree-sitter-typescript", "tree-sitter-yaml", "tree-sitter-zig"] }
 objc2 = "0.6.4"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAlert", "NSAppearance", "NSApplication", "NSButton", "NSControl", "NSPasteboard", "NSResponder", "NSSpellChecker", "NSView"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSDictionary", "NSOrthography", "NSRange", "NSString", "NSTextCheckingResult", "NSValue"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAlert", "NSAppearance", "NSApplication", "NSButton", "NSControl", "NSGraphics", "NSPasteboard", "NSPrintInfo", "NSPrintOperation", "NSPrintPanel", "NSResponder", "NSSpellChecker", "NSView", "NSWindow"] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKWebViewConfiguration", "WKNavigation"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSDictionary", "NSGeometry", "NSOrthography", "NSRange", "NSString", "NSTextCheckingResult", "NSURL", "NSValue"] }
 unicode-segmentation.workspace = true
 
 [lints]

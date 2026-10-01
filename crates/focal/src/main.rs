@@ -21,6 +21,7 @@ mod maps;
 mod math;
 mod menus;
 mod prefix;
+mod print;
 mod recent;
 mod settings;
 mod spell;
@@ -299,35 +300,10 @@ fn serve(cx: &mut App) {
 }
 
 fn load_fonts(cx: &App) {
-    let fonts: Vec<Cow<'static, [u8]>> = vec![
-        Cow::Borrowed(include_bytes!(
-            "../../../assets/fonts/iAWriterQuattroS-Regular.ttf"
-        )),
-        Cow::Borrowed(include_bytes!(
-            "../../../assets/fonts/iAWriterQuattroS-Italic.ttf"
-        )),
-        Cow::Borrowed(include_bytes!(
-            "../../../assets/fonts/iAWriterDuoS-Regular.ttf"
-        )),
-        Cow::Borrowed(include_bytes!(
-            "../../../assets/fonts/iAWriterDuoS-Italic.ttf"
-        )),
-        Cow::Borrowed(include_bytes!(
-            "../../../assets/fonts/iAWriterDuoS-Bold.ttf"
-        )),
-        Cow::Borrowed(include_bytes!(
-            "../../../assets/fonts/iAWriterDuoS-BoldItalic.ttf"
-        )),
-        Cow::Borrowed(include_bytes!(
-            "../../../assets/fonts/iAWriterMonoS-Regular.ttf"
-        )),
-        Cow::Borrowed(include_bytes!(
-            "../../../assets/fonts/iAWriterMonoS-Bold.ttf"
-        )),
-        Cow::Borrowed(include_bytes!(
-            "../../../assets/fonts/iAWriterMonoS-Italic.ttf"
-        )),
-    ];
+    let fonts: Vec<Cow<'static, [u8]>> = theme::FONTS
+        .iter()
+        .map(|font| Cow::Borrowed(font.data))
+        .collect();
     if let Err(error) = cx.text_system().add_fonts(fonts) {
         eprintln!("focal: could not load the iA Writer fonts: {error:#}");
     }

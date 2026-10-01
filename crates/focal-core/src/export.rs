@@ -698,10 +698,31 @@ fn escape(text: &str) -> String {
 
 /// A standalone page around `body`, with its styles inline.
 pub fn page(title: &str, body: &str) -> String {
+    framed(title, body, &format!("{STYLE}{DARK_STYLE}"), "")
+}
+
+/// A page around `body` for paper: light whatever the appearance, set in
+/// pages with margins, headings kept with what follows them, folded
+/// callouts open, and the typefaces given as `font_faces` (`@font-face`
+/// rules). Relative sources lead from `base`, the document's folder.
+pub fn print_page(title: &str, body: &str, font_faces: &str, base: Option<&str>) -> String {
+    let base = base.map_or_else(String::new, |base| {
+        format!("<base href=\"{}\">\n", escape(base))
+    });
+    let body = body.replace("<details", "<details open");
+    framed(
+        title,
+        &body,
+        &format!("{font_faces}{STYLE}{PRINT_STYLE}"),
+        &base,
+    )
+}
+
+fn framed(title: &str, body: &str, style: &str, head: &str) -> String {
     format!(
         "<!doctype html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-         <title>{}</title>\n<style>{STYLE}</style>\n</head>\n<body>\n<main>\n{body}</main>\n</body>\n</html>\n",
+         {head}<title>{}</title>\n<style>{style}</style>\n</head>\n<body>\n<main>\n{body}</main>\n</body>\n</html>\n",
         escape(title)
     )
 }
@@ -709,13 +730,9 @@ pub fn page(title: &str, body: &str) -> String {
 /// Focal's look for exported pages: its typefaces when installed, its
 /// palette, light and dark.
 const STYLE: &str = r#"
-:root { color-scheme: light dark; --text: #212121; --quiet: #21212199; --background: #f7f6f3;
+:root { --text: #212121; --quiet: #21212199; --background: #f7f6f3;
   --link: #266fb5; --code: #0000000a; --code-text: #864a1c; --mark: #ffd84a66; --rule: #2121211f;
   --note: #2f6fd0; --tip: #2f8f4e; --important: #8250df; --warning: #b0761a; --caution: #c4372f; }
-@media (prefers-color-scheme: dark) {
-  :root { --text: #dadad7; --quiet: #dadad799; --background: #1a1a1a; --link: #7aaff0;
-    --code: #ffffff0d; --code-text: #e0a46e; --mark: #c79a1a66; --rule: #ffffff1f; }
-}
 body { margin: 0; background: var(--background); color: var(--text);
   font: 18px/1.6 "iA Writer Quattro S", "iA Writer Quattro V", -apple-system, "Helvetica Neue", sans-serif; }
 main { max-width: 40em; margin: 0 auto; padding: 3em 1.5em; }
@@ -744,6 +761,28 @@ img, figure svg { max-width: 100%; height: auto; }
 li:has(> input[type="checkbox"]) { list-style: none; margin-left: -1.3em; }
 .footnote-definition { font-size: 0.9em; color: var(--quiet); }
 "#;
+
+/// The dark palette, for pages read on screen.
+const DARK_STYLE: &str = r"
+:root { color-scheme: light dark; }
+@media (prefers-color-scheme: dark) {
+  :root { --text: #dadad7; --quiet: #dadad799; --background: #1a1a1a; --link: #7aaff0;
+    --code: #ffffff0d; --code-text: #e0a46e; --mark: #c79a1a66; --rule: #ffffff1f; }
+}
+";
+
+/// Paper: white, A4 or Letter with the printer's own size, text a little
+/// smaller, and nothing split where it reads badly.
+const PRINT_STYLE: &str = r"
+:root { color-scheme: light; --background: #ffffff; }
+@page { margin: 2cm 2.2cm; }
+body { font-size: 11pt; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+main { max-width: none; margin: 0; padding: 0; }
+h1, h2, h3, h4, h5, h6 { break-after: avoid; }
+pre, table, figure, img, div.math, blockquote, .callout { break-inside: avoid; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+a { text-decoration: none; }
+";
 
 #[cfg(test)]
 mod tests {
@@ -833,6 +872,33 @@ mod tests {
     #[test]
     fn raw_html_passes_through_as_in_every_markdown_renderer() {
         assert!(plain("<b>raw</b>\n").contains("<b>raw</b>"));
+    }
+
+    #[test]
+    fn a_print_page_is_light_paged_and_carries_its_fonts() {
+        let faces = "@font-face { font-family: \"iA Writer Quattro S\"; src: url(q.ttf); }";
+        let page = print_page(
+            "Notes",
+            "<h2>A</h2><details class=\"callout\"><summary>Folded</summary></details>",
+            faces,
+            Some("file:///notes/"),
+        );
+        assert!(
+            page.contains(r#"<base href="file:///notes/">"#),
+            "relative sources, raw HTML too, lead from the document: {page}"
+        );
+        assert!(
+            page.contains(r#"<details open class="callout">"#),
+            "folded callouts print open: {page}"
+        );
+        assert!(page.contains("<title>Notes</title>"), "{page}");
+        assert!(page.contains(faces), "{page}");
+        assert!(page.contains("@page"), "{page}");
+        assert!(
+            !page.contains("prefers-color-scheme: dark"),
+            "paper is white whatever the appearance: {page}"
+        );
+        assert!(page.contains("break-after: avoid"), "{page}");
     }
 
     #[test]

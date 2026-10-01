@@ -171,6 +171,82 @@ impl Theme {
     }
 }
 
+/// A typeface file Focal carries.
+pub struct Font {
+    pub file: &'static str,
+    pub family: &'static str,
+    pub bold: bool,
+    pub italic: bool,
+    pub data: &'static [u8],
+}
+
+/// The iA Writer typefaces, loaded at launch and given to printed pages.
+pub const FONTS: [Font; 9] = [
+    Font {
+        file: "iAWriterQuattroS-Regular.ttf",
+        family: "iA Writer Quattro S",
+        bold: false,
+        italic: false,
+        data: include_bytes!("../../../assets/fonts/iAWriterQuattroS-Regular.ttf"),
+    },
+    Font {
+        file: "iAWriterQuattroS-Italic.ttf",
+        family: "iA Writer Quattro S",
+        bold: false,
+        italic: true,
+        data: include_bytes!("../../../assets/fonts/iAWriterQuattroS-Italic.ttf"),
+    },
+    Font {
+        file: "iAWriterDuoS-Regular.ttf",
+        family: "iA Writer Duo S",
+        bold: false,
+        italic: false,
+        data: include_bytes!("../../../assets/fonts/iAWriterDuoS-Regular.ttf"),
+    },
+    Font {
+        file: "iAWriterDuoS-Italic.ttf",
+        family: "iA Writer Duo S",
+        bold: false,
+        italic: true,
+        data: include_bytes!("../../../assets/fonts/iAWriterDuoS-Italic.ttf"),
+    },
+    Font {
+        file: "iAWriterDuoS-Bold.ttf",
+        family: "iA Writer Duo S",
+        bold: true,
+        italic: false,
+        data: include_bytes!("../../../assets/fonts/iAWriterDuoS-Bold.ttf"),
+    },
+    Font {
+        file: "iAWriterDuoS-BoldItalic.ttf",
+        family: "iA Writer Duo S",
+        bold: true,
+        italic: true,
+        data: include_bytes!("../../../assets/fonts/iAWriterDuoS-BoldItalic.ttf"),
+    },
+    Font {
+        file: "iAWriterMonoS-Regular.ttf",
+        family: "iA Writer Mono S",
+        bold: false,
+        italic: false,
+        data: include_bytes!("../../../assets/fonts/iAWriterMonoS-Regular.ttf"),
+    },
+    Font {
+        file: "iAWriterMonoS-Bold.ttf",
+        family: "iA Writer Mono S",
+        bold: true,
+        italic: false,
+        data: include_bytes!("../../../assets/fonts/iAWriterMonoS-Bold.ttf"),
+    },
+    Font {
+        file: "iAWriterMonoS-Italic.ttf",
+        family: "iA Writer Mono S",
+        bold: false,
+        italic: true,
+        data: include_bytes!("../../../assets/fonts/iAWriterMonoS-Italic.ttf"),
+    },
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;

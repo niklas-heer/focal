@@ -1,6 +1,7 @@
 //! Export as HTML… and Copy as HTML: the document rendered the way the
 //! editor shows it, with typeset math and Mermaid diagrams as SVG.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -133,6 +134,44 @@ pub fn write_page(text: &str, title: &str, sources: &Sources, path: &Path) -> an
     Ok(())
 }
 
+/// Writes `text` as a page for paper into the folder `out`, beside the
+/// typefaces it is set in, and returns the page's path. Printing and PDF
+/// export render this page; its relative sources lead from the
+/// document's folder.
+pub fn write_print_page(
+    text: &str,
+    title: &str,
+    sources: &Sources,
+    out: &Path,
+) -> anyhow::Result<PathBuf> {
+    std::fs::create_dir_all(out)?;
+    let mut faces = String::new();
+    for font in &crate::theme::FONTS {
+        let file = out.join(font.file);
+        std::fs::write(&file, font.data)?;
+        let mut families = vec![font.family];
+        // Quattro has no bold of its own; the editor sets it in Duo's, too.
+        if font.bold && font.family == "iA Writer Duo S" {
+            families.push("iA Writer Quattro S");
+        }
+        for family in families {
+            let _ = writeln!(
+                faces,
+                "@font-face {{ font-family: \"{family}\"; src: url(\"file://{}\"); font-weight: {}; font-style: {}; }}",
+                file.display(),
+                if font.bold { "bold" } else { "normal" },
+                if font.italic { "italic" } else { "normal" },
+            );
+        }
+    }
+    let folder = sources.folder().unwrap_or(out);
+    let body = html(text, sources, folder);
+    let base = format!("file://{}/", folder.display());
+    let page = out.join("page.html");
+    std::fs::write(&page, export::print_page(title, &body, &faces, Some(&base)))?;
+    Ok(page)
+}
+
 /// How a page in `destination` refers to `file`: relative when the file is
 /// in or below that folder, otherwise by its `file://` URL.
 fn reference(file: &Path, destination: Option<&Path>) -> String {
@@ -206,6 +245,33 @@ mod tests {
             html.contains(r#"<figure class="diagram"><svg"#),
             "the diagram is drawn"
         );
+    }
+
+    #[test]
+    fn a_print_folder_holds_the_page_and_its_typefaces() {
+        let folder = temp("print-document");
+        let out = temp("print");
+        let page = write_print_page(
+            "# Cats\n\n![a cat](cat.png)\n",
+            "Cats",
+            &sources(&folder),
+            &out,
+        )
+        .unwrap();
+        let html = std::fs::read_to_string(&page).unwrap();
+        assert!(html.contains("@page"), "a page for paper");
+        let base = format!(r#"<base href="file://{}/">"#, folder.display());
+        assert!(
+            html.contains(&base),
+            "images lead from the document: {html}"
+        );
+        assert!(html.contains(r#"src="cat.png""#), "{html}");
+        for font in &crate::theme::FONTS {
+            let file = out.join(font.file);
+            assert!(file.is_file(), "{} is beside the page", font.file);
+            let url = format!("url(\"file://{}\")", file.display());
+            assert!(html.contains(&url), "{html}");
+        }
     }
 
     #[test]
