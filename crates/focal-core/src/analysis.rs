@@ -83,6 +83,17 @@ impl Alert {
         }
     }
 
+    /// A small symbol before the title, drawn in the alert's color.
+    pub const fn icon(self) -> &'static str {
+        match self {
+            Self::Note => "ⓘ",
+            Self::Tip => "✦",
+            Self::Important => "!",
+            Self::Warning => "⚠",
+            Self::Caution => "⊘",
+        }
+    }
+
     const fn from_kind(kind: BlockQuoteKind) -> Self {
         match kind {
             BlockQuoteKind::Note => Self::Note,
@@ -178,7 +189,7 @@ pub enum Replacement {
 impl Replacement {
     pub fn text(&self) -> String {
         match self {
-            Self::AlertTitle(alert) => alert.title().to_owned(),
+            Self::AlertTitle(alert) => format!("{} {}", alert.icon(), alert.title()),
             Self::Label(label) => label.clone(),
         }
     }
@@ -1072,6 +1083,13 @@ mod tests {
             .collect();
         assert_eq!(cells, [vec!["a", "b"], vec!["1", "**2**"]]);
         assert_eq!(analysis.infos[4].kind, LineKind::Text);
+    }
+
+    #[test]
+    fn alert_titles_carry_an_icon() {
+        assert_eq!(Replacement::AlertTitle(Alert::Note).text(), "ⓘ Note");
+        assert_eq!(Replacement::AlertTitle(Alert::Warning).text(), "⚠ Warning");
+        assert_eq!(Replacement::AlertTitle(Alert::Caution).text(), "⊘ Caution");
     }
 
     #[test]

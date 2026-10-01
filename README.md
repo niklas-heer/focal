@@ -2,7 +2,7 @@
 
 A focused, native Markdown editor for macOS that you open from the terminal.
 
-> **Status:** early. Focal is built in Rust with [GPUI](https://gpui.rs), Zed's GPU-accelerated UI framework. Milestone 1 is done: lists, checkboxes and quotes are drawn and edited properly, files reload live, code blocks are highlighted and VoiceOver can read the document. Milestone 2 made tables grids you edit in place. Milestone 3 added the chrome: the bottom formatting bar, focus mode with typewriter scrolling, folder mode with a sidebar and a quick switcher, settings and a menu bar. Milestone 6 made it an app: `Focal.app` installs its own `focal` command, keeps one instance that `focal` hands files to, opens Markdown files from Finder, and updates itself through Sparkle. The first public release and the Markdown extras (alerts, images, math, wiki links) are next. See [the design](docs/design.md).
+> **Status:** early. Focal is built in Rust with [GPUI](https://gpui.rs), Zed's GPU-accelerated UI framework. Milestone 1 is done: lists, checkboxes and quotes are drawn and edited properly, files reload live, code blocks are highlighted and VoiceOver can read the document. Milestone 2 made tables grids you edit in place. Milestone 3 added the chrome: the bottom formatting bar, focus mode with typewriter scrolling, folder mode with a sidebar and a quick switcher, settings and a menu bar. Milestone 6 made it an app: `Focal.app` installs its own `focal` command, keeps one instance that `focal` hands files to, opens Markdown files from Finder, and updates itself through Sparkle. Version 0.1.0 is released, also as a Homebrew cask (`brew install --cask niklas-heer/tap/focal`). Milestone 4 added the Markdown extras: images, typeset display math, collapsed front matter, footnote previews, and wiki links you can follow. Mermaid diagrams are next. See [the design](docs/design.md).
 
 ## Try it
 
@@ -23,6 +23,8 @@ Set `FOCAL_TRACE=1` to print parse and restyle times for every change.
 | --- | --- |
 | ⌘B, ⌘I, ⇧⌘X, ⌘E | Bold, italic, strikethrough, inline code |
 | ⌘K | Link |
+| ⌘-click, ⌘↩ | Follow a link, wiki link or footnote |
+| ⌘[ | Back |
 | ⌘1 to ⌘6, ⌘0 | Heading level, paragraph |
 | ⌘D | Focus mode |
 | ⌃⌘S | Sidebar (folder mode) |

@@ -84,6 +84,20 @@ Move the pointer to the bottom edge for the formatting bar, or press ⌘D for fo
 
 ### A smaller heading
 
-Wiki links like [[design]] resolve against the folder. That's it.
+Wiki links like [[design]] resolve against the folder; ⌘-click one, or press ⌘↩ on it, and ⌘[ brings you back. A link to a note that does not exist yet, like [[Someday]], looks quieter and creates it.
 
-[^1]: Footnotes render as quiet references.
+Hover the footnote above to preview it.
+
+An image on its own line shows in place of its source:
+
+![The Focal icon](focal-icon.png)
+
+Display math is typeset:
+
+$$
+\int_0^\infty e^{-x^2}\,dx = \frac{\sqrt{\pi}}{2}
+$$
+
+That's it.
+
+[^1]: Footnotes render as quiet references, and hovering one shows its note.
