@@ -1517,3 +1517,59 @@ fn graphviz_svgbob_and_pikchr_blocks_are_diagrams(cx: &mut TestAppContext) {
         }
     });
 }
+
+// ---- Folding -------------------------------------------------------------------
+
+fn shows_line(cx: &mut TestAppContext, editor: &Entity<Editor>, line: usize) -> bool {
+    editor.read_with(cx, |e, _| {
+        e.snapshot.rows.contains(&editor::Row::Line(line))
+    })
+}
+
+#[gpui_kit::test]
+fn a_folded_callout_opens_and_closes_from_its_title(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "Intro\n\n> [!faq]- Why?\n> Hidden answer\n\nAfter\n");
+    assert!(!shows_line(cx, &editor, 3), "folded as written");
+    act(cx, window, |window, cx| {
+        window.click(("fold-toggle", 2usize), cx);
+    });
+    assert!(shows_line(cx, &editor, 3), "opened");
+    act(cx, window, |window, cx| {
+        window.click(("fold-toggle", 2usize), cx);
+    });
+    assert!(!shows_line(cx, &editor, 3), "closed again");
+}
+
+#[gpui_kit::test]
+fn the_caret_entering_a_folded_body_shows_it(cx: &mut TestAppContext) {
+    let text = "Intro\n\n<details>\n<summary>More</summary>\n\nHidden\n\n</details>\n";
+    let (_, editor) = open_editor(cx, text);
+    assert!(!shows_line(cx, &editor, 5));
+    let hidden = text.find("Hidden").unwrap();
+    editor.update(cx, |e, cx| e.move_to(hidden, cx));
+    assert!(shows_line(cx, &editor, 5), "the caret's line shows");
+}
+
+#[gpui_kit::test]
+fn down_from_a_folded_title_skips_its_body(cx: &mut TestAppContext) {
+    let text = "> [!faq]- Why?\n> Hidden one\n> Hidden two\n\nAfter\n";
+    let (window, editor) = open_editor(cx, text);
+    act(cx, window, |window, cx| window.press("down", cx));
+    act(cx, window, |_, _| {});
+    editor.read_with(cx, |e, _| {
+        let line = e.snapshot.analysis.lines.line_of(e.selection().start);
+        assert!(line >= 3, "past the body, on line {line}");
+    });
+    assert!(!shows_line(cx, &editor, 1), "still folded");
+    // And back up from below lands on the title, not in the body.
+    let after = text.find("After").unwrap();
+    editor.update(cx, |e, cx| e.move_to(after, cx));
+    act(cx, window, |window, cx| {
+        window.press("up", cx);
+        window.press("up", cx);
+    });
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.snapshot.analysis.lines.line_of(e.selection().start), 0);
+    });
+    assert!(!shows_line(cx, &editor, 1), "still folded");
+}

@@ -278,7 +278,9 @@ pub(crate) struct Snapshot {
     version: Option<u64>,
     pub(crate) analysis: Rc<Analysis>,
     views: Rc<[Rc<LineView>]>,
-    rows: Rc<[Row]>,
+    pub(crate) rows: Rc<[Row]>,
+    /// The title lines of blocks that fold, with their state.
+    folds: Rc<HashMap<usize, FoldTitle>>,
     /// The source text of this version, for the accessibility tree.
     text: Rc<str>,
     /// Rendered cell texts per table, for the accessibility tree.
@@ -289,6 +291,15 @@ pub(crate) struct Snapshot {
     keys: Vec<u64>,
     /// What focus mode keeps bright; everything else is dimmed.
     focus: Option<Focus>,
+}
+
+/// A fold's title line as drawn: whether it is folded, the lines it hides,
+/// and its key for remembering the state.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct FoldTitle {
+    folded: bool,
+    body: Range<usize>,
+    key: String,
 }
 
 /// The caret's paragraph (as lines) and, by sentence, the sentence in it (as
@@ -405,6 +416,8 @@ pub struct Editor {
     pub(crate) pixel_scale: f32,
     /// The draft file keeping this untitled document's text, if any.
     draft: Option<PathBuf>,
+    /// Folds opened or closed by hand, by their key; the rest are as written.
+    fold_overrides: HashMap<String, bool>,
     /// What the find bar searches for.
     query: Option<String>,
     /// The query's matches in the current text, and the text version and
@@ -486,6 +499,7 @@ impl Editor {
             table_source: None,
             pixel_scale: 1.,
             draft: None,
+            fold_overrides: HashMap::new(),
             query: None,
             found: Rc::default(),
             found_for: None,
@@ -883,13 +897,40 @@ impl Editor {
         text: &str,
         line_count: usize,
         head: usize,
-    ) -> (Vec<Row>, Vec<usize>) {
+    ) -> (Vec<Row>, Vec<usize>, HashMap<usize, FoldTitle>) {
         let islands = crate::islands::islands(analysis, text);
         let head_line = analysis.lines.line_of(head);
+        let folds: HashMap<usize, FoldTitle> = focal_core::blocks::folds(analysis, text)
+            .into_iter()
+            .map(|fold| {
+                let folded = self
+                    .fold_overrides
+                    .get(&fold.key)
+                    .copied()
+                    .unwrap_or(fold.folded);
+                let title = FoldTitle {
+                    folded,
+                    body: fold.body,
+                    key: fold.key,
+                };
+                (fold.title, title)
+            })
+            .collect();
         let mut rows = Vec::with_capacity(line_count);
         let mut line_rows = Vec::with_capacity(line_count);
         let mut line = 0;
         while line < line_count {
+            // A folded body is hidden unless the caret is in it.
+            if let Some((&title, fold)) = folds.iter().find(|(_, fold)| {
+                fold.folded && fold.body.start == line && !fold.body.contains(&head_line)
+            }) {
+                let title_row = line_rows.get(title).copied().unwrap_or(rows.len());
+                for _ in fold.body.clone() {
+                    line_rows.push(title_row);
+                }
+                line = fold.body.end;
+                continue;
+            }
             if let Some(island) = islands.iter().find(|island| island.start == line)
                 && !(island.start..island.end).contains(&head_line)
             {
@@ -913,7 +954,7 @@ impl Editor {
                 line += 1;
             }
         }
-        (rows, line_rows)
+        (rows, line_rows, folds)
     }
 
     fn refresh(&mut self) {
@@ -939,7 +980,7 @@ impl Editor {
             .map(|line| Rc::new(line_view(&analysis, text, line, Some(&caret))))
             .collect();
 
-        let (rows, line_rows) = self.rows(&analysis, text, views.len(), head);
+        let (rows, line_rows, folds) = self.rows(&analysis, text, views.len(), head);
 
         let focus = self.focus(&analysis, text);
         let keys: Vec<u64> = rows
@@ -956,6 +997,7 @@ impl Editor {
                             .as_ref()
                             .map(|f| f.lines.contains(&line).then_some(&f.sentence))
                             .hash(&mut hasher);
+                        folds.get(&line).hash(&mut hasher);
                     }
                     Row::Table(table) => {
                         text[analysis.tables[table].range.clone()].hash(&mut hasher);
@@ -998,6 +1040,7 @@ impl Editor {
             analysis,
             views: views.into(),
             rows: rows.into(),
+            folds: Rc::new(folds),
             text: text.into(),
             table_cells,
             a11y_document,
@@ -2113,21 +2156,33 @@ impl Editor {
                 return Vertical::To(target);
             }
         }
-        let target = if direction < 0 {
-            match line.checked_sub(1) {
-                Some(target) => target,
-                None => return Vertical::To(0),
+        // The next line in a different row: lines hidden in a fold share
+        // their title's row and are stepped over.
+        let line_rows = &self.snapshot.line_rows;
+        let current_row = line_rows.get(line).copied();
+        let mut target = line;
+        loop {
+            target = if direction < 0 {
+                match target.checked_sub(1) {
+                    Some(target) => target,
+                    None => return Vertical::To(0),
+                }
+            } else if target + 1 < analysis.line_count() {
+                target + 1
+            } else {
+                return Vertical::To(self.text().len());
+            };
+            if line_rows.get(target).copied() != current_row {
+                break;
             }
-        } else if line + 1 < analysis.line_count() {
-            line + 1
-        } else {
-            return Vertical::To(self.text().len());
-        };
-        let target_row = self
-            .snapshot
-            .line_rows
+        }
+        let target_row = line_rows
             .get(target)
             .and_then(|&row| self.snapshot.rows.get(row));
+        // Onto a folded block from below: onto its title.
+        if let Some(&Row::Line(shown)) = target_row {
+            target = shown;
+        }
         if let Some(&Row::Table(table)) = target_row {
             return Vertical::Table(table);
         }
@@ -2838,8 +2893,12 @@ impl Editor {
             } else {
                 1.6
             });
+        let content = match self.snapshot.folds.get(&line) {
+            Some(fold) => self.with_fold_toggle(content.into_any_element(), line, fold, theme, cx),
+            None => content.into_any_element(),
+        };
         crate::prefix::wrap(
-            content.into_any_element(),
+            content,
             &info.prefix,
             line,
             &if prefix_dimmed { theme.faded() } else { *theme },
@@ -2866,6 +2925,72 @@ impl Editor {
                 )
             })
             .collect()
+    }
+
+    /// A fold's title line with its toggle beside it: ▸ while folded, ▾ open.
+    fn with_fold_toggle(
+        &self,
+        content: gpui_kit::AnyElement,
+        line: usize,
+        fold: &FoldTitle,
+        theme: &Theme,
+        cx: &Context<Self>,
+    ) -> gpui_kit::AnyElement {
+        let key = fold.key.clone();
+        let hidden = fold.body.len();
+        let (label, help) = if fold.folded {
+            (format!("▸ {hidden} more"), "Expand")
+        } else {
+            ("▾".to_owned(), "Collapse")
+        };
+        div()
+            .flex()
+            .items_center()
+            .child(div().flex_1().min_w(px(0.)).child(content))
+            .child(
+                div()
+                    .id(("fold-toggle", line))
+                    .test_support()
+                    .aria_label(help)
+                    .flex_none()
+                    .px(px(8.))
+                    .cursor_pointer()
+                    .text_size(px(self.typography.size * 0.75))
+                    .text_color(theme.marker)
+                    .child(label)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.toggle_fold(&key, cx);
+                        }),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// Opens or closes the fold named `key`. Folding with the caret inside
+    /// moves the caret to the fold's title.
+    pub(crate) fn toggle_fold(&mut self, key: &str, cx: &mut Context<Self>) {
+        let Some((title, fold)) = self
+            .snapshot
+            .folds
+            .iter()
+            .find(|(_, fold)| fold.key == key)
+            .map(|(line, fold)| (*line, fold.clone()))
+        else {
+            return;
+        };
+        let folded = !fold.folded;
+        self.fold_overrides.insert(key.to_owned(), folded);
+        let head_line = self.snapshot.analysis.lines.line_of(self.head());
+        if folded && fold.body.contains(&head_line) {
+            let end = self.snapshot.analysis.lines.range(title).end;
+            self.move_to(end, cx);
+            return;
+        }
+        self.refresh();
+        cx.notify();
     }
 
     /// The matches that touch `line`.

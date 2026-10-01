@@ -282,6 +282,65 @@ pub fn toc_blocks(analysis: &Analysis, text: &str) -> Vec<Range<usize>> {
     found
 }
 
+/// A block that folds: its title line, the lines it hides, whether it
+/// starts folded, and a key that names it across edits (its title line).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Fold {
+    pub title: usize,
+    pub body: Range<usize>,
+    pub folded: bool,
+    pub key: String,
+}
+
+/// The blocks that fold: callouts written to fold (Obsidian's `-` and `+`,
+/// MkDocs' `???`, VitePress' `details`) and HTML `<details>` with their
+/// `<summary>`.
+pub fn folds(analysis: &Analysis, text: &str) -> Vec<Fold> {
+    let line = |ix: usize| text[analysis.lines.range(ix)].trim_end();
+    let mut found: Vec<Fold> = crate::callouts::callouts(text)
+        .into_iter()
+        .filter_map(|callout| {
+            let folded = callout.folded?;
+            let title = callout.lines.start;
+            (callout.lines.end > title + 1).then(|| Fold {
+                title,
+                body: title + 1..callout.lines.end,
+                folded,
+                key: line(title).to_owned(),
+            })
+        })
+        .collect();
+    let count = analysis.line_count();
+    for start in 0..count {
+        let opening = line(start).trim_start().to_ascii_lowercase();
+        if !(opening.starts_with("<details") && opening.ends_with('>'))
+            || matches!(
+                analysis.info(start).kind,
+                LineKind::Code | LineKind::CodeFence { .. }
+            )
+        {
+            continue;
+        }
+        let Some(close) = (start + 1..count).find(|&ix| line(ix).trim() == "</details>") else {
+            continue;
+        };
+        // The title is the `<summary>` line, else the `<details>` line.
+        let title = (start + 1..close)
+            .find(|&ix| line(ix).trim_start().starts_with("<summary"))
+            .unwrap_or(start);
+        if close > title {
+            found.push(Fold {
+                title,
+                body: title + 1..close + 1,
+                folded: !opening.contains(" open"),
+                key: line(title).to_owned(),
+            });
+        }
+    }
+    found.sort_by_key(|fold| fold.title);
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,5 +492,33 @@ mod tests {
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].language, DiagramLanguage::Graphviz);
         assert_eq!(blocks[0].source, "digraph { a -> b }");
+    }
+
+    #[test]
+    fn foldable_callouts_and_details_fold() {
+        let fold = |text: &str| folds(&analyze(text), text);
+        assert_eq!(
+            fold("> [!faq]- Why\n> a\n> b\n"),
+            [Fold {
+                title: 0,
+                body: 1..3,
+                folded: true,
+                key: "> [!faq]- Why".into()
+            }]
+        );
+        assert_eq!(fold("???+ note\n    x\n")[0].body, 1..2);
+        assert!(!fold("???+ note\n    x\n")[0].folded);
+        assert_eq!(
+            fold("::: details More\nx\n:::\n")[0].body,
+            1..3,
+            "the closing fence folds too"
+        );
+        let details = fold("<details>\n<summary>More</summary>\n\nHidden\n\n</details>\n");
+        assert_eq!(
+            (details[0].title, details[0].body.clone(), details[0].folded),
+            (1, 2..6, true)
+        );
+        assert!(!fold("<details open>\n<summary>More</summary>\nx\n</details>\n")[0].folded);
+        assert!(fold("> [!note] Plain\n> x\n").is_empty(), "not foldable");
     }
 }
