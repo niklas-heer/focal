@@ -41,10 +41,10 @@ jobs:
       PR: ${{ github.event.workflow_run.pull_requests[0].number }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_branch }}
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v4
       - uses: Swatinem/rust-cache@v2
       - uses: anthropics/claude-code-action@v1
         with:
