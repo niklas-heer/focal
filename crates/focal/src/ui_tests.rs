@@ -1370,3 +1370,79 @@ fn copy_as_html_copies_the_selection_as_html_and_markdown(cx: &mut TestAppContex
     assert!(!html.contains("Not this"), "{html}");
     assert_eq!(plain, "Keep **this** part.");
 }
+
+// ---- Drafts ----------------------------------------------------------------------
+
+fn drafts_folder(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("focal-drafts-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn drafts_in(dir: &std::path::Path) -> Vec<String> {
+    let mut texts: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| std::fs::read_to_string(entry.path()).unwrap())
+        .collect();
+    texts.sort();
+    texts
+}
+
+#[gpui_kit::test]
+fn untitled_text_is_kept_as_a_draft_until_saved(cx: &mut TestAppContext) {
+    let dir = drafts_folder("kept");
+    let (window, _) = open_editor(cx, "");
+    cx.update(|cx| cx.set_global(crate::drafts::Drafts::in_dir(dir.clone())));
+    act(cx, window, |window, cx| window.input("a draft", cx));
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    cx.run_until_parked();
+    assert_eq!(drafts_in(&dir), ["a draft"]);
+
+    let saved = dir.with_extension("saved.md");
+    act(cx, window, |window, cx| window.press("cmd-s", cx));
+    cx.simulate_new_path_selection(|_| Some(saved.clone()));
+    cx.run_until_parked();
+    assert_eq!(std::fs::read_to_string(&saved).unwrap(), "a draft");
+    assert!(drafts_in(&dir).is_empty(), "the draft goes once saved");
+}
+
+#[gpui_kit::test]
+fn emptied_untitled_text_leaves_no_draft(cx: &mut TestAppContext) {
+    let dir = drafts_folder("emptied");
+    let (window, _) = open_editor(cx, "");
+    cx.update(|cx| cx.set_global(crate::drafts::Drafts::in_dir(dir.clone())));
+    act(cx, window, |window, cx| window.input("x", cx));
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    cx.run_until_parked();
+    act(cx, window, |window, cx| window.press("backspace", cx));
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    cx.run_until_parked();
+    assert!(drafts_in(&dir).is_empty());
+}
+
+#[gpui_kit::test]
+fn drafts_reopen_as_unsaved_untitled_documents(cx: &mut TestAppContext) {
+    let dir = drafts_folder("restore");
+    std::fs::write(dir.join("Untitled 1.md"), "left over").unwrap();
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        editor::bind_keys(cx);
+        cx.set_global(Settings::default());
+        crate::windows::init(cx);
+        cx.set_global(crate::drafts::Drafts::in_dir(dir.clone()));
+        crate::drafts::restore(cx);
+    });
+    cx.run_until_parked();
+    let workspaces = cx.update(|cx| crate::windows::workspaces(cx));
+    assert_eq!(workspaces.len(), 1);
+    workspaces[0].read_with(cx, |w, cx| {
+        let editor = w.editor().read(cx);
+        assert_eq!(editor.text(), "left over");
+        assert!(editor.asks_before_closing(), "a restored draft is unsaved");
+    });
+}

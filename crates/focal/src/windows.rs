@@ -77,14 +77,8 @@ fn open_panel(cx: &mut App) {
 /// Saves every document and quits, first asking when untitled documents
 /// have unsaved text.
 pub fn quit(cx: &mut App) {
-    let workspaces: Vec<_> = cx
-        .global::<Windows>()
-        .open
-        .iter()
-        .filter_map(|(_, workspace)| workspace.upgrade())
-        .collect();
     let mut unsaved = 0;
-    for workspace in workspaces {
+    for workspace in workspaces(cx) {
         let editor = workspace.read(cx).editor().clone();
         editor.update(cx, |editor, cx| {
             editor.save_before_quit(cx);
@@ -97,10 +91,37 @@ pub fn quit(cx: &mut App) {
     }
     cx.spawn(async move |cx| {
         if crate::mac::confirm_discard(unsaved) {
-            cx.update(|cx| cx.quit());
+            cx.update(|cx| {
+                for workspace in workspaces(cx) {
+                    let editor = workspace.read(cx).editor().clone();
+                    editor.update(cx, |editor, _| editor.discard_draft());
+                }
+                cx.quit();
+            });
         }
     })
     .detach();
+}
+
+/// The open windows' workspaces.
+pub fn workspaces(cx: &App) -> Vec<gpui_kit::Entity<Workspace>> {
+    cx.global::<Windows>()
+        .open
+        .iter()
+        .filter_map(|(_, workspace)| workspace.upgrade())
+        .collect()
+}
+
+/// Opens the draft at `path`, whose text is `text`, as an unsaved untitled
+/// document that keeps writing to that draft.
+pub fn open_draft(path: PathBuf, text: String, cx: &mut App) {
+    match open_window(None, Some(text), cx) {
+        Ok((_, workspace)) => {
+            let editor = workspace.read(cx).editor().clone();
+            editor.update(cx, |editor, _| editor.restore_draft(path));
+        }
+        Err(error) => eprintln!("focal: reopening a draft: {error:#}"),
+    }
 }
 
 /// Opens what `request` asks for, or brings forward the window showing it.
@@ -113,7 +134,7 @@ pub fn open(request: Request, mut responder: Option<Responder>, cx: &mut App) {
     let shown = path.as_deref().and_then(|path| showing(path, cx));
     let handle = match shown {
         Some(handle) => Ok(handle),
-        None => open_window(path.clone(), untitled, cx),
+        None => open_window(path.clone(), untitled, cx).map(|(handle, _)| handle),
     };
     let handle = match handle {
         Ok(handle) => handle,
@@ -161,7 +182,7 @@ fn open_window(
     path: Option<PathBuf>,
     untitled: Option<String>,
     cx: &mut App,
-) -> anyhow::Result<AnyWindowHandle> {
+) -> anyhow::Result<(AnyWindowHandle, gpui_kit::Entity<Workspace>)> {
     enum Content {
         Folder(PathBuf),
         File(Document, String),
@@ -205,5 +226,5 @@ fn open_window(
     cx.global_mut::<Windows>()
         .open
         .push((handle, workspace.downgrade()));
-    Ok(handle)
+    Ok((handle, workspace))
 }

@@ -6,6 +6,7 @@ mod bar;
 mod cli_install;
 mod diagram;
 mod document;
+mod drafts;
 mod editor;
 mod export;
 mod find_bar;
@@ -212,8 +213,10 @@ fn run_app(launch: Launch) {
         cli_install::init(cx);
         updates::init(cx);
         recent::init(cx);
+        drafts::init(cx);
         menus::init(cx);
         serve(cx);
+        drafts::restore(cx);
         cx.spawn(async move |cx| {
             while let Ok(urls) = urls_rx.recv().await {
                 let paths = urls.iter().filter_map(|url| instance::file_url_path(url));

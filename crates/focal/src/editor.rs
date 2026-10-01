@@ -400,6 +400,8 @@ pub struct Editor {
     /// shrinks them on the GPU, which drops hairlines (a minus sign in a
     /// superscript); this makes the bitmap match the display's pixels.
     pub(crate) pixel_scale: f32,
+    /// The draft file keeping this untitled document's text, if any.
+    draft: Option<PathBuf>,
     /// What the find bar searches for.
     query: Option<String>,
     /// The query's matches in the current text, and the text version and
@@ -479,6 +481,7 @@ impl Editor {
             link_files: std::sync::Arc::from([]),
             table_source: None,
             pixel_scale: 1.,
+            draft: None,
             query: None,
             found: Rc::default(),
             found_for: None,
@@ -1704,6 +1707,7 @@ impl Editor {
                     this.document.path = Some(path.clone());
                     this.watch_document(cx);
                     this.save_now(cx);
+                    this.discard_draft();
                     window.set_window_title(&this.title());
                     crate::recent::note(&path, cx);
                     if close {
@@ -1741,6 +1745,7 @@ impl Editor {
     fn may_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some(question) = self.close_question() else {
             self.save_now(cx);
+            self.discard_draft();
             return true;
         };
         let title = self.title();
@@ -1756,7 +1761,12 @@ impl Editor {
                         }
                     })
                     .ok(),
-                SaveAnswer::DontSave => cx.update(|window, _| window.remove_window()).ok(),
+                SaveAnswer::DontSave => this
+                    .update_in(cx, |this, window, _| {
+                        this.discard_draft();
+                        window.remove_window();
+                    })
+                    .ok(),
                 SaveAnswer::Cancel => None,
             };
         })
@@ -1773,6 +1783,7 @@ impl Editor {
     /// Saves what can be saved, as the app quits.
     pub(crate) fn save_before_quit(&mut self, cx: &mut Context<Self>) {
         self.save_now(cx);
+        self.save_draft(cx);
     }
 
     // ---- Find --------------------------------------------------------------
@@ -1867,13 +1878,60 @@ impl Editor {
     // ---- Files -----------------------------------------------------------
 
     fn schedule_save(&mut self, cx: &mut Context<Self>) {
-        if self.document.path.is_none() || self.conflict {
+        if self.document.path.is_none() {
+            self.save_task = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(AUTOSAVE_DELAY).await;
+                this.update(cx, |this, cx| this.save_draft(cx)).ok();
+            }));
+            return;
+        }
+        if self.conflict {
             return;
         }
         self.save_task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(AUTOSAVE_DELAY).await;
             this.update(cx, |this, cx| this.save_now(cx)).ok();
         }));
+    }
+
+    /// Keeps an untitled document's unsaved text in its draft, or removes
+    /// the draft once there is nothing left to keep.
+    fn save_draft(&mut self, cx: &mut Context<Self>) {
+        self.save_task = None;
+        if self.document.path.is_some() {
+            return;
+        }
+        if !self.asks_before_closing() {
+            self.discard_draft();
+            return;
+        }
+        let drafts = cx
+            .try_global::<crate::drafts::Drafts>()
+            .cloned()
+            .unwrap_or_default();
+        if self.draft.is_none() {
+            self.draft = drafts.new_path();
+        }
+        if let Some(draft) = &self.draft
+            && let Err(error) = crate::drafts::write(draft, self.buffer.text())
+        {
+            self.error = Some(format!("Could not keep a draft: {error:#}"));
+            cx.notify();
+        }
+    }
+
+    /// Removes this document's draft: its text was saved or discarded.
+    pub(crate) fn discard_draft(&mut self) {
+        if let Some(draft) = self.draft.take() {
+            crate::drafts::remove(&draft);
+        }
+    }
+
+    /// Continues the draft at `path`, as unsaved text.
+    pub(crate) fn restore_draft(&mut self, path: PathBuf) {
+        self.draft = Some(path);
+        // No file holds this text yet, whatever the buffer's version.
+        self.document.saved_version = u64::MAX;
     }
 
     fn save_now(&mut self, cx: &mut Context<Self>) {
