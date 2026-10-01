@@ -39,6 +39,8 @@ impl InlineStyle {
     pub const MISSPELLED: Self = Self(1 << 16);
     /// A tag such as `#idea` or `#project/focal` (Obsidian, Bear).
     pub const TAG: Self = Self(1 << 17);
+    /// Words the grammar checker has a suggestion for.
+    pub const GRAMMAR: Self = Self(1 << 18);
 
     pub const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0 && other.0 != 0

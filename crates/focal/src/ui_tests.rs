@@ -1610,3 +1610,82 @@ fn an_html_table_draws_as_a_grid_until_the_caret_enters(cx: &mut TestAppContext)
         );
     });
 }
+
+#[gpui_kit::test]
+fn grammar_issues_are_found_in_prose_and_can_be_turned_off(cx: &mut TestAppContext) {
+    let (_, editor) = open_editor(cx, "I has a apple.\n\n`I has a apple.`\n");
+    editor.update(cx, |editor, _| {
+        let issues = editor.grammar_issues(0, false);
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.corrections.contains(&"an".to_owned())),
+            "{issues:?}"
+        );
+        assert!(
+            editor.grammar_issues(2, false).is_empty(),
+            "code is not prose"
+        );
+        editor.check_grammar = false;
+        assert!(editor.grammar_issues(0, false).is_empty());
+    });
+}
+
+/// Types `typed` at the end of `text` with automatic correction on or off.
+fn type_with_correction(cx: &mut TestAppContext, text: &str, typed: &str, on: bool) -> String {
+    let (window, editor) = open_editor(cx, text);
+    editor.update(cx, |editor, _| editor.correct_spelling = on);
+    act(cx, window, |window, cx| {
+        window.press("cmd-down", cx);
+        for ch in typed.chars() {
+            window.input(&ch.to_string(), cx);
+        }
+    });
+    editor.read_with(cx, |editor, _| editor.text().to_owned())
+}
+
+#[gpui_kit::test]
+fn a_misspelled_word_is_corrected_when_it_is_finished(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "I saw");
+    editor.update(cx, |editor, _| editor.correct_spelling = true);
+    act(cx, window, |window, cx| {
+        window.press("cmd-down", cx);
+        for ch in " teh ".chars() {
+            window.input(&ch.to_string(), cx);
+        }
+    });
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.text(), "I saw the ");
+        assert_eq!(editor.selection(), 10..10);
+    });
+    act(cx, window, |window, cx| {
+        window.press("cmd-z", cx);
+    });
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.text(),
+            "I saw teh ",
+            "undo takes the correction back"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn words_are_left_alone_without_correction_in_code_and_urls(cx: &mut TestAppContext) {
+    assert_eq!(
+        type_with_correction(cx, "I saw", " teh ", false),
+        "I saw teh "
+    );
+    assert_eq!(
+        type_with_correction(cx, "```\nlet", " teh ", true),
+        "```\nlet teh "
+    );
+    assert_eq!(
+        type_with_correction(cx, "See https://example.com/teh", ".", true),
+        "See https://example.com/teh."
+    );
+    assert_eq!(
+        type_with_correction(cx, "I saw", " Teh,", true),
+        "I saw The,"
+    );
+}

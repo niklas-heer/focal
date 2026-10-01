@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use gpui_kit::component::radio::{Radio, RadioGroup};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::theme::Theme;
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyWindowHandle, App, AppContext as _, BorrowAppContext as _, Bounds, Context, FocusHandle,
     Global, InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Render,
@@ -59,6 +60,7 @@ pub enum ColumnWidth {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct Settings {
     pub focus_unit: FocusUnit,
     /// Keep the caret's line vertically centered in focus mode.
@@ -68,6 +70,11 @@ pub struct Settings {
     pub column_width: ColumnWidth,
     /// Let a release build look for updates by itself.
     pub check_updates: bool,
+    /// Underline what Apple's grammar checker has a suggestion for.
+    pub check_grammar: bool,
+    /// Correct a misspelled word when it is finished, if macOS's own
+    /// "Correct spelling automatically" is on too.
+    pub correct_spelling: bool,
 }
 
 impl Default for Settings {
@@ -79,6 +86,8 @@ impl Default for Settings {
             text_size: TextSize::default(),
             column_width: ColumnWidth::default(),
             check_updates: true,
+            check_grammar: true,
+            correct_spelling: true,
         }
     }
 }
@@ -160,7 +169,7 @@ fn open_window(cx: &mut App) {
     {
         return;
     }
-    let bounds = Bounds::centered(None, size(px(460.), px(660.)), cx);
+    let bounds = Bounds::centered(None, size(px(460.), px(760.)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions {
@@ -246,6 +255,41 @@ fn tool_row(tool: &crate::diagram::Tool, theme: &Colors) -> impl IntoElement + u
         )
 }
 
+/// The switches for grammar checking and automatic correction.
+fn writing(settings: &Settings, theme: &Colors) -> impl IntoElement + use<> {
+    let hint = theme.marker;
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(10.))
+        .child(
+            Switch::new("check-grammar")
+                .label("Check grammar as you type")
+                .checked(settings.check_grammar)
+                .on_click(|checked, _, cx| {
+                    let checked = *checked;
+                    update(cx, |settings| settings.check_grammar = checked);
+                }),
+        )
+        .child(
+            Switch::new("correct-spelling")
+                .label("Correct spelling automatically")
+                .checked(settings.correct_spelling)
+                .on_click(|checked, _, cx| {
+                    let checked = *checked;
+                    update(cx, |settings| settings.correct_spelling = checked);
+                }),
+        )
+        .when(!crate::spell::system_corrects_spelling(), move |d| {
+            d.child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(hint)
+                    .child("Turned off for every app in System Settings › Keyboard › Text Input."),
+            )
+        })
+}
+
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Colors::for_appearance(window.appearance());
@@ -314,6 +358,8 @@ impl Render for SettingsView {
                 settings.focus_unit,
                 |s, v| s.focus_unit = v,
             ))
+            .child(heading("WRITING"))
+            .child(writing(&settings, &theme))
             .child(heading("UPDATES"))
             .child(
                 Switch::new("check-updates")
@@ -364,6 +410,8 @@ mod tests {
             text_size: TextSize::Large,
             column_width: ColumnWidth::Wide,
             check_updates: false,
+            check_grammar: false,
+            correct_spelling: false,
         };
         settings.save_to(&path).unwrap();
         assert_eq!(Settings::load_from(&path), settings);

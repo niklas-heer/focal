@@ -39,7 +39,7 @@ use crate::accessibility::{A11yDocument, A11ySource, RunIds};
 use crate::document::{self, Document, Stamp};
 use crate::mac::{CloseQuestion, SaveAnswer};
 use crate::settings::{FocusUnit, Settings};
-use crate::spell::SpellChecker;
+use crate::spell::{GrammarIssue, SpellChecker};
 use crate::theme::{BOLD_PROSE_FONT, DIMMED, MONO_FONT, PROSE_FONT, Theme, Typography};
 
 actions!(
@@ -381,6 +381,12 @@ pub struct Editor {
     a11y_ids: RunIds,
     /// Misspelled display ranges per line text.
     spell_cache: RefCell<std::collections::HashMap<String, Rc<[Range<usize>]>>>,
+    /// Grammar issues per line text, in display ranges.
+    grammar_cache: RefCell<HashMap<String, Rc<[GrammarIssue]>>>,
+    pub(crate) check_grammar: bool,
+    /// Correct misspelled words as they are finished (also needs the
+    /// system's switch).
+    pub(crate) correct_spelling: bool,
     /// Syntax highlights per code block, by language, content hash and appearance.
     highlights: RefCell<HighlightCache>,
     save_task: Option<Task<()>>,
@@ -443,16 +449,8 @@ impl Editor {
         cx.observe_window_appearance(window, |_, _, cx| cx.notify())
             .detach();
         let settings = cx.try_global::<Settings>().cloned().unwrap_or_default();
-        cx.observe_global::<Settings>(|this, cx| {
-            let settings = cx.global::<Settings>();
-            this.focus_unit = settings.focus_unit;
-            this.typography = Typography::new(settings);
-            this.typewriter = settings.typewriter;
-            this.refresh();
-            this.remeasure();
-            cx.notify();
-        })
-        .detach();
+        cx.observe_global::<Settings>(Self::settings_changed)
+            .detach();
         let fold_overrides = remembered_folds(&document, cx);
         let mut editor = Self {
             focus_handle: cx.focus_handle(),
@@ -483,6 +481,9 @@ impl Editor {
             spell: RefCell::new(SpellChecker::new()),
             a11y_ids: RunIds::default(),
             spell_cache: RefCell::default(),
+            grammar_cache: RefCell::default(),
+            check_grammar: settings.check_grammar,
+            correct_spelling: settings.correct_spelling && crate::spell::system_corrects_spelling(),
             highlights: RefCell::default(),
             save_task: None,
             watch: None,
@@ -2476,19 +2477,59 @@ impl Editor {
                 .or_insert_with(|| self.spell.borrow().misspellings(&view.text).into())
                 .clone()
         };
+        let markable = self.markable(line, view, hide_at_caret);
+        found
+            .iter()
+            .filter(|word| markable(word))
+            .cloned()
+            .collect()
+    }
+
+    /// Whether a display range found by a checker is marked: it lies in
+    /// prose, and, when `hide_at_caret`, the caret is not in it.
+    fn markable(
+        &self,
+        line: usize,
+        view: &LineView,
+        hide_at_caret: bool,
+    ) -> impl Fn(&Range<usize>) -> bool + use<> {
         let prose = prose_ranges(view);
         let head = self.head();
         let line_range = self.snapshot.analysis.content_range(line);
         let caret = (hide_at_caret && line_range.start <= head && head <= line_range.end)
             .then(|| view.map.to_display(head));
+        move |range| {
+            prose
+                .iter()
+                .any(|p| p.start <= range.start && range.end <= p.end)
+                && caret.is_none_or(|at| at < range.start || at > range.end)
+        }
+    }
+
+    /// The grammar issues on `line` that are underlined, in display ranges.
+    pub(crate) fn grammar_issues(&self, line: usize, hide_at_caret: bool) -> Vec<GrammarIssue> {
+        let view = &self.snapshot.views[line];
+        let kind = &self.snapshot.analysis.info(line).kind;
+        if !self.check_grammar
+            || !matches!(kind, LineKind::Text | LineKind::Heading(_))
+            || view.text.trim().is_empty()
+        {
+            return Vec::new();
+        }
+        let found = {
+            let mut cache = self.grammar_cache.borrow_mut();
+            if cache.len() > SPELL_CACHE_LIMIT {
+                cache.clear();
+            }
+            cache
+                .entry(view.text.clone())
+                .or_insert_with(|| self.spell.borrow().grammar(&view.text).into())
+                .clone()
+        };
+        let markable = self.markable(line, view, hide_at_caret);
         found
             .iter()
-            .filter(|word| {
-                prose
-                    .iter()
-                    .any(|p| p.start <= word.start && word.end <= p.end)
-            })
-            .filter(|word| caret.is_none_or(|at| at < word.start || at > word.end))
+            .filter(|issue| markable(&issue.range))
             .cloned()
             .collect()
     }
@@ -2509,6 +2550,13 @@ impl Editor {
         let at = view.map.to_display(offset);
         let words = self.misspelled(line, &view, &kind, false);
         let Some(word) = words.iter().find(|w| w.start <= at && at <= w.end).cloned() else {
+            if let Some(issue) = self
+                .grammar_issues(line, false)
+                .into_iter()
+                .find(|issue| issue.range.start <= at && at <= issue.range.end)
+            {
+                self.grammar_menu(&view, &issue, event.position, window, cx);
+            }
             return;
         };
         let source = view.map.to_source(word.start)..view.map.to_source(word.end);
@@ -2543,6 +2591,108 @@ impl Editor {
             )
             .menu("Learn Spelling", Box::new(LearnSpelling { word: text }))
             .show(event.position, window, cx);
+    }
+
+    fn settings_changed(&mut self, cx: &mut Context<Self>) {
+        let settings = cx.global::<Settings>();
+        self.focus_unit = settings.focus_unit;
+        self.typography = Typography::new(settings);
+        self.typewriter = settings.typewriter;
+        self.check_grammar = settings.check_grammar;
+        self.correct_spelling =
+            settings.correct_spelling && crate::spell::system_corrects_spelling();
+        self.refresh();
+        self.remeasure();
+        cx.notify();
+    }
+
+    /// After `typed` finishes a word, replaces the word with macOS's
+    /// correction when it is misspelled, as an undo step of its own. Only a
+    /// word standing alone in prose is corrected: not code, math, links'
+    /// addresses, paths or identifiers.
+    fn correct_finished_word(&mut self, typed: &str, cx: &mut Context<Self>) {
+        let mut chars = typed.chars();
+        let (Some(boundary), None) = (chars.next(), chars.next()) else {
+            return;
+        };
+        if !self.correct_spelling
+            || !self.selection.is_empty()
+            || !(boundary.is_whitespace() || ".,;:!?)".contains(boundary))
+        {
+            return;
+        }
+        let end = self.selection.start - typed.len();
+        let line = self.snapshot.analysis.lines.line_of(end);
+        let line_start = self.snapshot.analysis.content_range(line).start;
+        let before = &self.text()[line_start.min(end)..end];
+        let Some(start) = before
+            .char_indices()
+            .rev()
+            .take_while(|&(_, c)| c.is_alphabetic() || c == '\'')
+            .last()
+            .map(|(ix, _)| line_start + ix)
+        else {
+            return;
+        };
+        let start = start
+            + (self.text()[start..end].len()
+                - self.text()[start..end].trim_start_matches('\'').len());
+        let standalone = self.text()[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|c| start == line_start || c.is_whitespace() || "([\"*_~“‘".contains(c));
+        if start >= end || !standalone {
+            return;
+        }
+        let view = self.snapshot.views[line].clone();
+        let kind = self.snapshot.analysis.info(line).kind.clone();
+        let word = view.map.to_display(start)..view.map.to_display(end);
+        if !matches!(kind, LineKind::Text | LineKind::Heading(_))
+            || !self.markable(line, &view, false)(&word)
+        {
+            return;
+        }
+        // Asked directly: the checker corrects words its spelling check, set
+        // to another language, may let pass.
+        let Some(correction) = self.spell.borrow().correction(&view.text, word) else {
+            return;
+        };
+        let caret = self.selection.start - (end - start) + correction.len();
+        self.edit(start..end, &correction, caret..caret, EditKind::Other, cx);
+    }
+
+    /// The context menu for a grammar issue: what the checker says, and its
+    /// corrections.
+    fn grammar_menu(
+        &mut self,
+        view: &LineView,
+        issue: &GrammarIssue,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let source = view.map.to_source(issue.range.start)..view.map.to_source(issue.range.end);
+        let text = self.text()[source.clone()].to_owned();
+        self.selection = source.clone();
+        self.reversed = false;
+        self.after_selection(cx);
+        let replace = |replacement: &str| ReplaceWord {
+            range: source.clone(),
+            word: text.clone(),
+            replacement: replacement.to_owned(),
+        };
+        let mut menu = NativeMenu::new().menu_with_disabled(
+            issue.description.clone(),
+            true,
+            Box::new(replace(&text)),
+        );
+        if !issue.corrections.is_empty() {
+            menu = menu.separator();
+        }
+        for correction in issue.corrections.iter().take(6) {
+            menu = menu.menu(correction.clone(), Box::new(replace(correction)));
+        }
+        menu.show(position, window, cx);
     }
 
     fn replace_word(&mut self, action: &ReplaceWord, _: &mut Window, cx: &mut Context<Self>) {
@@ -2732,6 +2882,12 @@ impl Editor {
         }
         let misspelled = self.misspelled(line, &view, &info.kind, true);
         let marked = mark_runs(&view.runs, &misspelled, InlineStyle::MISSPELLED);
+        let grammar: Vec<Range<usize>> = self
+            .grammar_issues(line, true)
+            .into_iter()
+            .map(|issue| issue.range)
+            .collect();
+        let marked = mark_runs(&marked, &grammar, InlineStyle::GRAMMAR);
         let dark = matches!(
             window.appearance(),
             WindowAppearance::Dark | WindowAppearance::VibrantDark
@@ -3242,6 +3398,12 @@ pub(crate) fn text_runs(
                         thickness: px(1.5),
                         wavy: true,
                     })
+                } else if style.contains(InlineStyle::GRAMMAR) {
+                    Some(UnderlineStyle {
+                        color: Some(theme.grammar),
+                        thickness: px(1.5),
+                        wavy: false,
+                    })
                 } else {
                     style.contains(InlineStyle::LINK).then(|| UnderlineStyle {
                         color: Some(theme.link.opacity(0.35)),
@@ -3431,6 +3593,7 @@ impl EntityInputHandler for Editor {
         self.marked = None;
         let caret = range.start + text.len();
         self.edit(range, text, caret..caret, EditKind::Typing, cx);
+        self.correct_finished_word(text, cx);
     }
 
     fn replace_and_mark_text_in_range(
