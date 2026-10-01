@@ -14,8 +14,8 @@ pulldown-cmark = { version = "0.13.4", default-features = false }
 unicode-segmentation = "1.13"
 
 [workspace.lints.rust]
-# Denied everywhere; only `crates/focal/src/updates.rs` allows it (decision
-# "Update Focal with Sparkle through objc2").
+# Denied everywhere but the macOS bridges named in the decision "Allow unsafe
+# code only in named macOS bridges".
 unsafe_code = "deny"
 
 [workspace.lints.clippy]

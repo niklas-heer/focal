@@ -1,0 +1,93 @@
+# When Dependabot's update of a Rust dependency fails the check, Claude
+# fixes the code on the same branch, and the check runs again. A person
+# still reviews and merges the pull request.
+#
+# Needs the repository secret CLAUDE_CODE_OAUTH_TOKEN (`claude
+# setup-token`). The new dependency's build scripts run in this job, which
+# holds that token; only Dependabot's own branches are taken.
+name: Fix dependency update
+
+on:
+  workflow_run:
+    workflows: [Check]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+  id-token: write
+
+concurrency:
+  group: fix-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  fix:
+    # Dependabot's run only: the check this job starts again runs as
+    # github-actions, so a fix that still fails is left for a person.
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.actor.login == 'dependabot[bot]' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      startsWith(github.event.workflow_run.head_branch, 'dependabot/cargo/')
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      BRANCH: ${{ github.event.workflow_run.head_branch }}
+      PR: ${{ github.event.workflow_run.pull_requests[0].number }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_branch }}
+      - uses: jdx/mise-action@v2
+      - uses: Swatinem/rust-cache@v2
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          claude_args: >-
+            --max-turns 300
+            --allowedTools "Bash(cargo:*),Bash(mise:*),Bash(git diff:*),Bash(git log:*),Bash(git status:*),Bash(gh pr view:*),Read,Edit,Write,Glob,Grep,WebFetch"
+          prompt: |
+            This branch is Dependabot's pull request #${{ env.PR }}, which updates
+            Rust dependencies of Focal, a native macOS Markdown editor built on
+            GPUI and GPUI Kit. `mise run check` (rustfmt, Clippy with warnings as
+            errors, and all tests) fails on it.
+
+            Read AGENTS.md first and follow it. Then make `mise run check` pass by
+            adapting Focal's code to the new versions: renamed or moved APIs,
+            changed signatures, new lints. Read the changelogs and the new
+            sources in ~/.cargo/registry when an API changed. Do not hold a
+            dependency back, change its version, or weaken a lint or a test to
+            get green; if that is the only way, stop and explain why.
+
+            Keep the code in the style around it. Do not commit or push; the
+            workflow commits what you change. End with a short summary of what
+            changed and why, for the pull request.
+      - name: Commit the fix
+        id: commit
+        run: |
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(deps): adapt to the updated dependencies"
+          git push origin "HEAD:$BRANCH"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+      - name: Check again
+        if: steps.commit.outputs.changed == 'true'
+        run: gh workflow run check.yml --ref "$BRANCH"
+      - name: Report
+        if: always() && env.PR != ''
+        run: |
+          if [ "${{ steps.commit.outputs.changed }}" = "true" ]; then
+            gh pr comment "$PR" --body "Claude adapted the code to the update and pushed a fix; the check runs again."
+          else
+            gh pr comment "$PR" --body "The check fails and Claude could not fix it here; see the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})."
+          fi

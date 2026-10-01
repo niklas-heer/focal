@@ -1,0 +1,28 @@
+# Format, Clippy and tests on macOS: Focal is built on GPUI's Metal
+# renderer and AppKit, which only build and run there.
+name: Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Lets the dependency fix workflow check its own commits again.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v2
+      # The toolchain comes from rust-toolchain.toml.
+      - uses: Swatinem/rust-cache@v2
+      - run: mise run check

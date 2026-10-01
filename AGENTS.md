@@ -19,14 +19,14 @@ Focal is a native macOS Markdown editor: iA Writer's minimal look with Bear-styl
 
 - Rust (pinned in `rust-toolchain.toml`), a Cargo workspace:
   - `crates/focal-core`: the UI-free editor model. Markdown analysis with `pulldown-cmark`, line display maps, the buffer with undo, Markdown-aware edits, accessibility text chunks. Put logic here and unit-test it.
-  - `crates/focal`: the GPUI app through `gpui-kit` (pinned exactly; it pins `gpui-pre`). The window's root is a `Workspace` (`workspace.rs`) holding the `Editor` (`editor.rs`: text, caret, rendering), the bottom bar (`bar.rs`), folder mode (`folder.rs`, sidebar) and the quick switcher (`switcher.rs`). Tables are drawn in `table_view.rs` and edited through `grid.rs`; settings (`settings.rs`), menus (`menus.rs`), spell checking (`spell.rs`) and accessibility (`accessibility.rs`) have their own modules. The bar, menus and keys dispatch the same editor actions.
+  - `crates/focal`: the GPUI app through `gpui-kit` (pinned exactly; it pins `gpui-pre`). The window's root is a `Workspace` (`workspace.rs`) holding the `Editor` (`editor.rs`: text, caret, rendering), the bottom bar (`bar.rs`), folder mode (`folder.rs`, sidebar) and the quick switcher (`switcher.rs`). Tables are drawn in `table_view.rs` and edited through `grid.rs`; settings (`settings.rs`), menus (`menus.rs`), spelling, grammar and correction (`spell.rs`), printing and PDF (`print.rs`, from `export.rs`'s page for paper) and accessibility (`accessibility.rs`) have their own modules. The bar, menus and keys dispatch the same editor actions.
 - Commands: `mise run build`, `mise run run -- FILE`, `mise run test`, `mise run check` (fmt, Clippy with `-D warnings`, tests), `mise run stress`, `mise run bundle` (ad hoc `build/Focal.app`), `mise run install-app`, `mise run release` (see [RELEASE.md](RELEASE.md)), `mise run clean`.
 - Packaging lives in `packaging/` (`Info.plist`, the icon and its script, the Homebrew cask template) and `scripts/` (`bundle`, `sparkle`, `release`). Notarization and publishing a release are manual steps; never run `scripts/release --notarize` or `gh release create` unasked.
-- `unsafe` code is denied everywhere except `crates/focal/src/updates.rs`, which calls Sparkle through `objc2` (proposed decision); other macOS calls use `objc2`'s safe methods (`mac.rs`).
+- `unsafe` code is denied everywhere except the macOS bridges named in the decision "Allow unsafe code only in named macOS bridges": `updates.rs` (Sparkle), `print.rs` (WebKit printing) and `SpellChecker::check` in `spell.rs`. Other macOS calls use `objc2`'s safe methods (`mac.rs`). A new bridge updates that decision.
 - `FOCAL_TRACE=1` prints timings and the caret per change. `FOCAL_FOREGROUND=1` keeps `focal` in the terminal like `--wait`. `FOCAL_APPEARANCE=light` or `dark` overrides the system appearance for Focal alone, to check both palettes.
 - GPUI pitfalls found so far are listed in [docs/gpui-spike.md](docs/gpui-spike.md); absolutely positioned elements need explicit `top_0()`/`left_0()`.
 - Debug builds are large (several GB); run `mise run clean` when done.
-- CI runs on macOS, because the app links AppKit.
+- CI (`.github/workflows/check.yml`) runs `mise run check` on a macOS runner, because the app links AppKit. Dependabot proposes updates weekly; when one fails the check, `fix-dependency-update.yml` has Claude adapt the code on its branch. Review those commits like any other.
 
 ## Conventions
 

@@ -1,0 +1,35 @@
+# Weekly dependency updates. GPUI Kit (and the GPUI it carries) gets a pull
+# request of its own, since it is the update most likely to need code
+# changes; when its check fails, .github/workflows/fix-dependency-update.yml
+# asks Claude to fix it on the same branch.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      gpui:
+        patterns: ["gpui-kit"]
+      rust:
+        patterns: ["*"]
+        exclude-patterns: ["gpui-kit"]
+    ignore:
+      # Held back on purpose: 0.7.4 and later need an older `futures` than
+      # GPUI's (see crates/focal/Cargo.toml).
+      - dependency-name: svgbob
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      actions:
+        patterns: ["*"]
