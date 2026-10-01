@@ -74,6 +74,8 @@ Built in M6: Sparkle 2.10, as in Keywink and Spokn, with an appcast attached to 
 - **Autosave**, no ⌘S required.
 - **Live reload.** When the file changes on disk and there are no unsaved local edits, Focal reloads quietly and keeps the scroll position. The spike polls the file every second; M1 watches it through FSEvents. When both sides changed, a banner offers "Keep mine" or "Load theirs". Focal never silently overwrites.
 - **Find and replace** (M7): ⌘F opens a find bar seeded with the selected text; matches ignore case (character by character, without full case folding), are highlighted as you type and follow edits. Return and ⇧Return, or ⌘G and ⇧⌘G, step through them and wrap; ⌘G still works after the bar closes. ⌥⌘F adds a replacement field: Replace changes the selected match only when one is selected, Replace All is one undo step.
+- **Go to Heading** (M8): ⇧⌘O lists the headings, indented by level; typing narrows them and Return moves there, with ⌘[ to come back.
+- **Export and copy** (M8): ⇧⌘E writes a standalone HTML page in Focal's typography (light and dark) with math and Mermaid diagrams as SVG, wiki links to the files they open, and relative images kept working when the page is saved elsewhere. ⌥⇧⌘C puts the selection (or the document) on the pasteboard as HTML and as Markdown text. Raw HTML in the document is exported as written.
 - **Exact round-trip.** Line endings (LF or CRLF), the trailing newline and all whitespace are preserved. Files are read and written as UTF-8. The open question of non-UTF-8 input is in section 10.
 
 ### Folder mode
@@ -211,6 +213,7 @@ Built in M4 unless marked otherwise.
 | **M5 — Mermaid** | Done: native rendering with `merman`, cache by source and appearance, island with live preview. |
 | **M6 — Distribution** | Done: `Focal.app` bundle with an icon and Markdown document types, one running instance that `focal` forwards to (with `--wait`), Finder's Open With, "Install Command Line Tool…", Sparkle updates with a setting and a download prompt, About panel, Developer ID signing, and a release script with notarization and a Homebrew cask template. The first public release is still to be published. |
 | **M7 — Everyday editing** | Done: find and replace with a find bar, New, Open… and Open Recent, and asking before untitled text is lost. |
+| **M8 — Outline and sharing** | Done: Go to Heading, Export as HTML…, Copy as HTML. |
 
 Each milestone gets its own implementation plan before work starts.
 
@@ -231,5 +234,5 @@ Each milestone gets its own implementation plan before work starts.
 - Encodings other than UTF-8: refuse, or detect and preserve?
 - Architecture: Apple Silicon only, or universal binaries (Intel)?
 - Whether focus mode should also dim syntax markers and chrome colors, as iA Writer does.
-- Printing and PDF export: wanted, and in which milestone?
+- Printing and PDF export: wanted, and in which milestone? Until decided, an exported HTML page (M8) can be printed or saved as PDF from a browser.
 - Name collision check for "Focal" before any public release.
