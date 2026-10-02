@@ -422,6 +422,8 @@ pub struct Editor {
     link_files: std::sync::Arc<[PathBuf]>,
     /// The document being printed, kept until the next print.
     printing: Option<crate::print::Job>,
+    /// Where Writing Tools' Replace sends new text for this editor.
+    writing_tools: async_channel::Sender<crate::writing_tools::Replacement>,
     /// The table cell being edited, if any.
     pub(crate) grid: Option<crate::grid::GridSession>,
     pub(crate) next_grid_session: u64,
@@ -511,6 +513,7 @@ impl Editor {
             link_root: None,
             link_files: std::sync::Arc::from([]),
             printing: None,
+            writing_tools: Self::listen_to_writing_tools(window, cx),
             table_source: None,
             pixel_scale: 1.,
             draft: None,
@@ -705,6 +708,80 @@ impl Editor {
             }
         })
         .detach();
+    }
+
+    /// Takes text back from Writing Tools' Replace, and stops offering text
+    /// when the editor goes away.
+    fn listen_to_writing_tools(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> async_channel::Sender<crate::writing_tools::Replacement> {
+        let (sender, receiver) = async_channel::unbounded();
+        cx.spawn(async move |this, cx| {
+            while let Ok(replacement) = receiver.recv().await {
+                if this
+                    .update(cx, |this, cx| this.apply_writing_tools(&replacement, cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
+        // Another window's editor may offer its text while this one is in
+        // the background.
+        cx.observe_window_activation(window, |_, _, cx| cx.notify())
+            .detach();
+        let owner = cx.entity_id();
+        cx.on_release(move |_, _| crate::writing_tools::withdraw(owner))
+            .detach();
+        sender
+    }
+
+    /// Offers the selection, or the whole document when nothing is
+    /// selected, to Writing Tools while this editor has the focus.
+    fn offer_to_writing_tools(&self, window: &Window, cx: &Context<Self>) {
+        crate::writing_tools::install();
+        let owner = cx.entity_id();
+        if !(self.focus_handle.is_focused(window) && window.is_window_active()) {
+            crate::writing_tools::withdraw(owner);
+            return;
+        }
+        let range = if self.selection.is_empty() {
+            0..self.text().len()
+        } else {
+            self.selection.clone()
+        };
+        let text = &self.text()[range.clone()];
+        if crate::writing_tools::offers(owner, &range, text) {
+            return;
+        }
+        crate::writing_tools::offer(crate::writing_tools::Target {
+            owner,
+            range,
+            text: text.to_owned(),
+            sender: self.writing_tools.clone(),
+        });
+    }
+
+    /// Puts Writing Tools' new text in place of what it was given, as one
+    /// undo step, selected, unless the text has changed since.
+    fn apply_writing_tools(
+        &mut self,
+        replacement: &crate::writing_tools::Replacement,
+        cx: &mut Context<Self>,
+    ) {
+        if self.text().get(replacement.range.clone()) != Some(replacement.original.as_str()) {
+            return;
+        }
+        let start = replacement.range.start;
+        self.edit(
+            replacement.range.clone(),
+            &replacement.text,
+            start..start + replacement.text.len(),
+            EditKind::Other,
+            cx,
+        );
     }
 
     /// The print job `id`, unless a later print replaced it.
@@ -1255,7 +1332,7 @@ impl Editor {
         self.after_selection(cx);
     }
 
-    fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+    pub(crate) fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         self.select_biased(offset, Bias::Right, cx);
     }
 
@@ -3779,6 +3856,7 @@ impl Render for Editor {
         self.pixel_scale = window.scale_factor() / gpui_kit::SMOOTH_SVG_SCALE_FACTOR;
         self.keep_revealing(window);
         self.keep_centering(window);
+        self.offer_to_writing_tools(window, cx);
         let height = window.viewport_size().height;
         if self.typewriter_active() && self.padded_for != height {
             self.padded_for = height;

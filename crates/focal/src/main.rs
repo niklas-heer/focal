@@ -36,6 +36,7 @@ mod updates;
 mod vega;
 mod windows;
 mod workspace;
+mod writing_tools;
 
 use std::borrow::Cow;
 use std::ffi::OsString;

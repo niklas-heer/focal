@@ -1689,3 +1689,47 @@ fn words_are_left_alone_without_correction_in_code_and_urls(cx: &mut TestAppCont
         "I saw The,"
     );
 }
+
+/// Makes `window` the active one; test windows start without being told.
+fn activate(cx: &mut TestAppContext, window: AnyWindowHandle) {
+    gpui_kit::VisualTestContext::from_window(window, cx).deactivate_window();
+    act(cx, window, |window, _| window.activate_window());
+    cx.run_until_parked();
+    act(cx, window, |_, _| {});
+}
+
+#[gpui_kit::test]
+fn writing_tools_get_the_selection_and_replace_it_as_one_step(cx: &mut TestAppContext) {
+    let text = "Intro.\n\nThis are a sentense.\n";
+    let (window, editor) = open_editor(cx, text);
+    let start = text.find("This").unwrap();
+    let end = text.len() - 1;
+    editor.update(cx, |e, cx| {
+        e.move_to(start, cx);
+        e.select_to(end, cx);
+    });
+    activate(cx, window);
+    assert_eq!(
+        crate::writing_tools::offered_text().as_deref(),
+        Some("This are a sentense.")
+    );
+    assert!(crate::writing_tools::replace("This is a sentence.".into()));
+    cx.run_until_parked();
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.text(), "Intro.\n\nThis is a sentence.\n");
+    });
+    act(cx, window, |window, cx| {
+        window.press("cmd-z", cx);
+    });
+    editor.read_with(cx, |e, _| assert_eq!(e.text(), text, "one undo step"));
+}
+
+#[gpui_kit::test]
+fn writing_tools_take_the_whole_document_without_a_selection(cx: &mut TestAppContext) {
+    let (window, _) = open_editor(cx, "Some text.\n");
+    activate(cx, window);
+    assert_eq!(
+        crate::writing_tools::offered_text().as_deref(),
+        Some("Some text.\n")
+    );
+}

@@ -17,6 +17,7 @@ The workspace keeps `unsafe_code = "deny"`. Code may allow `unsafe` only where i
 - `crates/focal/src/updates.rs` (module): Sparkle, loaded at runtime.
 - `crates/focal/src/print.rs` (module): WebKit and AppKit printing.
 - `SpellChecker::check` in `crates/focal/src/spell.rs` (one function): `NSSpellChecker`'s `checkString:range:types:…`, which grammar, spelling and correction share.
+- `crates/focal/src/writing_tools.rs` (module, added 2026-10-02 when Niklas chose Writing Tools in panel mode): adds the Services-requestor methods (`validRequestorForSendType:returnType:`, `writeSelectionToPasteboard:types:`, `readSelectionFromPasteboard:`) to GPUI's `GPUIView` class at runtime, so Apple's Writing Tools can read and replace the editor's text.
 
 Adding a place means updating this record.
 
