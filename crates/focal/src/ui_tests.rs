@@ -1758,3 +1758,21 @@ fn revealing_syntax_in_view_does_not_scroll(cx: &mut TestAppContext) {
         );
     });
 }
+
+#[gpui_kit::test]
+fn moving_to_the_end_of_a_short_document_does_not_scroll(cx: &mut TestAppContext) {
+    let text = format!("# Title\n\n{}", "A line of text.\n\n".repeat(8));
+    let (window, editor) = open_editor(cx, &text);
+    for _ in 0..3 {
+        act(cx, window, |_, _| {});
+    }
+    editor.update(cx, |e, cx| e.move_to(text.len(), cx));
+    for _ in 0..5 {
+        act(cx, window, |_, _| {});
+    }
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.scroll_top(), (0, px(0.)), "the caret was already in view");
+        let caret = e.head_row_bounds().expect("the last row is drawn");
+        assert!(caret.top() >= px(0.));
+    });
+}

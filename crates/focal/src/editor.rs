@@ -158,6 +158,9 @@ pub struct LearnSpelling {
 }
 
 pub(crate) const CONTEXT: &str = "FocalEditor";
+/// Room below the last line, so the end of a document is not at the
+/// window's edge.
+const END_PADDING: Pixels = px(240.);
 /// How long printing waits for a page and its images to load.
 const PRINT_LOAD_LIMIT: Duration = Duration::from_secs(20);
 /// How long a finished print keeps its web view, for WebKit to finish.
@@ -1283,7 +1286,24 @@ impl Editor {
     fn reveal_caret(&mut self) {
         self.reveal_frames = 4;
         self.center_frames = 4;
-        self.list.scroll_to_reveal_item(self.head_row());
+        let row = self.head_row();
+        if self.row_in_view(row) != Some(true) {
+            self.list.scroll_to_reveal_item(row);
+        }
+    }
+
+    /// Whether row `row`'s text was in view in the last frame, leaving out
+    /// the room below the last row; `None` when it was not laid out.
+    fn row_in_view(&self, row: usize) -> Option<bool> {
+        let bounds = self.list.bounds_for_item(row)?;
+        let viewport = self.list.viewport_bounds();
+        let last = row + 1 == self.snapshot.rows.len();
+        let bottom = if last && !self.typewriter_active() {
+            bounds.bottom() - END_PADDING
+        } else {
+            bounds.bottom()
+        };
+        Some(bounds.top() >= viewport.top() && bottom <= viewport.bottom())
     }
 
     /// Reveals the caret again once the rows the last reveal scrolled to
@@ -1294,15 +1314,12 @@ impl Editor {
         }
         self.reveal_frames -= 1;
         let row = self.head_row();
-        let viewport = self.list.viewport_bounds();
-        match self.list.bounds_for_item(row) {
-            Some(bounds)
-                if bounds.top() >= viewport.top() && bounds.bottom() <= viewport.bottom() =>
-            {
+        match self.row_in_view(row) {
+            Some(true) => {
                 self.reveal_frames = 0;
                 return;
             }
-            Some(_) => self.list.scroll_to_reveal_item(row),
+            Some(false) => self.list.scroll_to_reveal_item(row),
             // In view in the last frame, but changed since (its syntax was
             // revealed or hidden): it is laid out again in this frame, so
             // look again in the next one rather than scrolling it away.
@@ -3013,7 +3030,7 @@ impl Editor {
                 d.pb(if self.typewriter_active() {
                     window.viewport_size().height / 2.
                 } else {
-                    px(240.)
+                    END_PADDING
                 })
             })
             .child(
