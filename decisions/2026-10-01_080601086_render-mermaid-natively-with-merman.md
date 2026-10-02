@@ -3,7 +3,7 @@ schema_version = 1
 id = "01M3V7ZEKYBDB9KVSFQE9DRM3Z"
 title = "Render Mermaid natively with merman"
 date = "2026-10-01"
-status = "proposed"
+status = "accepted"
 tags = ["rendering", "mermaid"]
 supersedes = []
 superseded_by = []
@@ -15,6 +15,8 @@ related_to = []
 Focal draws Mermaid diagrams natively with `merman` 0.7.0, a headless Rust implementation of Mermaid (parsing, layout and SVG) that targets Mermaid 11.15. A fenced `mermaid` block is an island: its SVG, themed from Focal's palette for the current appearance through `merman`'s host theme and its resvg-safe output, is drawn by GPUI and cached by source and palette; rendering runs on a background thread. The design's proposed hidden `WKWebView` is not needed.
 
 Proposed on 2026-10-01 while building Milestone 5; the design marked the implementation as proposed and Niklas has not chosen.
+
+Accepted by Niklas on 2026-10-02: "merman yes accepted".
 
 ## Context
 

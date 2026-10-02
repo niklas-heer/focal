@@ -3,7 +3,7 @@ schema_version = 1
 id = "01M3WG8XK8YJR3Z2BG1NFDD442"
 title = "Check on macOS runners and let Claude fix dependency updates"
 date = "2026-10-01"
-status = "proposed"
+status = "accepted"
 tags = ["ci", "dependencies"]
 supersedes = []
 superseded_by = []
@@ -17,6 +17,8 @@ Focal is checked on GitHub Actions' macOS runners: `.github/workflows/check.yml`
 Dependencies are kept current by Dependabot (`.github/dependabot.yml`): Rust crates weekly, GPUI Kit in a pull request of its own and everything else grouped in one, GitHub Actions monthly. When Dependabot's Rust update fails the check, `.github/workflows/fix-dependency-update.yml` runs Claude Code (`anthropics/claude-code-action`) on the same branch to adapt Focal's code, commits what it changed, and starts the check again. A person reviews and merges every update.
 
 Niklas asked on 2026-10-01 for Dependabot or similar, with an agentic session fixing the bump pull requests; the setup around it is proposed.
+
+Accepted by Niklas on 2026-10-02: following the recommendation ("The rest yes let's follow your recommendation").
 
 ## Context
 

@@ -3,7 +3,7 @@ schema_version = 1
 id = "01M3WG5NPAHN0J0ZV95T94QM9Y"
 title = "Allow unsafe code only in named macOS bridges"
 date = "2026-10-01"
-status = "proposed"
+status = "accepted"
 tags = ["architecture", "safety"]
 supersedes = []
 superseded_by = []
@@ -21,6 +21,8 @@ The workspace keeps `unsafe_code = "deny"`. Code may allow `unsafe` only where i
 Adding a place means updating this record.
 
 Proposed on 2026-10-01 while building Milestone 12. It widens the rule in "Update Focal with Sparkle through objc2", which named `updates.rs` as the only exception.
+
+Accepted by Niklas on 2026-10-02: following the recommendation ("The rest yes let's follow your recommendation").
 
 ## Context
 

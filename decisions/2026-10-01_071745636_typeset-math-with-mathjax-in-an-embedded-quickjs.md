@@ -3,7 +3,7 @@ schema_version = 1
 id = "01M3V57314GE9TGXBX0KETEAM7"
 title = "Typeset math with MathJax in an embedded QuickJS"
 date = "2026-10-01"
-status = "proposed"
+status = "accepted"
 tags = ["rendering", "math"]
 supersedes = []
 superseded_by = []
@@ -15,6 +15,8 @@ related_to = []
 Focal typesets display math (`$$ … $$` blocks) with MathJax 3.2.2, TeX input and SVG output, running in an embedded QuickJS engine (`rquickjs`). The bundle is built from a pinned `mathjax-full` by `scripts/mathjax` and vendored as `assets/mathjax/mathjax.js` (1.8 MB, Apache License 2.0). One worker thread owns the engine and loads MathJax on first use; GPUI draws the resulting SVG, colored with the text color and rasterized at three times its drawn size. Inline math stays styled source within its line.
 
 Proposed on 2026-10-01 while building Milestone 4; the design left the renderer open (section 10) and Niklas has not chosen.
+
+Accepted by Niklas on 2026-10-02: "yes to mathjax".
 
 ## Context
 

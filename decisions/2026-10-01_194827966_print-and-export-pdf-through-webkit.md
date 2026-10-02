@@ -3,7 +3,7 @@ schema_version = 1
 id = "01M3WG5NNYPNXAMJ1EYMYN8RGV"
 title = "Print and export PDF through WebKit"
 date = "2026-10-01"
-status = "proposed"
+status = "accepted"
 tags = ["output", "printing"]
 supersedes = []
 superseded_by = []
@@ -15,6 +15,8 @@ related_to = []
 Focal prints and exports PDF through WebKit. The document becomes a page for paper (`export::write_print_page`: the same HTML as Export as HTML, light whatever the appearance, `@page` margins, folded callouts open, the iA Writer typefaces beside it, a `<base>` at the document's folder), an offscreen `WKWebView` loads it, and AppKit's print system takes it from there: Print… (⌥⌘P) shows the print panel as a sheet with a preview; Export as PDF… writes the file without asking, through the same print operation with the save disposition.
 
 Proposed on 2026-10-01 while building Milestone 12; Niklas asked for PDF export and printing but did not choose the mechanism.
+
+Accepted by Niklas on 2026-10-02: following the recommendation ("The rest yes let's follow your recommendation").
 
 ## Context
 

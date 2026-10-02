@@ -3,7 +3,7 @@ schema_version = 1
 id = "01M3T85F3W9NFB7RZBP9FPV23R"
 title = "Update Focal with Sparkle through objc2"
 date = "2026-09-30"
-status = "proposed"
+status = "accepted"
 tags = ["distribution", "updates"]
 supersedes = []
 superseded_by = []
@@ -17,6 +17,8 @@ Focal updates itself with Sparkle 2, the updater Keywink and Spokn use. Release 
 Calling Sparkle's Objective-C API from Rust needs `unsafe` (`msg_send!` and `NSBundle::load`). The workspace lint moves from `unsafe_code = "forbid"` to `"deny"`, and only `crates/focal/src/updates.rs` allows it, with a `SAFETY` comment on every block.
 
 Proposed on 2026-10-01 while building Milestone 6; Niklas asked for self-updates with a setting and a prompt ("Hey, there's a new update. Do you want to download it?") but did not choose the mechanism.
+
+Accepted by Niklas on 2026-10-02: "Use Sparkle".
 
 ## Context
 
