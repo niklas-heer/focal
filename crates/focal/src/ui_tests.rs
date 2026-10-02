@@ -1733,3 +1733,28 @@ fn writing_tools_take_the_whole_document_without_a_selection(cx: &mut TestAppCon
         Some("Some text.\n")
     );
 }
+
+#[gpui_kit::test]
+fn revealing_syntax_in_view_does_not_scroll(cx: &mut TestAppContext) {
+    // Longer than the window, so that it can scroll.
+    let text = format!(
+        "# Title\n\nSome **bold** words in a paragraph.\n\n{}",
+        "More text.\n\n".repeat(80)
+    );
+    let text = text.as_str();
+    let (window, editor) = open_editor(cx, text);
+    for _ in 0..3 {
+        act(cx, window, |_, _| {});
+    }
+    editor.update(cx, |e, cx| e.move_to(text.find("bold").unwrap(), cx));
+    for _ in 0..5 {
+        act(cx, window, |_, _| {});
+    }
+    editor.read_with(cx, |e, _| {
+        assert_eq!(
+            e.scroll_top(),
+            (0, px(0.)),
+            "the document stays where it was"
+        );
+    });
+}

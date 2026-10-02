@@ -1303,6 +1303,10 @@ impl Editor {
                 return;
             }
             Some(_) => self.list.scroll_to_reveal_item(row),
+            // In view in the last frame, but changed since (its syntax was
+            // revealed or hidden): it is laid out again in this frame, so
+            // look again in the next one rather than scrolling it away.
+            None if self.was_painted(row) => {}
             // Not measured yet: scroll it to the top, where it gets laid out.
             None => self.list.scroll_to(gpui_kit::ListOffset {
                 item_ix: row,
@@ -1310,6 +1314,14 @@ impl Editor {
             }),
         }
         window.request_animation_frame();
+    }
+
+    /// Whether row `row` was drawn in the last frame.
+    fn was_painted(&self, row: usize) -> bool {
+        self.snapshot
+            .rows
+            .get(row)
+            .is_some_and(|row| self.painted.borrow().iter().any(|p| p.row == *row))
     }
 
     fn head_row(&self) -> usize {
