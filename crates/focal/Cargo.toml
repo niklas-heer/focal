@@ -8,6 +8,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+# The version usvg and merman use.
 base64 = "0.22.1"
 anyhow = "1.0.104"
 async-channel = "2.5.0"
@@ -23,6 +24,7 @@ svgbob = "=0.7.2"
 ttf-parser = "0.25.1"
 # Pictures of math and diagrams for Copy as HTML; the SVG renderer GPUI uses.
 resvg = { version = "0.46.0", default-features = false, features = ["text", "system-fonts"] }
+# The version GPUI Kit uses.
 notify = "7.0.0"
 rquickjs = "0.14.0"
 serde = { version = "1.0.229", features = ["derive"] }

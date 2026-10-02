@@ -23,6 +23,13 @@ updates:
       # Held back on purpose: 0.7.4 and later need an older `futures` than
       # GPUI's (see crates/focal/Cargo.toml).
       - dependency-name: svgbob
+      # Kept at the versions GPUI and its kit use, so the app carries one
+      # copy of each; they move with a GPUI Kit update.
+      - dependency-name: resvg
+      - dependency-name: notify
+      - dependency-name: ttf-parser
+      # The version usvg and merman use.
+      - dependency-name: base64
   - package-ecosystem: github-actions
     directory: /
     schedule:

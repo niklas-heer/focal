@@ -64,9 +64,15 @@ jobs:
             Read AGENTS.md first and follow it. Then make `mise run check` pass by
             adapting Focal's code to the new versions: renamed or moved APIs,
             changed signatures, new lints. Read the changelogs and the new
-            sources in ~/.cargo/registry when an API changed. Do not hold a
-            dependency back, change its version, or weaken a lint or a test to
-            get green; if that is the only way, stop and explain why.
+            sources in ~/.cargo/registry when an API changed. Do not hold back
+            what this pull request updates, or weaken a lint or a test to get
+            green; if that is the only way, stop and explain why.
+
+            resvg, notify, ttf-parser and base64 are kept at the versions GPUI,
+            GPUI Kit, usvg and merman use, so the app carries one copy of each
+            (see the comments in crates/focal/Cargo.toml). When this update
+            moves those, move Focal's to match; `cargo tree -d` shows
+            duplicates.
 
             Keep the code in the style around it. Do not commit or push; the
             workflow commits what you change. End with a short summary of what
