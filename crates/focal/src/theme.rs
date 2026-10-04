@@ -2,24 +2,26 @@
 
 use crate::settings::{ColumnWidth, Settings, TextSize};
 use focal_core::analysis::Alert;
-use gpui_kit::{Hsla, WindowAppearance, rgb, rgba};
+use gpui_kit::{Hsla, SharedString, WindowAppearance, rgb, rgba};
 
 pub const PROSE_FONT: &str = "iA Writer Quattro S";
 pub const MONO_FONT: &str = "iA Writer Mono S";
 /// Bold prose. The static Quattro S Bold files report weight 400 in their
 /// OS/2 table, so GPUI cannot select them by weight; Duo S Bold reports 700.
 pub const BOLD_PROSE_FONT: &str = "iA Writer Duo S";
-/// The text size, column width and prose typeface chosen in the settings.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// The text size, column width and typefaces chosen in the settings.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Typography {
     pub size: f32,
     /// The text column's widest width, in points.
     pub column: f32,
-    pub prose: &'static str,
+    pub prose: SharedString,
+    /// Code, math and other monospaced text.
+    pub code: SharedString,
 }
 
 impl Typography {
-    pub const fn new(settings: &Settings) -> Self {
+    pub fn new(settings: &Settings) -> Self {
         let size = match settings.text_size {
             TextSize::Small => 16.,
             TextSize::Medium => 18.,
@@ -32,11 +34,11 @@ impl Typography {
             ColumnWidth::Medium => 40.,
             ColumnWidth::Wide => 48.,
         };
-        let prose = settings.prose_font.family();
         Self {
             size,
             column: column * size,
-            prose,
+            prose: settings.prose_font.family(),
+            code: settings.code_font.family(),
         }
     }
 }
@@ -170,6 +172,17 @@ impl Theme {
         }
     }
 }
+
+/// Monospaced typefaces Focal carries besides iA Writer's, under the SIL
+/// Open Font License (`assets/fonts`). Loaded at launch, not exported.
+pub const MONO_FONTS: [&[u8]; 6] = [
+    include_bytes!("../../../assets/fonts/CommitMono-400-Regular.ttf"),
+    include_bytes!("../../../assets/fonts/CommitMono-700-Regular.ttf"),
+    include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf"),
+    include_bytes!("../../../assets/fonts/JetBrainsMono-Italic.ttf"),
+    include_bytes!("../../../assets/fonts/JetBrainsMono-Bold.ttf"),
+    include_bytes!("../../../assets/fonts/JetBrainsMono-BoldItalic.ttf"),
+];
 
 /// A typeface file Focal carries.
 pub struct Font {

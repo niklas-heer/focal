@@ -431,6 +431,14 @@ fn appearance_section(settings: &Settings, theme: &Theme) -> impl IntoElement {
         )
         .child(crate::settings::typeface_grid(settings, theme, 84.))
         .child(
+            div()
+                .pt(px(4.))
+                .text_size(px(11.))
+                .text_color(theme.marker)
+                .child("Code"),
+        )
+        .child(crate::settings::code_font_grid(settings, theme, 84.))
+        .child(
             quick_row("Size", theme).child(
                 div()
                     .flex()

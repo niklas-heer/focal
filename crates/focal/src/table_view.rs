@@ -385,7 +385,7 @@ impl Editor {
                             let text = &self.text()[cell.clone()];
                             let run = TextRun {
                                 len: text.len(),
-                                font: font(self.typography.prose),
+                                font: font(self.typography.prose.clone()),
                                 color: theme.text,
                                 background_color: None,
                                 underline: None,
@@ -402,7 +402,8 @@ impl Editor {
                             };
                             let runs = text_runs(
                                 &view.runs,
-                                self.typography.prose,
+                                &self.typography.prose,
+                                &self.typography.code,
                                 weight,
                                 theme.text,
                                 theme,
@@ -557,7 +558,8 @@ impl Editor {
             };
             let mut runs = text_runs(
                 &view.runs,
-                self.typography.prose,
+                &self.typography.prose,
+                &self.typography.code,
                 weight,
                 theme.text,
                 theme,
@@ -656,7 +658,7 @@ impl Editor {
                                 .h(px(self.typography.size * CELL_SCALE * CELL_LINE_HEIGHT))
                                 .text_size(px(self.typography.size * CELL_SCALE))
                                 .line_height(relative(CELL_LINE_HEIGHT))
-                                .font_family(self.typography.prose)
+                                .font_family(self.typography.prose.clone())
                                 .mt(px(-self.typography.size * CELL_SCALE * INPUT_LIFT))
                                 .when(alignment == Some(ColumnAlignment::Center), |d| {
                                     d.text_center()

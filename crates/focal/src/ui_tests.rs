@@ -2101,3 +2101,17 @@ fn the_panel_switches_light_and_dark(cx: &mut TestAppContext) {
     });
     cx.update(|cx| assert_eq!(cx.global::<Settings>().appearance, Appearance::Dark));
 }
+
+#[gpui_kit::test]
+fn other_typeface_lists_installed_families(cx: &mut TestAppContext) {
+    let (window, _) = open_settings(cx);
+    cx.update(crate::switcher::bind_keys);
+    act(cx, window, |window, cx| window.click("code-font-Other", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("switcher").is_some(), "the list opens");
+    });
+    act(cx, window, |window, cx| window.press("escape", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("switcher").is_none());
+    });
+}

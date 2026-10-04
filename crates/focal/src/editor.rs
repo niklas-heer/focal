@@ -40,7 +40,7 @@ use crate::document::{self, Document, Stamp};
 use crate::mac::{CloseQuestion, SaveAnswer};
 use crate::settings::{FocusUnit, Settings};
 use crate::spell::{GrammarIssue, SpellChecker};
-use crate::theme::{BOLD_PROSE_FONT, DIMMED, MONO_FONT, PROSE_FONT, Theme, Typography};
+use crate::theme::{BOLD_PROSE_FONT, DIMMED, PROSE_FONT, Theme, Typography};
 
 mod modal;
 
@@ -2686,7 +2686,7 @@ impl Editor {
         let styles = highlights.get(index)?;
         let fade = |color: Hsla| if dimmed { color.opacity(DIMMED) } else { color };
         let run = |len: usize, style: Option<&HighlightStyle>| {
-            let mut font = font(MONO_FONT);
+            let mut font = font(self.typography.code.clone());
             if let Some(style) = style {
                 font.weight = style.font_weight.unwrap_or(font.weight);
                 font.style = style.font_style.unwrap_or(font.style);
@@ -3132,9 +3132,9 @@ impl Editor {
             _ => (1.0, FontWeight::NORMAL, 0.),
         };
         let family = if mono {
-            MONO_FONT
+            self.typography.code.clone()
         } else {
-            self.typography.prose
+            self.typography.prose.clone()
         };
         let mut base = if dimmed {
             theme.text.opacity(DIMMED)
@@ -3164,7 +3164,8 @@ impl Editor {
             .unwrap_or_else(|| {
                 text_runs(
                     &marked,
-                    family,
+                    &family,
+                    &self.typography.code,
                     weight,
                     base,
                     theme,
@@ -3621,6 +3622,7 @@ fn paint_selection(
 pub(crate) fn text_runs(
     runs: &[Run],
     family: &str,
+    code: &str,
     weight: FontWeight,
     base: Hsla,
     theme: &Theme,
@@ -3639,11 +3641,11 @@ pub(crate) fn text_runs(
                 || style.contains(InlineStyle::STRONG)
                 || style.contains(InlineStyle::ALERT_TITLE);
             let family = match (mono, bold) {
-                (true, _) => MONO_FONT,
+                (true, _) => code,
                 (false, true) if family == PROSE_FONT => BOLD_PROSE_FONT,
                 (false, _) => family,
             };
-            let mut font = font(family);
+            let mut font = font(family.to_owned());
             font.weight = if bold {
                 FontWeight::BOLD
             } else {
@@ -4007,7 +4009,7 @@ impl Render for Editor {
             .size_full()
             .bg(theme.background)
             .text_color(theme.text)
-            .font_family(self.typography.prose)
+            .font_family(self.typography.prose.clone())
             .cursor(CursorStyle::IBeam)
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::highlight))

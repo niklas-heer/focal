@@ -365,6 +365,40 @@ impl Workspace {
         cx.notify();
     }
 
+    /// "Other…" typeface: every installed family, or every monospaced one
+    /// for code.
+    fn choose_font(
+        &mut self,
+        action: &crate::settings::ChooseFont,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let slot = action.0;
+        let families = crate::settings::installed_families(cx, slot);
+        let items = families
+            .iter()
+            .map(|family| PickItem {
+                label: family.clone(),
+                detail: String::new(),
+                key: family.clone(),
+                indent: 0,
+            })
+            .collect();
+        let on_pick = move |_: &mut Self, ix: usize, _: &mut Window, cx: &mut Context<Self>| {
+            if let Some(family) = families.get(ix) {
+                crate::settings::choose_installed(slot, family.clone(), cx);
+            }
+        };
+        self.open_picker(
+            items,
+            "Choose a typeface…",
+            "No matching typefaces",
+            on_pick,
+            window,
+            cx,
+        );
+    }
+
     /// Lists the document's headings; choosing one moves the caret there,
     /// and ⌘[ comes back.
     fn go_to_heading(&mut self, _: &GoToHeading, window: &mut Window, cx: &mut Context<Self>) {
@@ -722,6 +756,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::go_back))
             .on_action(cx.listener(Self::quick_open))
             .on_action(cx.listener(Self::go_to_heading))
+            .on_action(cx.listener(Self::choose_font))
             .on_action(cx.listener(Self::find))
             .on_action(cx.listener(Self::find_and_replace))
             .on_action(cx.listener(|this, _: &FindNext, _, cx| this.find_step(true, cx)))

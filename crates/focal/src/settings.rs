@@ -16,6 +16,7 @@ use gpui_kit::{
 use serde::{Deserialize, Serialize};
 
 use crate::icons::Icon;
+use crate::switcher::{PickItem, Switcher, SwitcherEvent};
 use crate::theme::{BOLD_PROSE_FONT, MONO_FONT, PROSE_FONT, Theme as Colors, Typography};
 
 actions!(
@@ -84,9 +85,10 @@ pub enum FocusUnit {
     Paragraph,
 }
 
-/// The typeface for prose; code is always in iA Writer Mono. The iA Writer
-/// faces come with Focal; the others come with every Mac.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// The typeface for prose. The iA Writer, Commit Mono and `JetBrains` Mono
+/// faces come with Focal; the others come with every Mac, and any installed
+/// family can be chosen as `Custom`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProseFont {
     #[default]
@@ -100,10 +102,14 @@ pub enum ProseFont {
     Helvetica,
     System,
     Menlo,
+    CommitMono,
+    JetBrainsMono,
+    /// An installed family, by name.
+    Custom(String),
 }
 
 impl ProseFont {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 12] = [
         Self::Quattro,
         Self::Duo,
         Self::Mono,
@@ -114,10 +120,12 @@ impl ProseFont {
         Self::Helvetica,
         Self::System,
         Self::Menlo,
+        Self::CommitMono,
+        Self::JetBrainsMono,
     ];
 
     /// The name people know the typeface by.
-    pub const fn name(self) -> &'static str {
+    pub fn name(&self) -> &str {
         match self {
             Self::Quattro => "Quattro",
             Self::Duo => "Duo",
@@ -129,25 +137,109 @@ impl ProseFont {
             Self::Helvetica => "Helvetica Neue",
             Self::System => "SF Pro",
             Self::Menlo => "Menlo",
+            Self::CommitMono => "Commit Mono",
+            Self::JetBrainsMono => "JetBrains Mono",
+            Self::Custom(family) => family,
         }
     }
 
     /// The font family GPUI draws it with.
-    pub const fn family(self) -> &'static str {
+    pub fn family(&self) -> SharedString {
         match self {
-            Self::Quattro => crate::theme::PROSE_FONT,
-            Self::Duo => crate::theme::BOLD_PROSE_FONT,
-            Self::Mono => crate::theme::MONO_FONT,
-            Self::Charter => "Charter",
-            Self::Georgia => "Georgia",
-            Self::Palatino => "Palatino",
-            Self::Avenir => "Avenir Next",
-            Self::Helvetica => "Helvetica Neue",
+            Self::Quattro => crate::theme::PROSE_FONT.into(),
+            Self::Duo => crate::theme::BOLD_PROSE_FONT.into(),
+            Self::Mono => crate::theme::MONO_FONT.into(),
             // The Mac's own San Francisco, which has no public family name.
-            Self::System => ".SystemUIFont",
-            Self::Menlo => "Menlo",
+            Self::System => ".SystemUIFont".into(),
+            Self::CommitMono => "CommitMono".into(),
+            Self::Custom(family) => family.clone().into(),
+            other => SharedString::new(other.name()),
         }
     }
+}
+
+/// The typeface for code, math and other monospaced text.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CodeFont {
+    #[default]
+    IaMono,
+    CommitMono,
+    JetBrainsMono,
+    Menlo,
+    Monaco,
+    PtMono,
+    /// An installed monospaced family, by name.
+    Custom(String),
+}
+
+impl CodeFont {
+    pub const ALL: [Self; 6] = [
+        Self::IaMono,
+        Self::CommitMono,
+        Self::JetBrainsMono,
+        Self::Menlo,
+        Self::Monaco,
+        Self::PtMono,
+    ];
+
+    pub fn name(&self) -> &str {
+        match self {
+            Self::IaMono => "iA Writer Mono",
+            Self::CommitMono => "Commit Mono",
+            Self::JetBrainsMono => "JetBrains Mono",
+            Self::Menlo => "Menlo",
+            Self::Monaco => "Monaco",
+            Self::PtMono => "PT Mono",
+            Self::Custom(family) => family,
+        }
+    }
+
+    pub fn family(&self) -> SharedString {
+        match self {
+            Self::IaMono => crate::theme::MONO_FONT.into(),
+            Self::CommitMono => "CommitMono".into(),
+            Self::Custom(family) => family.clone().into(),
+            other => SharedString::new(other.name()),
+        }
+    }
+}
+
+/// Which typeface "Other…" chooses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FontSlot {
+    Prose,
+    Code,
+}
+
+/// Lists the installed families to choose one for prose or code.
+#[derive(Clone, Debug, PartialEq, gpui_kit::Action)]
+#[action(namespace = focal, no_json)]
+pub struct ChooseFont(pub FontSlot);
+
+/// The installed font families, without the Mac's hidden ones; for code,
+/// only those whose letters are all as wide as each other.
+pub(crate) fn installed_families(cx: &App, slot: FontSlot) -> Vec<String> {
+    let text = cx.text_system();
+    text.all_font_names()
+        .into_iter()
+        .filter(|family| !family.starts_with('.'))
+        .filter(|family| {
+            slot == FontSlot::Prose || {
+                let id = text.resolve_font(&gpui_kit::font(family.clone()));
+                let width = |c| text.advance(id, px(16.), c).map(|size| size.width).ok();
+                width('i').is_some() && width('i') == width('M')
+            }
+        })
+        .collect()
+}
+
+/// Chooses an installed family for `slot`, from a picker's list.
+pub(crate) fn choose_installed(slot: FontSlot, family: String, cx: &mut App) {
+    update(cx, |settings| match slot {
+        FontSlot::Prose => settings.prose_font = ProseFont::Custom(family),
+        FontSlot::Code => settings.code_font = CodeFont::Custom(family),
+    });
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -179,6 +271,7 @@ pub struct Settings {
     /// Keep the caret's line vertically centered in focus mode.
     pub typewriter: bool,
     pub prose_font: ProseFont,
+    pub code_font: CodeFont,
     pub text_size: TextSize,
     pub column_width: ColumnWidth,
     /// Let a release build look for updates by itself.
@@ -214,6 +307,7 @@ impl Default for Settings {
             focus_unit: FocusUnit::Paragraph,
             typewriter: true,
             prose_font: ProseFont::default(),
+            code_font: CodeFont::default(),
             text_size: TextSize::default(),
             column_width: ColumnWidth::default(),
             check_updates: true,
@@ -410,6 +504,8 @@ impl Pane {
 
 pub struct SettingsView {
     focus: FocusHandle,
+    /// The list of installed typefaces "Other…" opens.
+    picker: Option<(gpui_kit::Entity<Switcher>, gpui_kit::Subscription)>,
     pane: Pane,
     /// The diagram tools found when the window opened; looking them up
     /// reads the disk, so not on every frame.
@@ -427,6 +523,7 @@ impl SettingsView {
         window.focus(&focus, cx);
         Self {
             focus,
+            picker: None,
             pane: Pane::Text,
             tools: crate::diagram::tools(),
         }
@@ -435,6 +532,41 @@ impl SettingsView {
     #[cfg(test)]
     pub const fn pane(&self) -> Pane {
         self.pane
+    }
+
+    fn choose_font(&mut self, action: &ChooseFont, window: &mut Window, cx: &mut Context<Self>) {
+        let slot = action.0;
+        let families = installed_families(cx, slot);
+        let items = families
+            .iter()
+            .map(|family| PickItem {
+                label: family.clone(),
+                detail: String::new(),
+                key: family.clone(),
+                indent: 0,
+            })
+            .collect();
+        let picker = cx.new(|cx| {
+            Switcher::new(
+                items,
+                "Choose a typeface…",
+                "No matching typefaces",
+                window,
+                cx,
+            )
+        });
+        let subscription = cx.subscribe_in(&picker, window, move |this, _, event, window, cx| {
+            if let SwitcherEvent::Pick(ix) = event
+                && let Some(family) = families.get(*ix)
+            {
+                choose_installed(slot, family.clone(), cx);
+            }
+            this.picker = None;
+            window.focus(&this.focus, cx);
+            cx.notify();
+        });
+        self.picker = Some((picker, subscription));
+        cx.notify();
     }
 
     fn show(&mut self, pane: Pane, window: &mut Window, cx: &mut Context<Self>) {
@@ -688,10 +820,10 @@ fn push_button(
 /// A few lines in the chosen typeface, size and colors.
 fn preview(settings: &Settings, theme: &Colors) -> impl IntoElement {
     let typography = Typography::new(settings);
-    let bold = if typography.prose == PROSE_FONT {
-        BOLD_PROSE_FONT
+    let bold: SharedString = if typography.prose == PROSE_FONT {
+        BOLD_PROSE_FONT.into()
     } else {
-        typography.prose
+        typography.prose.clone()
     };
     let characters = match settings.column_width {
         ColumnWidth::Narrow => "about 60",
@@ -741,52 +873,140 @@ fn preview(settings: &Settings, theme: &Colors) -> impl IntoElement {
         )
 }
 
-/// The typefaces as tiles, each showing "Aa" in its own face; clicking one
-/// chooses it.
-pub(crate) fn typeface_grid(settings: &Settings, theme: &Colors, tile: f32) -> impl IntoElement {
+/// A typeface tile: a sample in the face, and its name below.
+#[allow(clippy::too_many_arguments)]
+fn font_tile(
+    id: String,
+    name: SharedString,
+    sample: &'static str,
+    family: Option<SharedString>,
+    selected: bool,
+    tile: f32,
+    theme: &Colors,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> impl IntoElement {
     let hover = theme.code_background;
-    let tiles = ProseFont::ALL.into_iter().map(move |font| {
-        let selected = font == settings.prose_font;
-        div()
-            .id(SharedString::from(format!("prose-font-{}", font.name())))
-            .test_support()
-            .aria_label(font.name())
-            .w(px(tile))
-            .h(px(tile * 0.72))
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap(px(2.))
-            .rounded(px(9.))
-            .cursor_pointer()
-            .bg(theme.surface)
-            .map(|d| {
-                if selected {
-                    d.border_2().border_color(theme.caret)
-                } else {
-                    d.border_1()
-                        .border_color(theme.rule)
-                        .hover(move |style| style.bg(hover))
-                }
-            })
-            .child(
-                div()
-                    .font_family(font.family())
-                    .text_size(px(tile * 0.24))
-                    .text_color(theme.text)
-                    .child("Aa"),
-            )
-            .child(
-                div()
-                    .text_size(px(10.5))
-                    .text_color(if selected { theme.text } else { theme.marker })
-                    .whitespace_nowrap()
-                    .child(font.name()),
-            )
-            .on_click(move |_, _, cx| update(cx, |settings| settings.prose_font = font))
+    div()
+        .id(SharedString::from(id))
+        .test_support()
+        .aria_label(name.clone())
+        .w(px(tile))
+        .h(px(tile * 0.72))
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(px(2.))
+        .rounded(px(9.))
+        .cursor_pointer()
+        .bg(theme.surface)
+        .map(|d| {
+            if selected {
+                d.border_2().border_color(theme.caret)
+            } else {
+                d.border_1()
+                    .border_color(theme.rule)
+                    .hover(move |style| style.bg(hover))
+            }
+        })
+        .child(match family {
+            Some(family) => div()
+                .font_family(family)
+                .text_size(px(tile * 0.24))
+                .text_color(theme.text)
+                .child(sample)
+                .into_any_element(),
+            None => Icon::Search
+                .element(tile * 0.22)
+                .text_color(theme.marker)
+                .into_any_element(),
+        })
+        .child(
+            div()
+                .max_w(px(tile - 8.))
+                .overflow_hidden()
+                .text_ellipsis()
+                .text_size(px(10.5))
+                .text_color(if selected { theme.text } else { theme.marker })
+                .whitespace_nowrap()
+                .child(name),
+        )
+        .on_click(move |_, window, cx| on_click(window, cx))
+}
+
+/// "Other…": any installed family, chosen from a list.
+fn other_tile(slot: FontSlot, prefix: &str, tile: f32, theme: &Colors) -> impl IntoElement {
+    font_tile(
+        format!("{prefix}-Other"),
+        "Other…".into(),
+        "",
+        None,
+        false,
+        tile,
+        theme,
+        move |window, cx| window.dispatch_action(Box::new(ChooseFont(slot)), cx),
+    )
+}
+
+/// The typefaces for prose as tiles, each showing "Aa" in its own face;
+/// clicking one chooses it.
+pub(crate) fn typeface_grid(settings: &Settings, theme: &Colors, tile: f32) -> impl IntoElement {
+    let mut fonts = ProseFont::ALL.to_vec();
+    if matches!(settings.prose_font, ProseFont::Custom(_)) {
+        fonts.push(settings.prose_font.clone());
+    }
+    let tiles = fonts.into_iter().map(|font| {
+        let chosen = font.clone();
+        font_tile(
+            format!("prose-font-{}", font.name()),
+            SharedString::new(font.name()),
+            "Aa",
+            Some(font.family()),
+            font == settings.prose_font,
+            tile,
+            theme,
+            move |_, cx| {
+                let chosen = chosen.clone();
+                update(cx, |settings| settings.prose_font = chosen);
+            },
+        )
     });
-    div().flex().flex_wrap().gap(px(8.)).children(tiles)
+    div()
+        .flex()
+        .flex_wrap()
+        .gap(px(8.))
+        .children(tiles)
+        .child(other_tile(FontSlot::Prose, "prose-font", tile, theme))
+}
+
+/// The typefaces for code as tiles, each showing braces in its own face.
+pub(crate) fn code_font_grid(settings: &Settings, theme: &Colors, tile: f32) -> impl IntoElement {
+    let mut fonts = CodeFont::ALL.to_vec();
+    if matches!(settings.code_font, CodeFont::Custom(_)) {
+        fonts.push(settings.code_font.clone());
+    }
+    let tiles = fonts.into_iter().map(|font| {
+        let chosen = font.clone();
+        font_tile(
+            format!("code-font-{}", font.name()),
+            SharedString::new(font.name()),
+            "{0}",
+            Some(font.family()),
+            font == settings.code_font,
+            tile,
+            theme,
+            move |_, cx| {
+                let chosen = chosen.clone();
+                update(cx, |settings| settings.code_font = chosen);
+            },
+        )
+    });
+    div()
+        .flex()
+        .flex_wrap()
+        .gap(px(8.))
+        .children(tiles)
+        .child(other_tile(FontSlot::Code, "code-font", tile, theme))
 }
 
 fn text_pane(settings: &Settings, theme: &Colors) -> impl IntoElement {
@@ -808,14 +1028,22 @@ fn text_pane(settings: &Settings, theme: &Colors) -> impl IntoElement {
                         .text_color(theme.marker)
                         .child("Typeface"),
                 )
-                .child(typeface_grid(settings, theme, 100.))
+                .child(typeface_grid(settings, theme, 100.)),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(6.))
                 .child(
                     div()
                         .px(px(4.))
                         .text_size(px(12.))
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.marker)
-                        .child("Code is always set in iA Writer Mono."),
-                ),
+                        .child("Code"),
+                )
+                .child(code_font_grid(settings, theme, 100.)),
         )
         .child(group(
             "Text",
@@ -1146,6 +1374,7 @@ impl Render for SettingsView {
                     this.show(pane, window, cx);
                 }
             }))
+            .on_action(cx.listener(Self::choose_font))
             .on_action(cx.listener(|this, _: &NextPane, window, cx| this.step(1, window, cx)))
             .on_action(cx.listener(|this, _: &PreviousPane, window, cx| this.step(-1, window, cx)))
             .size_full()
@@ -1165,6 +1394,18 @@ impl Render for SettingsView {
                     .py(px(22.))
                     .child(self.render_pane(&settings, &theme, cx)),
             )
+            .when_some(self.picker.as_ref(), |d, (picker, _)| {
+                d.child(
+                    div()
+                        .absolute()
+                        .top(px(TOOLBAR_HEIGHT + 12.))
+                        .left_0()
+                        .right_0()
+                        .flex()
+                        .justify_center()
+                        .child(picker.clone()),
+                )
+            })
     }
 }
 
@@ -1186,7 +1427,8 @@ mod tests {
             appearance: Appearance::Dark,
             focus_unit: FocusUnit::Sentence,
             typewriter: false,
-            prose_font: ProseFont::Duo,
+            prose_font: ProseFont::Custom("MonoLisa".to_owned()),
+            code_font: CodeFont::JetBrainsMono,
             text_size: TextSize::Large,
             column_width: ColumnWidth::Wide,
             check_updates: false,
@@ -1196,6 +1438,24 @@ mod tests {
         };
         settings.save_to(&path).unwrap();
         assert_eq!(Settings::load_from(&path), settings);
+    }
+
+    #[test]
+    fn typefaces_read_by_name_or_as_an_installed_family() {
+        let path = temp("typefaces");
+        std::fs::write(
+            &path,
+            r#"{"prose_font": "charter", "code_font": {"custom": "MonoLisa"}}"#,
+        )
+        .unwrap();
+        let settings = Settings::load_from(&path);
+        assert_eq!(settings.prose_font, ProseFont::Charter);
+        assert_eq!(settings.code_font, CodeFont::Custom("MonoLisa".to_owned()));
+        assert_eq!(settings.code_font.family().as_ref(), "MonoLisa");
+        assert_eq!(
+            CodeFont::default().family().as_ref(),
+            crate::theme::MONO_FONT
+        );
     }
 
     #[test]

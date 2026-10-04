@@ -306,8 +306,9 @@ fn load_fonts(cx: &App) {
     let fonts: Vec<Cow<'static, [u8]>> = theme::FONTS
         .iter()
         .map(|font| Cow::Borrowed(font.data))
+        .chain(theme::MONO_FONTS.iter().map(|data| Cow::Borrowed(*data)))
         .collect();
     if let Err(error) = cx.text_system().add_fonts(fonts) {
-        eprintln!("focal: could not load the iA Writer fonts: {error:#}");
+        eprintln!("focal: could not load the bundled fonts: {error:#}");
     }
 }
