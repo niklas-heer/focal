@@ -43,6 +43,9 @@ use crate::spell::{GrammarIssue, SpellChecker};
 use crate::theme::{BOLD_PROSE_FONT, DIMMED, PROSE_FONT, Theme, Typography};
 
 mod modal;
+mod paste;
+#[cfg(test)]
+pub(crate) use paste::drop_hint as paste_drop_hint;
 
 actions!(
     focal,
@@ -79,6 +82,7 @@ actions!(
         Copy,
         Cut,
         Paste,
+        PasteAsPlainText,
         Undo,
         Redo,
         Save,
@@ -225,6 +229,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-c", Copy, context),
         KeyBinding::new("cmd-x", Cut, context),
         KeyBinding::new("cmd-v", Paste, context),
+        KeyBinding::new("cmd-alt-shift-v", PasteAsPlainText, context),
         KeyBinding::new("cmd-z", Undo, context),
         KeyBinding::new("cmd-shift-z", Redo, context),
         KeyBinding::new("cmd-s", Save, context),
@@ -461,6 +466,8 @@ pub struct Editor {
     modal: Option<focal_core::modal::Modal>,
     /// Sends keys to Vim or Helix before Focal's bindings see them.
     _modal_keys: gpui_kit::Subscription,
+    /// While files are dragged over: what dropping them does, and where.
+    drop_hint: Option<(String, Point<Pixels>)>,
 }
 
 impl Editor {
@@ -540,6 +547,7 @@ impl Editor {
             found_for: None,
             modal: modal::for_keyboard(settings.keyboard),
             _modal_keys: Self::intercept_modal_keys(cx),
+            drop_hint: None,
         };
         // A single file's wiki links resolve among the files beside it.
         if let Some(dir) = editor
@@ -1763,12 +1771,6 @@ impl Editor {
                 EditKind::Other,
                 cx,
             );
-        }
-    }
-
-    fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            self.insert(&text, EditKind::Other, cx);
         }
     }
 
@@ -4064,6 +4066,7 @@ impl Render for Editor {
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::paste))
+            .on_action(cx.listener(Self::paste_plain))
             .on_action(cx.listener(Self::undo))
             .on_action(cx.listener(Self::redo))
             .on_action(cx.listener(Self::save))
@@ -4103,6 +4106,8 @@ impl Render for Editor {
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
+            .on_drag_move(cx.listener(Self::drag_files))
+            .on_drop(cx.listener(Self::drop_files))
             .child(
                 canvas(
                     |_, _, _| {},
@@ -4151,5 +4156,6 @@ impl Render for Editor {
             .children(banner)
             .children(preview)
             .children(self.render_modal_status(&theme))
+            .children(self.render_drop_hint(&theme, cx))
     }
 }

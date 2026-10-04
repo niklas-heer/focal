@@ -286,6 +286,8 @@ pub struct Settings {
     pub correct_spelling: bool,
     /// Focal's own keys, or Vim's or Helix's modal editing.
     pub keyboard: Keyboard,
+    /// Where pasted and dropped images are saved, beside the document.
+    pub images_folder: String,
 }
 
 impl TextSize {
@@ -317,6 +319,7 @@ impl Default for Settings {
             check_grammar: true,
             correct_spelling: true,
             keyboard: Keyboard::Standard,
+            images_folder: "assets".to_owned(),
         }
     }
 }
@@ -1182,7 +1185,39 @@ fn writing_pane(settings: &Settings, theme: &Colors) -> impl IntoElement {
                 ),
             ],
         ))
+        .child(group(
+            "Pasting",
+            theme,
+            [row(
+                "Images folder",
+                Some(
+                    "Pasted and dropped images are saved here, beside the document. \
+                     ⌥⇧⌘V pastes rich text as plain text."
+                        .into(),
+                ),
+                segmented(
+                    "images-folder",
+                    IMAGE_FOLDERS,
+                    IMAGE_FOLDERS
+                        .iter()
+                        .map(|(folder, _)| *folder)
+                        .find(|folder| *folder == settings.images_folder)
+                        .unwrap_or("custom"),
+                    |s, v| v.clone_into(&mut s.images_folder),
+                    theme,
+                ),
+                theme,
+            )],
+        ))
 }
+
+/// The images folders offered in Settings; another can be set in
+/// `settings.json`.
+const IMAGE_FOLDERS: &[(&str, &str)] = &[
+    ("assets", "assets/"),
+    ("images", "images/"),
+    ("", "Beside the file"),
+];
 
 fn focus_pane(settings: &Settings, theme: &Colors) -> impl IntoElement {
     div().flex().flex_col().gap(px(18.)).child(group(
@@ -1438,6 +1473,7 @@ mod tests {
             check_grammar: false,
             correct_spelling: false,
             keyboard: Keyboard::Helix,
+            images_folder: "img".to_owned(),
         };
         settings.save_to(&path).unwrap();
         assert_eq!(Settings::load_from(&path), settings);

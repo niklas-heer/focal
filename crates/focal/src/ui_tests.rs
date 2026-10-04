@@ -2299,3 +2299,128 @@ fn sidebar_tags_filter_the_files(cx: &mut TestAppContext) {
         );
     });
 }
+
+// ---- Paste and drop (M13) ---------------------------------------------------
+
+fn paste_string(cx: &mut TestAppContext, window: AnyWindowHandle, text: &str, keys: &str) {
+    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text.to_owned()));
+    act(cx, window, |window, cx| window.press(keys, cx));
+}
+
+#[gpui_kit::test]
+fn pasting_a_url_over_a_selection_makes_a_link(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "see the docs");
+    editor.update(cx, |e, cx| e.select(4..12, cx));
+    paste_string(cx, window, "https://a.com", "cmd-v");
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.text(), "see [the docs](https://a.com)");
+    });
+    act(cx, window, |window, cx| window.press("cmd-z", cx));
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.text(), "see the docs", "one undo step");
+    });
+}
+
+#[gpui_kit::test]
+fn a_url_without_a_selection_pastes_as_written(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "");
+    paste_string(cx, window, "https://a.com", "cmd-v");
+    editor.read_with(cx, |e, _| assert_eq!(e.text(), "https://a.com"));
+}
+
+#[gpui_kit::test]
+fn rich_text_pastes_as_markdown_unless_plain_is_asked(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "");
+    crate::mac::set_test_pasteboard_html(Some("<p><b>bold</b> text</p>"));
+    paste_string(cx, window, "bold text", "cmd-v");
+    editor.read_with(cx, |e, _| assert_eq!(e.text(), "**bold** text"));
+    paste_string(cx, window, "bold text", "cmd-alt-shift-v");
+    crate::mac::set_test_pasteboard_html(None);
+    editor.read_with(cx, |e, _| assert_eq!(e.text(), "**bold** textbold text"));
+}
+
+#[gpui_kit::test]
+fn paste_in_a_code_block_stays_plain(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "```\n\n```");
+    editor.update(cx, |e, cx| e.move_to(4, cx));
+    crate::mac::set_test_pasteboard_html(Some("<p><b>bold</b></p>"));
+    paste_string(cx, window, "bold", "cmd-v");
+    crate::mac::set_test_pasteboard_html(None);
+    editor.read_with(cx, |e, _| assert_eq!(e.text(), "```\nbold\n```"));
+}
+
+#[gpui_kit::test]
+fn a_pasted_image_is_saved_into_assets(cx: &mut TestAppContext) {
+    let root = notes_folder("paste-image", "");
+    let (window, workspace) = open_folder(cx, &root);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    let image = gpui_kit::Image {
+        format: gpui_kit::ImageFormat::Png,
+        bytes: vec![1, 2, 3],
+        id: 1,
+    };
+    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_image(&image));
+    act(cx, window, |window, cx| window.press("cmd-v", cx));
+    let text = editor.read_with(cx, |e, _| e.text().to_owned());
+    let path = text
+        .strip_prefix("![](")
+        .and_then(|rest| rest.strip_suffix(')'))
+        .unwrap_or_else(|| panic!("an image link: {text}"));
+    assert!(path.starts_with("assets/pasted-"), "{path}");
+    assert_eq!(std::fs::read(root.join(path)).unwrap(), [1, 2, 3]);
+}
+
+#[gpui_kit::test]
+fn dropped_files_are_copied_or_linked(cx: &mut TestAppContext) {
+    let root = notes_folder("drop-files", "");
+    let outside = crate::folder::tests::temp_folder("drop-files-source");
+    std::fs::write(outside.join("My Photo.png"), [9]).unwrap();
+    let (window, workspace) = open_folder(cx, &root);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    act(cx, window, |window, cx| {
+        editor.update(cx, |e, cx| {
+            e.drop_paths(
+                &[outside.join("My Photo.png"), root.join("old.md")],
+                window,
+                cx,
+            );
+        });
+    });
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.text(), "![](assets/My%20Photo.png)\n[old](old.md)");
+    });
+    assert_eq!(
+        std::fs::read(root.join("assets/My Photo.png")).unwrap(),
+        [9]
+    );
+}
+
+#[gpui_kit::test]
+fn the_images_folder_is_chosen_in_settings(cx: &mut TestAppContext) {
+    let (window, _) = open_settings(cx);
+    act(cx, window, |window, cx| window.click("pane-Writing", cx));
+    act(cx, window, |window, cx| {
+        window.click("images-folder-Beside the file", cx);
+    });
+    cx.update(|cx| assert_eq!(cx.global::<Settings>().images_folder, ""));
+    act(cx, window, |window, cx| {
+        window.click("images-folder-images/", cx);
+    });
+    cx.update(|cx| assert_eq!(cx.global::<Settings>().images_folder, "images"));
+}
+
+#[gpui_kit::test]
+fn a_drag_says_what_dropping_will_do(cx: &mut TestAppContext) {
+    let root = crate::folder::tests::temp_folder("drop-hint");
+    std::fs::write(root.join("a.png"), [1]).unwrap();
+    std::fs::write(root.join("b.md"), "").unwrap();
+    let (_, _) = open_editor(cx, "");
+    cx.update(|cx| {
+        let paths = [root.join("a.png"), root.join("b.md"), root.clone()];
+        assert_eq!(
+            crate::editor::paste_drop_hint(&paths, cx).as_deref(),
+            Some("Add 1 image to assets/ and link 1 file"),
+            "the folder is left out"
+        );
+    });
+}

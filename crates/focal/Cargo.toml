@@ -12,6 +12,7 @@ license.workspace = true
 base64 = "0.22.1"
 anyhow = "1.0.104"
 async-channel = "2.5.0"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 focal-core.workspace = true
 imagesize = "0.15.0"
 layout-rs = "0.1.3"

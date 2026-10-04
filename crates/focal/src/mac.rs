@@ -148,6 +148,48 @@ pub fn copy_html(html: &str, plain: &str) {
         &NSString::from_str(plain),
         &NSString::from_str("public.utf8-plain-text"),
     );
+    // The text is Markdown already: pasting it back into Focal keeps it.
+    pasteboard.setString_forType(
+        &NSString::from_str(plain),
+        &NSString::from_str(MARKDOWN_TYPE),
+    );
+}
+
+/// Markdown's pasteboard type, set by Markdown-aware apps beside the HTML.
+const MARKDOWN_TYPE: &str = "net.daringfireball.markdown";
+
+/// The general pasteboard's HTML (from browsers, Docs, Mail), unless it
+/// carries Markdown too, as Focal's own Copy as HTML does. Test builds read
+/// what [`set_test_pasteboard_html`] left instead.
+pub fn pasteboard_html() -> Option<String> {
+    #[cfg(test)]
+    {
+        return PASTE_HTML.with(|html| html.borrow().clone());
+    }
+    #[allow(unreachable_code)]
+    {
+        MainThreadMarker::new()?;
+        let pasteboard = NSPasteboard::generalPasteboard();
+        if pasteboard
+            .stringForType(&NSString::from_str(MARKDOWN_TYPE))
+            .is_some()
+        {
+            return None;
+        }
+        let html = pasteboard.stringForType(&NSString::from_str("public.html"))?;
+        Some(html.to_string())
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static PASTE_HTML: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The HTML [`pasteboard_html`] gives in tests.
+#[cfg(test)]
+pub fn set_test_pasteboard_html(html: Option<&str>) {
+    PASTE_HTML.with(|pasted| *pasted.borrow_mut() = html.map(str::to_owned));
 }
 
 #[cfg(test)]
