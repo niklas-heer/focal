@@ -63,7 +63,7 @@ Focal runs as one app: every `focal` call opens a window in it, and an open file
 - **Tables you edit as tables.** Every table is a grid. Tab and Return move between cells, rows and columns can be added, moved, deleted and aligned, and the Markdown is rewritten neatly aligned.
 - **Spelling, grammar and Apple's Writing Tools.** macOS's own checker underlines misspelled words in red and grammar issues in green, and corrects typos as you finish a word. **Edit ▸ Writing Tools** proofreads, rewrites or summarizes the selection, or the whole document.
 - **Find and replace**, **Go to Heading** (⇧⌘O), undo that understands lists and tables, and formatting shortcuts for everything in the bottom bar.
-- **Vim mode**, if your fingers want it: normal, insert and visual modes, counts, operators, motions, text objects, `.` and `:w`. Turn it on in **Settings ▸ Writing** or **Edit ▸ Vim Mode**; ⌘ shortcuts keep working.
+- **Vim and Helix keys**, if your fingers want them: Vim's normal, insert and visual modes with counts, operators, motions, text objects, `.` and `:w`, or Helix's select-then-act editing (`w`, `x`, `mi`, `d`, `c`, `y`). Choose in **Settings ▸ Writing** or **Edit ▸ Editing Keys**; ⌘ shortcuts keep working.
 
 ### Focus
 
@@ -123,7 +123,7 @@ Lists, tasks, quotes, tables, code and math blocks are in the **Format** menu an
 
 ## Settings
 
-Focal keeps its settings few (⌘,): light, dark or the system's appearance, the typeface (iA Writer Quattro, Duo or Mono, or Charter, Georgia, Palatino, Avenir Next, Helvetica Neue, SF Pro or Menlo) with a live preview, text size, line length, what focus mode keeps bright, typewriter scrolling, grammar checking, automatic spelling correction, Vim mode, update checks and the `focal` command.
+Focal keeps its settings few (⌘,): light, dark or the system's appearance, the typeface (iA Writer Quattro, Duo or Mono, or Charter, Georgia, Palatino, Avenir Next, Helvetica Neue, SF Pro or Menlo) with a live preview, text size, line length, what focus mode keeps bright, typewriter scrolling, grammar checking, automatic spelling correction, Vim or Helix keys, update checks and the `focal` command.
 
 ### Optional diagram tools
 

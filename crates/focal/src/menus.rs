@@ -12,7 +12,7 @@ use crate::editor::{
 };
 use crate::find_bar::{Find, FindAndReplace, FindNext, FindPrevious};
 use crate::settings::{
-    BiggerText, DefaultTextSize, OpenSettings, Settings, SmallerText, ToggleVimMode,
+    BiggerText, DefaultTextSize, Keyboard, OpenSettings, SetKeyboard, Settings, SmallerText,
 };
 use crate::switcher::{GoToHeading, QuickOpen};
 use crate::updates::{CheckForUpdates, OpenReleases};
@@ -44,11 +44,11 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &ReportIssue, cx| cx.open_url(&format!("{REPOSITORY}/issues/new")));
     set_menus(cx);
     // Vim Mode's checkmark follows the setting.
-    let mut vim_mode = cx.global::<Settings>().vim_mode;
+    let mut keyboard = cx.global::<Settings>().keyboard;
     cx.observe_global::<Settings>(move |cx| {
-        let now = cx.global::<Settings>().vim_mode;
-        if now != vim_mode {
-            vim_mode = now;
+        let now = cx.global::<Settings>().keyboard;
+        if now != keyboard {
+            keyboard = now;
             set_menus(cx);
         }
     })
@@ -100,7 +100,12 @@ pub fn set_menus(cx: &mut App) {
                 MenuItem::action("Find Previous", FindPrevious),
             ])),
             MenuItem::separator(),
-            MenuItem::action("Vim Mode", ToggleVimMode).checked(cx.global::<Settings>().vim_mode),
+            MenuItem::submenu(
+                Menu::new("Editing Keys").items(Keyboard::ALL.map(|keyboard| {
+                    MenuItem::action(keyboard.name(), SetKeyboard(keyboard))
+                        .checked(cx.global::<Settings>().keyboard == keyboard)
+                })),
+            ),
         ]),
         Menu::new("Format").items([
             MenuItem::action("Bold", Bold),

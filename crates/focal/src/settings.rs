@@ -24,7 +24,6 @@ actions!(
         CloseSettings,
         NextPane,
         PreviousPane,
-        ToggleVimMode,
         BiggerText,
         SmallerText,
         DefaultTextSize,
@@ -47,6 +46,33 @@ pub enum Appearance {
     Light,
     Dark,
 }
+
+/// How keys edit: as in other Mac apps, or with Vim's or Helix's modes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Keyboard {
+    #[default]
+    Standard,
+    Vim,
+    Helix,
+}
+
+impl Keyboard {
+    pub const ALL: [Self; 3] = [Self::Standard, Self::Vim, Self::Helix];
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Standard => "Standard",
+            Self::Vim => "Vim",
+            Self::Helix => "Helix",
+        }
+    }
+}
+
+/// Chooses how keys edit.
+#[derive(Clone, Debug, PartialEq, gpui_kit::Action)]
+#[action(namespace = focal, no_json)]
+pub struct SetKeyboard(pub Keyboard);
 
 /// What focus mode keeps bright.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -161,8 +187,8 @@ pub struct Settings {
     /// Correct a misspelled word when it is finished, if macOS's own
     /// "Correct spelling automatically" is on too.
     pub correct_spelling: bool,
-    /// Edit with Vim's modes, motions and operators.
-    pub vim_mode: bool,
+    /// Focal's own keys, or Vim's or Helix's modal editing.
+    pub keyboard: Keyboard,
 }
 
 impl TextSize {
@@ -192,7 +218,7 @@ impl Default for Settings {
             check_updates: true,
             check_grammar: true,
             correct_spelling: true,
-            vim_mode: false,
+            keyboard: Keyboard::Standard,
         }
     }
 }
@@ -267,7 +293,10 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-shift-tab", PreviousPane, context),
     ]);
     cx.on_action(|_: &OpenSettings, cx| open_window(cx));
-    cx.on_action(|_: &ToggleVimMode, cx| update(cx, |s| s.vim_mode = !s.vim_mode));
+    cx.on_action(|action: &SetKeyboard, cx| {
+        let keyboard = action.0;
+        update(cx, |s| s.keyboard = keyboard);
+    });
     cx.on_action(|_: &BiggerText, cx| update(cx, |s| s.text_size = s.text_size.step(true)));
     cx.on_action(|_: &SmallerText, cx| update(cx, |s| s.text_size = s.text_size.step(false)));
     cx.on_action(|_: &DefaultTextSize, cx| update(cx, |s| s.text_size = TextSize::default()));
@@ -841,6 +870,21 @@ fn text_pane(settings: &Settings, theme: &Colors) -> impl IntoElement {
         ))
 }
 
+/// What the chosen editing keys are like.
+pub(crate) const fn keyboard_hint(keyboard: Keyboard) -> &'static str {
+    match keyboard {
+        Keyboard::Standard => "The keys of every Mac app. Vim and Helix add modal editing.",
+        Keyboard::Vim => {
+            "Vim's normal, insert and visual modes: operators, motions, text objects and \
+             :w. Esc returns to normal mode."
+        }
+        Keyboard::Helix => {
+            "Helix's selection first: w selects a word, x a line, then d, c or y act \
+             on it. v extends; Esc returns to normal mode."
+        }
+    }
+}
+
 fn writing_pane(settings: &Settings, theme: &Colors) -> impl IntoElement {
     let correction_hint: SharedString = if crate::spell::system_corrects_spelling() {
         "Fixes a typo once you finish the word, as its own undo step.".into()
@@ -855,13 +899,19 @@ fn writing_pane(settings: &Settings, theme: &Colors) -> impl IntoElement {
             "Keyboard",
             theme,
             [row(
-                "Vim mode",
-                Some(
-                    "Normal, insert and visual modes with Vim's motions, operators and \
-                     text objects. Esc returns to normal mode; j and k move by screen line."
-                        .into(),
+                "Editing keys",
+                Some(keyboard_hint(settings.keyboard).into()),
+                segmented(
+                    "keyboard",
+                    &[
+                        (Keyboard::Standard, "Standard"),
+                        (Keyboard::Vim, "Vim"),
+                        (Keyboard::Helix, "Helix"),
+                    ],
+                    settings.keyboard,
+                    |s, v| s.keyboard = v,
+                    theme,
                 ),
-                toggle("vim-mode", settings.vim_mode, |s, v| s.vim_mode = v, theme),
                 theme,
             )],
         ))
@@ -1138,7 +1188,7 @@ mod tests {
             check_updates: false,
             check_grammar: false,
             correct_spelling: false,
-            vim_mode: true,
+            keyboard: Keyboard::Helix,
         };
         settings.save_to(&path).unwrap();
         assert_eq!(Settings::load_from(&path), settings);

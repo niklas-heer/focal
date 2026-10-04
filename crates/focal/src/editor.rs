@@ -42,7 +42,7 @@ use crate::settings::{FocusUnit, Settings};
 use crate::spell::{GrammarIssue, SpellChecker};
 use crate::theme::{BOLD_PROSE_FONT, DIMMED, MONO_FONT, PROSE_FONT, Theme, Typography};
 
-mod vim;
+mod modal;
 
 actions!(
     focal,
@@ -456,10 +456,10 @@ pub struct Editor {
     /// query they were found for.
     found: Rc<[Range<usize>]>,
     found_for: Option<(u64, String)>,
-    /// Vim's state while Vim mode is on.
-    vim: Option<focal_core::vim::Vim>,
-    /// Sends keys to Vim before Focal's bindings see them.
-    _vim_keys: gpui_kit::Subscription,
+    /// Vim's or Helix's state while one of them edits.
+    modal: Option<focal_core::modal::Modal>,
+    /// Sends keys to Vim or Helix before Focal's bindings see them.
+    _modal_keys: gpui_kit::Subscription,
 }
 
 impl Editor {
@@ -537,8 +537,8 @@ impl Editor {
             query: None,
             found: Rc::default(),
             found_for: None,
-            vim: settings.vim_mode.then(focal_core::vim::Vim::new),
-            _vim_keys: Self::intercept_vim_keys(cx),
+            modal: modal::for_keyboard(settings.keyboard),
+            _modal_keys: Self::intercept_modal_keys(cx),
         };
         // A single file's wiki links resolve among the files beside it.
         if let Some(dir) = editor
@@ -1496,8 +1496,8 @@ impl Editor {
     // ---- Actions ---------------------------------------------------------
 
     fn backspace(&mut self, _: &Backspace, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(vim) = &mut self.vim {
-            vim.backspaced();
+        if let Some(modal) = &mut self.modal {
+            modal.backspaced();
         }
         if self.selection.is_empty() {
             let head = self.head();
@@ -1705,8 +1705,8 @@ impl Editor {
     }
 
     fn newline(&mut self, _: &Newline, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(vim) = &mut self.vim {
-            vim.typed("\n");
+        if let Some(modal) = &mut self.modal {
+            modal.typed("\n");
         }
         self.insert_newline(cx);
     }
@@ -2510,8 +2510,8 @@ impl Editor {
     ) {
         window.focus(&self.focus_handle, cx);
         self.goal_x = None;
-        if let Some(vim) = &mut self.vim {
-            vim.reset();
+        if let Some(modal) = &mut self.modal {
+            modal.reset();
         }
         let Some(hit) = self.hit_test(event.position) else {
             return;
@@ -2867,7 +2867,7 @@ impl Editor {
         self.check_grammar = settings.check_grammar;
         self.correct_spelling =
             settings.correct_spelling && crate::spell::system_corrects_spelling();
-        self.set_vim_mode(settings.vim_mode, cx);
+        self.set_keyboard(settings.keyboard, cx);
         self.refresh();
         self.remeasure();
         cx.notify();
@@ -3201,7 +3201,7 @@ impl Editor {
         let head = self.head();
         // Vim's block cursor, over the character it is on.
         let block = self
-            .vim_block()
+            .modal_block()
             .map(|at| (at, self.buffer.next_grapheme(at).min(line_range.end)));
         let focused = self.focus_handle.clone();
         let painted = self.painted.clone();
@@ -3885,8 +3885,8 @@ impl EntityInputHandler for Editor {
         self.marked = None;
         let caret = range.start + text.len();
         self.edit(range, text, caret..caret, EditKind::Typing, cx);
-        if let Some(vim) = &mut self.vim {
-            vim.typed(text);
+        if let Some(modal) = &mut self.modal {
+            modal.typed(text);
         }
         self.correct_finished_word(text, cx);
     }
@@ -4129,6 +4129,6 @@ impl Render for Editor {
             )
             .children(banner)
             .children(preview)
-            .children(self.render_vim_status(&theme))
+            .children(self.render_modal_status(&theme))
     }
 }

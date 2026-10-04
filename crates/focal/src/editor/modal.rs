@@ -1,11 +1,14 @@
-//! Vim mode: keys reach [`focal_core::vim::Vim`] before Focal's own key
-//! bindings, and Vim's commands run through the editor's edits and moves, so
-//! undo, autosave, tables and Markdown-aware typing work as without Vim.
+//! Vim and Helix modes: keys reach [`focal_core::modal::Modal`] before
+//! Focal's own key bindings, and its commands run through the editor's edits
+//! and moves, so undo, autosave, tables and Markdown-aware typing work as
+//! without them.
 
 use std::ops::Range;
 
 use focal_core::Bias;
-use focal_core::vim::{Command, Context as VimContext, EditorCommand, Key, Mode, Vim};
+use focal_core::helix::Helix;
+use focal_core::modal::Modal;
+use focal_core::vim::{Command, Context as KeyContext, EditorCommand, Key, Vim};
 use gpui_kit::{
     AnyElement, ClipboardItem, Context, InteractiveElement as _, IntoElement as _, Keystroke,
     ParentElement as _, Styled as _, Subscription, TestSupportExt as _, Window, div, px,
@@ -13,16 +16,27 @@ use gpui_kit::{
 
 use super::{CloseWindow, Down, EditKind, Editor, EditorEvent, Redo, Save, Undo, Up};
 use crate::find_bar::{Find, FindNext, FindPrevious};
+use crate::settings::Keyboard;
 use crate::theme::{MONO_FONT, Theme};
 
+/// The modal keyboard for a setting, if any.
+pub(super) fn for_keyboard(keyboard: Keyboard) -> Option<Modal> {
+    match keyboard {
+        Keyboard::Standard => None,
+        Keyboard::Vim => Some(Modal::Vim(Vim::new())),
+        Keyboard::Helix => Some(Modal::Helix(Helix::new())),
+    }
+}
+
 impl Editor {
-    /// Gives Vim the keys typed into this editor while Vim mode is on.
-    pub(super) fn intercept_vim_keys(cx: &mut Context<Self>) -> Subscription {
+    /// Gives Vim or Helix the keys typed into this editor while one of them
+    /// edits.
+    pub(super) fn intercept_modal_keys(cx: &mut Context<Self>) -> Subscription {
         let editor = cx.entity().downgrade();
         cx.intercept_keystrokes(move |event, window, cx| {
             let handled = editor
                 .update(cx, |editor, cx| {
-                    editor.vim_keystroke(&event.keystroke, window, cx)
+                    editor.modal_keystroke(&event.keystroke, window, cx)
                 })
                 .unwrap_or(false);
             if handled {
@@ -31,101 +45,98 @@ impl Editor {
         })
     }
 
-    /// Turns Vim mode on, in normal mode, or off.
-    pub(super) fn set_vim_mode(&mut self, on: bool, cx: &mut Context<Self>) {
-        match (on, self.vim.is_some()) {
-            (true, false) => {
-                self.vim = Some(Vim::new());
-                self.settle_vim(cx);
-            }
-            (false, true) => {
-                self.vim = None;
-                self.buffer.end_group();
-            }
-            _ => {}
+    /// Switches between Focal's keys, Vim and Helix; each starts in normal
+    /// mode.
+    pub(super) fn set_keyboard(&mut self, keyboard: Keyboard, cx: &mut Context<Self>) {
+        let current = match &self.modal {
+            None => Keyboard::Standard,
+            Some(Modal::Vim(_)) => Keyboard::Vim,
+            Some(Modal::Helix(_)) => Keyboard::Helix,
+        };
+        if current == keyboard {
+            return;
         }
+        self.buffer.end_group();
+        self.modal = for_keyboard(keyboard);
+        self.settle_modal(cx);
     }
 
-    /// Where Vim's block cursor is drawn, if anywhere.
-    pub(super) fn vim_block(&self) -> Option<usize> {
-        let vim = self.vim.as_ref()?;
+    /// Where the block cursor is drawn, if anywhere.
+    pub(super) fn modal_block(&self) -> Option<usize> {
         if self.grid.is_some() {
             return None;
         }
-        let at = vim.block(self.head())?;
-        Some(if vim.mode() == Mode::Normal {
-            focal_core::vim::normal_cursor(self.text(), at)
-        } else {
-            at
-        })
+        self.modal.as_ref()?.block(self.text(), self.head())
     }
 
-    fn vim_keystroke(
+    fn modal_keystroke(
         &mut self,
         keystroke: &Keystroke,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         // Not while a table cell or an input method has the keys.
-        if self.vim.is_none() || !self.focus_handle.is_focused(window) || self.marked.is_some() {
+        if self.modal.is_none() || !self.focus_handle.is_focused(window) || self.marked.is_some() {
             return false;
         }
-        match vim_key(keystroke) {
-            Some(key) => self.send_vim_key(key, window, cx),
+        match modal_key(keystroke) {
+            Some(key) => self.send_modal_key(key, window, cx),
             None => false,
         }
     }
 
-    /// Hands `key` to Vim and runs what it asks for. Returns whether Vim took
-    /// the key.
-    fn send_vim_key(&mut self, key: Key, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    /// Hands `key` to Vim or Helix and runs what it asks for. Returns
+    /// whether the key was taken.
+    fn send_modal_key(&mut self, key: Key, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let clipboard = cx.read_from_clipboard().and_then(|item| item.text());
         let (anchor, head) = (self.tail(), self.head());
-        let Some(vim) = self.vim.as_mut() else {
+        let Some(modal) = self.modal.as_mut() else {
             return false;
         };
-        let context = VimContext {
+        let context = KeyContext {
             text: self.buffer.text(),
             anchor,
             head,
             clipboard: clipboard.as_deref(),
         };
-        let Some(commands) = vim.key(key, &context) else {
+        let Some(commands) = modal.key(key, &context) else {
             return false;
         };
         for command in commands {
-            self.run_vim(command, window, cx);
+            self.run_modal(command, window, cx);
         }
-        self.settle_vim(cx);
+        self.settle_modal(cx);
         cx.notify();
         true
     }
 
-    /// Puts the caret on a character in normal mode, out of list and quote
-    /// markers.
-    fn settle_vim(&mut self, cx: &mut Context<Self>) {
-        let Some(vim) = &self.vim else { return };
-        if self.grid.is_some() || vim.mode() != Mode::Normal {
+    /// Puts the selection where the mode wants it after a key: in normal
+    /// mode a caret moves out of list and quote markers.
+    fn settle_modal(&mut self, cx: &mut Context<Self>) {
+        let Some(modal) = &self.modal else { return };
+        if self.grid.is_some() {
             return;
         }
-        let (at, _) = vim.settle(self.text(), self.tail(), self.head());
-        let at = self.snapshot.analysis.snap(at, Bias::Right);
-        if self.selection != (at..at) {
-            self.selection = at..at;
-            self.reversed = false;
+        let (anchor, head) = modal.settle(self.text(), self.tail(), self.head());
+        let (anchor, head) = if anchor == head && modal.normal() {
+            let at = self.snapshot.analysis.snap(head, Bias::Right);
+            (at, at)
+        } else {
+            (anchor, head)
+        };
+        if (self.tail(), self.head()) != (anchor, head) {
+            self.selection = anchor.min(head)..anchor.max(head);
+            self.reversed = head < anchor;
             self.after_selection(cx);
         }
     }
 
-    fn run_vim(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
+    fn run_modal(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
         match command {
             Command::Select { anchor, head } => {
-                let normal = self
-                    .vim
-                    .as_ref()
-                    .is_some_and(|vim| vim.mode() == Mode::Normal);
-                // Visual mode's selection is set exactly, so Vim can tell
-                // when the pointer changed it.
+                let normal = self.modal.as_ref().is_some_and(Modal::normal);
+                // Selections are set exactly, so Vim and Helix can tell when
+                // the pointer changed them.
                 let (anchor, head) = if normal && anchor == head {
                     let at = self.snapshot.analysis.snap(head, Bias::Right);
                     (at, at)
@@ -163,31 +174,27 @@ impl Editor {
                 query: word,
                 forward,
             }),
-            Command::Repeat { keys, text } => self.repeat_vim_change(keys, &text, window, cx),
+            Command::Repeat { keys, text } => self.repeat_modal_change(keys, &text, window, cx),
             Command::Save => self.save(&Save, window, cx),
             Command::Close => self.close_window(&CloseWindow, window, cx),
         }
     }
 
     /// `.`: the last change's keys again, then the text typed after them.
-    fn repeat_vim_change(
+    fn repeat_modal_change(
         &mut self,
         keys: Vec<Key>,
         text: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(vim) = &mut self.vim {
-            vim.set_replaying(true);
+        if let Some(modal) = &mut self.modal {
+            modal.set_replaying(true);
         }
         for key in keys {
-            self.send_vim_key(key, window, cx);
+            self.send_modal_key(key, window, cx);
         }
-        if self
-            .vim
-            .as_ref()
-            .is_some_and(|vim| vim.mode() == Mode::Insert)
-        {
+        if self.modal.as_ref().is_some_and(Modal::inserting) {
             for (ix, line) in text.split('\n').enumerate() {
                 if ix > 0 {
                     self.insert_newline(cx);
@@ -196,10 +203,10 @@ impl Editor {
                     self.insert(line, EditKind::Typing, cx);
                 }
             }
-            self.send_vim_key(Key::Escape, window, cx);
+            self.send_modal_key(Key::Escape, window, cx);
         }
-        if let Some(vim) = &mut self.vim {
-            vim.set_replaying(false);
+        if let Some(modal) = &mut self.modal {
+            modal.set_replaying(false);
         }
     }
 
@@ -251,10 +258,10 @@ impl Editor {
 
     /// The mode and what is being typed (a count, an operator, `:` and its
     /// command), quietly in the bottom corner.
-    pub(super) fn render_vim_status(&self, theme: &Theme) -> Option<AnyElement> {
-        let vim = self.vim.as_ref()?;
-        let label = vim.mode().label().map(|label| format!("-- {label} --"));
-        let status = vim.status();
+    pub(super) fn render_modal_status(&self, theme: &Theme) -> Option<AnyElement> {
+        let modal = self.modal.as_ref()?;
+        let label = modal.label().map(|label| format!("-- {label} --"));
+        let status = modal.status();
         if label.is_none() && status.is_none() {
             return None;
         }
@@ -265,7 +272,7 @@ impl Editor {
             .join("  ");
         Some(
             div()
-                .id("vim-status")
+                .id("modal-status")
                 .test_support()
                 .absolute()
                 .left(px(16.))
@@ -283,9 +290,9 @@ impl Editor {
     }
 }
 
-/// The key Vim reads for a keystroke. Keys with ⌘ stay Focal's, and so do
-/// arrows and other named keys Vim does not use.
-fn vim_key(keystroke: &Keystroke) -> Option<Key> {
+/// The key Vim and Helix read for a keystroke. Keys with ⌘ stay Focal's,
+/// and so do arrows and other named keys they do not use.
+fn modal_key(keystroke: &Keystroke) -> Option<Key> {
     let modifiers = &keystroke.modifiers;
     if modifiers.platform || modifiers.function {
         return None;

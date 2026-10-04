@@ -116,9 +116,9 @@ pub enum EditorCommand {
 
 /// Yanked or deleted text.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct Register {
-    text: String,
-    linewise: bool,
+pub(crate) struct Register {
+    pub(crate) text: String,
+    pub(crate) linewise: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -166,7 +166,7 @@ enum Motion {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Object {
+pub(crate) enum Object {
     Word {
         big: bool,
         around: bool,
@@ -1224,7 +1224,7 @@ impl Vim {
 }
 
 /// Lines `j` and `k` move for ⌃D and ⌃U.
-const HALF_PAGE: usize = 15;
+pub(crate) const HALF_PAGE: usize = 15;
 
 /// Where a motion to a numbered or nearby line lands: its first non-blank.
 fn line_motion(motion: Motion, count: Option<usize>, from: usize, text: &str) -> Landing {
@@ -1279,7 +1279,7 @@ impl Landing {
     }
 }
 
-fn caret(at: usize) -> Command {
+pub(crate) fn caret(at: usize) -> Command {
     Command::Select {
         anchor: at,
         head: at,
@@ -1313,7 +1313,7 @@ const fn changes_text(parsed: Parsed) -> bool {
     }
 }
 
-fn key_name(key: Key) -> String {
+pub(crate) fn key_name(key: Key) -> String {
     match key {
         Key::Char(c) => c.to_string(),
         Key::Escape => "⎋".to_owned(),
@@ -1434,7 +1434,7 @@ fn read_operator(keys: &[Key]) -> Option<(Operator, usize)> {
     }
 }
 
-fn read_object(key: Key, around: bool) -> Option<Object> {
+pub(crate) fn read_object(key: Key, around: bool) -> Option<Object> {
     let Key::Char(c) = key else { return None };
     Some(match c {
         'w' => Object::Word { big: false, around },
@@ -1591,22 +1591,22 @@ fn read_action(keys: &[Key], visual: bool) -> Result<Option<ActionOrOperator>, (
 
 // ---- Text -----------------------------------------------------------------
 
-fn char_at(text: &str, at: usize) -> Option<char> {
+pub(crate) fn char_at(text: &str, at: usize) -> Option<char> {
     text.get(at..)?.chars().next()
 }
 
-fn next_char(text: &str, at: usize) -> usize {
+pub(crate) fn next_char(text: &str, at: usize) -> usize {
     char_at(text, at).map_or(at, |c| at + c.len_utf8())
 }
 
-fn prev_char(text: &str, at: usize) -> usize {
+pub(crate) fn prev_char(text: &str, at: usize) -> usize {
     text.get(..at)
         .and_then(|before| before.chars().next_back())
         .map_or(0, |c| at - c.len_utf8())
 }
 
 /// Applies `step` up to `n` times, stopping when it has nowhere to go.
-fn repeat(n: usize, from: usize, mut step: impl FnMut(usize) -> Option<usize>) -> usize {
+pub(crate) fn repeat(n: usize, from: usize, mut step: impl FnMut(usize) -> Option<usize>) -> usize {
     let mut at = from;
     for _ in 0..n {
         match step(at) {
@@ -1617,14 +1617,14 @@ fn repeat(n: usize, from: usize, mut step: impl FnMut(usize) -> Option<usize>) -
     at
 }
 
-fn line_start(text: &str, at: usize) -> usize {
+pub(crate) fn line_start(text: &str, at: usize) -> usize {
     text[..at.min(text.len())]
         .rfind('\n')
         .map_or(0, |ix| ix + 1)
 }
 
 /// Where the line's text ends, before its line ending.
-fn line_end(text: &str, at: usize) -> usize {
+pub(crate) fn line_end(text: &str, at: usize) -> usize {
     let at = at.min(text.len());
     let end = text[at..].find('\n').map_or(text.len(), |ix| at + ix);
     if end > line_start(text, at)
@@ -1638,25 +1638,25 @@ fn line_end(text: &str, at: usize) -> usize {
 }
 
 /// Where the next line starts, after this one's line ending.
-fn line_end_with_newline(text: &str, at: usize) -> usize {
+pub(crate) fn line_end_with_newline(text: &str, at: usize) -> usize {
     let at = at.min(text.len());
     text[at..].find('\n').map_or(text.len(), |ix| at + ix + 1)
 }
 
-fn line_ending(text: &str) -> &'static str {
+pub(crate) fn line_ending(text: &str) -> &'static str {
     if text.contains("\r\n") { "\r\n" } else { "\n" }
 }
 
-fn line_of(text: &str, at: usize) -> usize {
+pub(crate) fn line_of(text: &str, at: usize) -> usize {
     text[..at.min(text.len())].matches('\n').count()
 }
 
-fn line_count(text: &str) -> usize {
+pub(crate) fn line_count(text: &str) -> usize {
     text.matches('\n').count() + 1
 }
 
 /// Where line `index` starts; past the last line, the last line.
-fn line_offset(text: &str, index: usize) -> usize {
+pub(crate) fn line_offset(text: &str, index: usize) -> usize {
     let mut start = 0;
     for _ in 0..index {
         match text[start..].find('\n') {
@@ -1667,7 +1667,7 @@ fn line_offset(text: &str, index: usize) -> usize {
     start
 }
 
-fn first_non_blank(text: &str, line: usize) -> usize {
+pub(crate) fn first_non_blank(text: &str, line: usize) -> usize {
     let end = line_end(text, line);
     text[line..end]
         .char_indices()
@@ -1688,11 +1688,11 @@ pub fn normal_cursor(text: &str, at: usize) -> usize {
     }
 }
 
-fn column(text: &str, at: usize) -> usize {
+pub(crate) fn column(text: &str, at: usize) -> usize {
     text[line_start(text, at)..at].chars().count()
 }
 
-fn at_column(text: &str, line: usize, column: usize) -> usize {
+pub(crate) fn at_column(text: &str, line: usize, column: usize) -> usize {
     let end = line_end(text, line);
     text[line..end]
         .char_indices()
@@ -1701,14 +1701,14 @@ fn at_column(text: &str, line: usize, column: usize) -> usize {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Class {
+pub(crate) enum Class {
     Blank,
     Newline,
     Word,
     Punctuation,
 }
 
-fn class(c: char, big: bool) -> Class {
+pub(crate) fn class(c: char, big: bool) -> Class {
     if c == '\n' {
         Class::Newline
     } else if c.is_whitespace() {
@@ -1720,12 +1720,12 @@ fn class(c: char, big: bool) -> Class {
     }
 }
 
-fn class_at(text: &str, at: usize, big: bool) -> Option<Class> {
+pub(crate) fn class_at(text: &str, at: usize, big: bool) -> Option<Class> {
     char_at(text, at).map(|c| class(c, big))
 }
 
 /// `w`: the start of the next word; an empty line counts as one.
-fn word_start(text: &str, from: usize, big: bool) -> usize {
+pub(crate) fn word_start(text: &str, from: usize, big: bool) -> usize {
     let mut at = from;
     let start = class_at(text, at, big);
     if let Some(class) = start.filter(|c| matches!(c, Class::Word | Class::Punctuation)) {
@@ -1753,7 +1753,7 @@ fn word_start(text: &str, from: usize, big: bool) -> usize {
 }
 
 /// `e`: the last character of this or the next word.
-fn word_end(text: &str, from: usize, big: bool) -> usize {
+pub(crate) fn word_end(text: &str, from: usize, big: bool) -> usize {
     let mut at = next_char(text, from);
     while matches!(class_at(text, at, big), Some(Class::Blank | Class::Newline)) {
         at = next_char(text, at);
@@ -1771,7 +1771,7 @@ fn word_end(text: &str, from: usize, big: bool) -> usize {
 }
 
 /// `b`: the start of this or the previous word.
-fn word_back(text: &str, from: usize, big: bool) -> usize {
+pub(crate) fn word_back(text: &str, from: usize, big: bool) -> usize {
     let mut at = prev_char(text, from);
     if at == from {
         return from;
@@ -1793,7 +1793,7 @@ fn word_back(text: &str, from: usize, big: bool) -> usize {
 }
 
 /// `ge`: the end of the previous word.
-fn word_end_back(text: &str, from: usize, big: bool) -> usize {
+pub(crate) fn word_end_back(text: &str, from: usize, big: bool) -> usize {
     let class = class_at(text, from, big);
     let mut at = from;
     if matches!(class, Some(Class::Word | Class::Punctuation)) {
@@ -1807,7 +1807,7 @@ fn word_end_back(text: &str, from: usize, big: bool) -> usize {
     at
 }
 
-fn blank_line(text: &str, line: usize) -> bool {
+pub(crate) fn blank_line(text: &str, line: usize) -> bool {
     text[line..line_end(text, line)].trim().is_empty()
 }
 
@@ -1923,7 +1923,7 @@ fn find_in_line(
 }
 
 /// `%`: the bracket matching the one at or after the cursor on its line.
-fn match_bracket(text: &str, from: usize) -> Option<usize> {
+pub(crate) fn match_bracket(text: &str, from: usize) -> Option<usize> {
     let end = line_end(text, from);
     let (at, c) = text[from..end]
         .char_indices()
@@ -1966,7 +1966,7 @@ fn match_bracket(text: &str, from: usize) -> Option<usize> {
 }
 
 /// The range of a text object around `at`, and whether it is whole lines.
-fn object_range(object: Object, text: &str, at: usize) -> Option<(Range<usize>, bool)> {
+pub(crate) fn object_range(object: Object, text: &str, at: usize) -> Option<(Range<usize>, bool)> {
     match object {
         Object::Word { big, around } => Some((word_object(text, at, big, around), false)),
         Object::Sentence { around } => Some((sentence_object(text, at, around), false)),
@@ -2160,7 +2160,7 @@ fn bracket_object(
 
 /// A linewise range to delete: after the last line, the line ending before
 /// it goes instead, so no empty line is left behind.
-fn whole_lines(text: &str, range: Range<usize>) -> Range<usize> {
+pub(crate) fn whole_lines(text: &str, range: Range<usize>) -> Range<usize> {
     if range.end == text.len() && !text.ends_with('\n') && range.start > 0 {
         let mut start = range.start - 1;
         if start > 0 && text.as_bytes()[start - 1] == b'\r' {
@@ -2172,13 +2172,13 @@ fn whole_lines(text: &str, range: Range<usize>) -> Range<usize> {
     }
 }
 
-fn edited(text: &str, range: &Range<usize>, new: &str) -> String {
+pub(crate) fn edited(text: &str, range: &Range<usize>, new: &str) -> String {
     let mut after = text.to_owned();
     after.replace_range(range.clone(), new);
     after
 }
 
-fn toggle_case(c: char) -> Vec<char> {
+pub(crate) fn toggle_case(c: char) -> Vec<char> {
     if c.is_uppercase() {
         c.to_lowercase().collect()
     } else {
@@ -2188,7 +2188,7 @@ fn toggle_case(c: char) -> Vec<char> {
 
 /// `J`: joins `lines` lines from the one at `at`, with one space between
 /// them and without the next lines' leading blanks.
-fn join(text: &str, at: usize, lines: usize) -> Vec<Command> {
+pub(crate) fn join(text: &str, at: usize, lines: usize) -> Vec<Command> {
     let start = line_start(text, at);
     let mut end = line_end(text, at);
     let mut joined = text[start..end].to_owned();

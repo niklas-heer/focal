@@ -1897,13 +1897,13 @@ fn the_about_window_names_the_version_and_closes_with_escape(cx: &mut TestAppCon
 /// An editor with Vim mode on, in normal mode.
 fn open_vim(cx: &mut TestAppContext, text: &str) -> (AnyWindowHandle, Entity<Editor>) {
     let (window, editor) = open_editor(cx, text);
-    set_settings(cx, |s| s.vim_mode = true);
+    set_settings(cx, |s| s.keyboard = crate::settings::Keyboard::Vim);
     act(cx, window, |_, _| {});
     (window, editor)
 }
 
 fn vim_status(window: &mut Window) -> bool {
-    window.try_find("vim-status").is_some()
+    window.try_find("modal-status").is_some()
 }
 
 #[gpui_kit::test]
@@ -1993,7 +1993,7 @@ fn vim_shows_pending_keys_and_the_command_line(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn vim_mode_off_types_normally(cx: &mut TestAppContext) {
     let (window, editor) = open_vim(cx, "");
-    set_settings(cx, |s| s.vim_mode = false);
+    set_settings(cx, |s| s.keyboard = crate::settings::Keyboard::Standard);
     act(cx, window, |window, cx| window.input("dw", cx));
     editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "dw"));
 }
@@ -2023,4 +2023,40 @@ fn command_equals_and_minus_step_the_text_size(cx: &mut TestAppContext) {
         window.press("cmd--", cx);
     });
     cx.update(|cx| assert_eq!(cx.global::<Settings>().text_size, TextSize::Small));
+}
+
+/// An editor with Helix mode on, in normal mode.
+fn open_helix(cx: &mut TestAppContext, text: &str) -> (AnyWindowHandle, Entity<Editor>) {
+    let (window, editor) = open_editor(cx, text);
+    set_settings(cx, |s| s.keyboard = crate::settings::Keyboard::Helix);
+    act(cx, window, |_, _| {});
+    editor.update(cx, |editor, cx| editor.move_to(0, cx));
+    (window, editor)
+}
+
+#[gpui_kit::test]
+fn helix_selects_first_then_acts(cx: &mut TestAppContext) {
+    let (window, editor) = open_helix(cx, "one two three");
+    act(cx, window, |window, cx| window.input("w", cx));
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.selection(), 0..4, "w selects the word and its space");
+        assert_eq!(editor.text(), "one two three");
+    });
+    act(cx, window, |window, cx| window.input("d", cx));
+    editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "two three"));
+    act(cx, window, |window, cx| window.input("u", cx));
+    editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "one two three"));
+}
+
+#[gpui_kit::test]
+fn helix_x_selects_lines_and_c_changes_them(cx: &mut TestAppContext) {
+    let (window, editor) = open_helix(cx, "first\nsecond");
+    act(cx, window, |window, cx| window.input("miwcnew", cx));
+    act(cx, window, |window, _| {
+        assert!(vim_status(window), "-- INSERT --");
+    });
+    act(cx, window, |window, cx| window.press("escape", cx));
+    editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "new\nsecond"));
+    act(cx, window, |window, cx| window.input("xd", cx));
+    editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "second"));
 }
