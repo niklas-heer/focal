@@ -127,6 +127,20 @@ pub fn confirm_discard(count: usize) -> bool {
     alert.runModal() == NSAlertSecondButtonReturn
 }
 
+/// Asks before something that cannot be undone; `true` to go ahead.
+pub fn confirm(message: &str, detail: &str, action: &str) -> bool {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return false;
+    };
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str(message));
+    alert.setInformativeText(&NSString::from_str(detail));
+    alert.setAlertStyle(NSAlertStyle::Warning);
+    alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+    alert.addButtonWithTitle(&NSString::from_str(action));
+    alert.runModal() == NSAlertSecondButtonReturn
+}
+
 /// Puts `html` and its `plain` text on the general pasteboard, so rich text
 /// editors paste the HTML and others the text. Test builds record the copy
 /// instead (see [`copied_html`]) and leave the pasteboard alone.

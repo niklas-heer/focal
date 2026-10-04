@@ -2742,3 +2742,149 @@ fn a_filler_word_is_removed_or_ignored(cx: &mut TestAppContext) {
         assert!(e.style_issues_for_test(0).is_empty(), "ignored here");
     });
 }
+
+// ---- Review notes (M13) -------------------------------------------------------
+
+fn review_folder(name: &str, sidecar: Option<&str>) -> std::path::PathBuf {
+    let root = notes_folder(name, "The fox jumps.\n");
+    if let Some(sidecar) = sidecar {
+        std::fs::write(root.join("new.review.md"), sidecar).unwrap();
+    }
+    root
+}
+
+const ONE_NOTE: &str = "# Review notes for new.md\n\n## Line 1\n\n> fox\n\nMake it a cat.\n";
+
+#[gpui_kit::test]
+fn adding_a_note_writes_the_sidecar_and_copy_makes_a_prompt(cx: &mut TestAppContext) {
+    let root = review_folder("review-add", None);
+    let (window, workspace) = open_folder(cx, &root);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    editor.update(cx, |e, cx| e.select(4..7, cx));
+    act(cx, window, |window, cx| window.press("cmd-alt-n", cx));
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find("note-draft").is_some(),
+            "the note card opens"
+        );
+    });
+    act(cx, window, |window, cx| window.input("Make it a cat.", cx));
+    act(cx, window, |window, cx| window.press("enter", cx));
+    let sidecar = std::fs::read_to_string(root.join("new.review.md")).unwrap();
+    assert_eq!(sidecar, ONE_NOTE);
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.text(), "The fox jumps.\n", "the document is untouched");
+    });
+    act(cx, window, |window, _| {
+        assert!(window.try_find("note-draft").is_none());
+        assert!(
+            window.try_find(("note-dot", 0usize)).is_some(),
+            "a dot in the margin"
+        );
+    });
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::editor::CopyNotesForAgent), cx);
+    });
+    let copied = cx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .unwrap();
+    assert!(copied.starts_with("Please revise new.md"), "{copied}");
+    assert!(
+        copied.contains("1. Line 1: \"fox\"\n   Make it a cat.\n"),
+        "{copied}"
+    );
+}
+
+#[gpui_kit::test]
+fn escape_cancels_a_note(cx: &mut TestAppContext) {
+    let root = review_folder("review-cancel", None);
+    let (window, workspace) = open_folder(cx, &root);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    editor.update(cx, |e, cx| e.select(4..7, cx));
+    act(cx, window, |window, cx| window.press("cmd-alt-n", cx));
+    act(cx, window, |window, cx| window.input("never mind", cx));
+    act(cx, window, |window, cx| window.press("escape", cx));
+    act(cx, window, |window, cx| {
+        assert!(window.try_find("note-draft").is_none());
+        assert!(
+            editor.read(cx).focus_handle.is_focused(window),
+            "back to the text"
+        );
+    });
+    assert!(!root.join("new.review.md").exists());
+}
+
+#[gpui_kit::test]
+fn the_notes_tab_lists_and_deletes_notes(cx: &mut TestAppContext) {
+    let root = review_folder("review-tab", Some(ONE_NOTE));
+    let (window, _) = open_folder(cx, &root);
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::workspace::ShowNotes), cx);
+    });
+    act(cx, window, |window, _| {
+        assert_eq!(
+            window.find(("note", 0usize)).label(),
+            Some("Line 1: fox. Make it a cat.")
+        );
+        assert_eq!(window.find("panel-tab-notes").label(), Some("Notes 1"));
+    });
+    act(cx, window, |window, cx| {
+        window.click(("note-delete", 0usize), cx);
+    });
+    assert!(
+        !root.join("new.review.md").exists(),
+        "the last note takes the file"
+    );
+    act(cx, window, |window, _| {
+        assert!(window.try_find("notes-empty").is_some());
+    });
+}
+
+#[gpui_kit::test]
+fn the_empty_notes_tab_explains_itself(cx: &mut TestAppContext) {
+    let root = review_folder("review-empty", None);
+    let (window, _) = open_folder(cx, &root);
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::workspace::ShowNotes), cx);
+    });
+    act(cx, window, |window, _| {
+        let label = window
+            .find("notes-empty")
+            .label()
+            .unwrap_or_default()
+            .to_owned();
+        assert!(label.contains("Add Note (⌥⌘N)"), "{label}");
+        assert!(label.contains("new.review.md"), "{label}");
+    });
+}
+
+#[gpui_kit::test]
+fn a_rewritten_passage_marks_its_note_changed(cx: &mut TestAppContext) {
+    let root = review_folder("review-changed", Some(ONE_NOTE));
+    let (window, workspace) = open_folder(cx, &root);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    editor.update(cx, |e, cx| e.load_theirs_for_test("The cat jumps.\n", cx));
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::workspace::ShowNotes), cx);
+    });
+    act(cx, window, |window, _| {
+        let label = window
+            .find(("note", 0usize))
+            .label()
+            .unwrap_or_default()
+            .to_owned();
+        assert!(label.contains("passage changed"), "{label}");
+    });
+}
+
+#[gpui_kit::test]
+fn a_sidecar_changed_on_disk_is_read_again(cx: &mut TestAppContext) {
+    let root = review_folder("review-reload", Some(ONE_NOTE));
+    let (_, workspace) = open_folder(cx, &root);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    editor.read_with(cx, |e, _| assert_eq!(e.notes().len(), 1));
+    std::fs::remove_file(root.join("new.review.md")).unwrap();
+    editor.update(cx, |e, cx| e.reload_notes(cx));
+    editor.read_with(cx, |e, _| assert!(e.notes().is_empty()));
+}

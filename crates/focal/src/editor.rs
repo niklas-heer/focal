@@ -44,6 +44,7 @@ use crate::theme::{BOLD_PROSE_FONT, DIMMED, PROSE_FONT, Theme, Typography};
 
 mod changes;
 mod modal;
+mod notes;
 mod paste;
 mod style_marks;
 #[cfg(test)]
@@ -89,6 +90,9 @@ actions!(
         PreviousChange,
         DismissChanges,
         CompareWithLastCommit,
+        AddNote,
+        CancelNote,
+        CopyNotesForAgent,
         Undo,
         Redo,
         Save,
@@ -139,6 +143,8 @@ pub enum EditorEvent {
     /// Vim or Helix searched for this text, which ⌘G and the find bar go on
     /// with.
     Searched(String),
+    /// The review notes changed, or were copied.
+    NotesChanged,
 }
 
 impl EventEmitter<EditorEvent> for Editor {}
@@ -253,6 +259,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-alt-shift-v", PasteAsPlainText, context),
         KeyBinding::new("cmd-alt-down", NextChange, context),
         KeyBinding::new("cmd-alt-up", PreviousChange, context),
+        KeyBinding::new("cmd-alt-n", AddNote, context),
+        KeyBinding::new("escape", CancelNote, Some("FocalNote > Input")),
         // Only while changes show, with Focal's own keys, and nothing else
         // (the find bar, a cell, Vim or Helix) wants Esc.
         KeyBinding::new("escape", DismissChanges, Some("FocalEditor && changes")),
@@ -502,6 +510,16 @@ pub struct Editor {
     tag_cache: RefCell<std::collections::HashMap<String, Rc<crate::style::Tagged>>>,
     /// Style findings ignored in this document, lowercase.
     ignored_style: std::collections::HashSet<String>,
+    /// Review notes beside the document, where their passages are, and
+    /// anything else their file holds.
+    notes: Vec<focal_core::review::Note>,
+    note_anchors: Vec<focal_core::review::Anchor>,
+    notes_extra: String,
+    note_draft: Option<notes::NoteDraft>,
+    /// The notes were just copied for an agent (the Notes tab says so).
+    pub(crate) notes_copied: bool,
+    /// Reads the notes again when their file changes on disk.
+    notes_watch: Option<(notify::RecommendedWatcher, Task<()>)>,
     /// What changes are shown against, if anything.
     baseline: Option<changes::Baseline>,
     changes: Rc<focal_core::diff::Changes>,
@@ -590,9 +608,16 @@ impl Editor {
             syntax_highlight: settings.syntax_highlight.clone(),
             tag_cache: RefCell::default(),
             ignored_style: std::collections::HashSet::new(),
+            notes: Vec::new(),
+            note_anchors: Vec::new(),
+            notes_extra: String::new(),
+            note_draft: None,
+            notes_copied: false,
+            notes_watch: None,
             baseline: None,
             changes: Rc::default(),
         };
+        editor.load_notes();
         // A single file's wiki links resolve among the files beside it.
         if let Some(dir) = editor
             .path()
@@ -1490,6 +1515,7 @@ impl Editor {
         self.reversed = false;
         self.goal_x = None;
         self.recompute_changes(false);
+        self.anchor_notes();
         self.refresh();
         if self.grid.is_none() {
             self.reveal_caret();
@@ -1844,6 +1870,7 @@ impl Editor {
         self.selection = selection.start.min(len)..selection.end.min(len);
         self.reversed = false;
         self.recompute_changes(false);
+        self.anchor_notes();
         self.refresh();
         self.reveal_caret();
         self.schedule_save(cx);
@@ -2081,6 +2108,7 @@ impl Editor {
                 this.update_in(cx, |this, window, cx| {
                     this.document.path = Some(path.clone());
                     this.watch_document(cx);
+                    this.load_notes();
                     this.save_now(cx);
                     this.discard_draft();
                     window.set_window_title(&this.title());
@@ -2364,6 +2392,7 @@ impl Editor {
             }
         });
         self.watch = Some((watcher, task));
+        self.watch_notes(cx);
     }
 
     /// Reloads the file when it changed on disk. With unsaved local edits,
@@ -2410,6 +2439,7 @@ impl Editor {
         self.conflict = false;
         self.save_task = None;
         self.recompute_changes(true);
+        self.anchor_notes();
         self.refresh();
         cx.notify();
     }
@@ -2902,6 +2932,19 @@ impl Editor {
                 .find(|issue| issue.range.start <= at && at <= issue.range.end)
             {
                 self.style_menu(&view, &issue, event.position, window, cx);
+            } else {
+                // Anywhere else: a review note on the selection, or here.
+                if !(self.selection.start <= offset && offset <= self.selection.end) {
+                    self.move_to(offset, cx);
+                }
+                let label = if self.selection.is_empty() {
+                    "Add Note on This Line…"
+                } else {
+                    "Add Note…"
+                };
+                NativeMenu::new()
+                    .menu(label, Box::new(AddNote))
+                    .show(event.position, window, cx);
             }
             return;
         };
@@ -3237,6 +3280,13 @@ impl Editor {
             .map(|issue| issue.range)
             .collect();
         let marked = mark_runs(&marked, &grammar, InlineStyle::GRAMMAR);
+        let noted: Vec<Range<usize>> = self
+            .noted_on(&analysis.content_range(line))
+            .into_iter()
+            .map(|range| view.map.to_display(range.start)..view.map.to_display(range.end))
+            .filter(|range| !range.is_empty())
+            .collect();
+        let marked = mark_runs(&marked, &noted, InlineStyle::NOTED);
         let mut marked = mark_runs(
             &marked,
             &self.style_ranges(line, &view, &info.kind),
@@ -3313,6 +3363,7 @@ impl Editor {
         let deleted = self.deleted_on(&line_range);
         let (inserted_color, deleted_color) = (theme.inserted, theme.deleted);
         let change_bar = self.change_bar(&line_range, theme);
+        let note_dots = self.note_dots(&line_range);
         let caret_color = theme.caret;
         let _ = (window, cx);
 
@@ -3502,12 +3553,23 @@ impl Editor {
             line_height,
             on_toggle,
         );
-        match change_bar {
+        if change_bar.is_none() && note_dots.is_empty() {
+            return row;
+        }
+        let fade = |color: Hsla| {
+            if self.focus_mode {
+                color.opacity(DIMMED)
+            } else {
+                color
+            }
+        };
+        let note_color = fade(theme.note);
+        div()
+            .relative()
+            .child(row)
             // Changed lines are marked in the left margin.
-            Some(color) => div()
-                .relative()
-                .child(row)
-                .child(
+            .when_some(change_bar, |d, color| {
+                d.child(
                     div()
                         .id(("change-bar", line))
                         .test_support()
@@ -3517,15 +3579,51 @@ impl Editor {
                         .left(px(-14.))
                         .w(px(3.))
                         .rounded(px(2.))
-                        .bg(if self.focus_mode {
-                            color.opacity(DIMMED)
-                        } else {
-                            color
-                        }),
+                        .bg(fade(color)),
                 )
-                .into_any_element(),
-            None => row,
-        }
+            })
+            // Review notes, by a dot in the right margin: hollow when the
+            // passage changed.
+            .children(
+                note_dots
+                    .into_iter()
+                    .enumerate()
+                    .map(|(nth, (ix, changed))| {
+                        let text: SharedString = self
+                            .notes
+                            .get(ix)
+                            .map(|note| note.text.clone())
+                            .unwrap_or_default()
+                            .into();
+                        let label: SharedString = format!("Review note: {text}").into();
+                        #[allow(clippy::cast_precision_loss)]
+                        let shift = 10. * nth as f32;
+                        div()
+                            .id(("note-dot", ix))
+                            .test_support()
+                            .aria_label(label)
+                            .absolute()
+                            .top(px(top + 8.))
+                            .right(px(-20. - shift))
+                            .size(px(8.))
+                            .rounded_full()
+                            .cursor_pointer()
+                            .when(changed, |d| d.border_1().border_color(note_color))
+                            .when(!changed, |d| d.bg(note_color))
+                            .tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(text.clone())
+                                    .build(window, cx)
+                            })
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.edit_note(ix, window, cx);
+                                }),
+                            )
+                    }),
+            )
+            .into_any_element()
     }
 
     /// The find matches inside a table `cell`, as ranges of its displayed
@@ -3857,6 +3955,12 @@ pub(crate) fn text_runs(
                     Some(UnderlineStyle {
                         color: Some(theme.style_issue),
                         thickness: px(1.),
+                        wavy: false,
+                    })
+                } else if style.contains(InlineStyle::NOTED) {
+                    Some(UnderlineStyle {
+                        color: Some(theme.note),
+                        thickness: px(2.),
                         wavy: false,
                     })
                 } else {
@@ -4218,6 +4322,9 @@ impl Render for Editor {
             .on_action(cx.listener(Self::previous_change))
             .on_action(cx.listener(Self::dismiss_changes))
             .on_action(cx.listener(Self::compare_with_last_commit))
+            .on_action(cx.listener(Self::add_note))
+            .on_action(cx.listener(Self::cancel_note))
+            .on_action(cx.listener(Self::copy_notes_for_agent))
             .on_action(cx.listener(Self::undo))
             .on_action(cx.listener(Self::redo))
             .on_action(cx.listener(Self::save))

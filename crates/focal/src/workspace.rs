@@ -22,11 +22,13 @@ use crate::switcher::{GoToHeading, PickItem, QuickOpen, Switcher, SwitcherEvent}
 use crate::theme::Theme;
 
 mod keys;
+mod notes_tab;
 mod panel;
 
 pub use keys::ShowEditingKeys;
 pub use panel::{
-    PanelTab, ShowLinkedFrom, ToggleDarkMode, ToggleInfo, ToggleOutline, ToggleRecent,
+    OpenNotesFile, PanelTab, ShowLinkedFrom, ShowNotes, ToggleDarkMode, ToggleInfo, ToggleOutline,
+    ToggleRecent,
 };
 
 actions!(focal, [ToggleSidebar, GoBack, Minimize, Zoom]);
@@ -152,6 +154,7 @@ impl Workspace {
         match event {
             EditorEvent::Jumped(from) => self.history.push((here, from.clone())),
             EditorEvent::Searched(query) => self.last_query = Some(query.clone()),
+            EditorEvent::NotesChanged => cx.notify(),
             EditorEvent::Open(path) => {
                 let in_folder = self
                     .folder
@@ -887,6 +890,7 @@ impl Workspace {
 }
 
 impl Render for Workspace {
+    #[allow(clippy::too_many_lines)]
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::for_appearance(window.appearance());
         let editor = self.editor.read(cx);
@@ -928,6 +932,15 @@ impl Render for Workspace {
             // the keys, the menu or the bar's own button.
             .capture_action(cx.listener(|this, _: &ToggleFocusMode, _, cx| this.hide_bar(cx)))
             .on_action(cx.listener(Self::show_linked_from))
+            .on_action(cx.listener(Self::show_notes))
+            // Esc in the note card, which the workspace draws.
+            .on_action(
+                cx.listener(|this, action: &crate::editor::CancelNote, window, cx| {
+                    this.editor
+                        .update(cx, |editor, cx| editor.cancel_note(action, window, cx));
+                }),
+            )
+            .on_action(cx.listener(Self::open_notes_file))
             .on_action(cx.listener(|this, _: &ToggleInfo, _, cx| {
                 this.toggle_panel(PanelTab::Info, cx);
             }))
@@ -962,6 +975,9 @@ impl Render for Workspace {
             .children(sidebar)
             .child(main.child(corner))
             .children(panel)
+            // The note being written, under its passage: outside the editor,
+            // so its keys stay the note's.
+            .children(self.editor.read(cx).render_note_draft(&theme))
             .when_some(self.find_bar.as_ref(), |d, (bar, _)| {
                 d.child(
                     div()

@@ -105,6 +105,9 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::action("Paste as Plain Text", PasteAsPlainText),
             MenuItem::os_action("Select All", SelectAll, OsAction::SelectAll),
             MenuItem::separator(),
+            MenuItem::action("Add Note…", crate::editor::AddNote),
+            MenuItem::action("Copy Notes for Agent", crate::editor::CopyNotesForAgent),
+            MenuItem::separator(),
             MenuItem::submenu(Menu::new("Find").items([
                 MenuItem::action("Find…", Find),
                 MenuItem::action("Find and Replace…", FindAndReplace),
@@ -149,6 +152,8 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::action("Info Panel", ToggleInfo),
             MenuItem::action("Outline", ToggleOutline),
             MenuItem::action("Linked From…", crate::workspace::ShowLinkedFrom),
+            MenuItem::action("Notes", crate::workspace::ShowNotes),
+            MenuItem::action("Open Notes File", crate::workspace::OpenNotesFile),
             MenuItem::submenu(Menu::new("Changes").items([
                 MenuItem::action("Next Change", crate::editor::NextChange),
                 MenuItem::action("Previous Change", crate::editor::PreviousChange),

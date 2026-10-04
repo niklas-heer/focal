@@ -30,7 +30,9 @@ actions!(
         ToggleOutline,
         ToggleRecent,
         ToggleDarkMode,
-        ShowLinkedFrom
+        ShowLinkedFrom,
+        ShowNotes,
+        OpenNotesFile
     ]
 );
 
@@ -42,6 +44,8 @@ pub enum PanelTab {
     Info,
     Outline,
     Recent,
+    /// Review notes for agents.
+    Notes,
 }
 
 impl Workspace {
@@ -233,6 +237,7 @@ impl Workspace {
     }
 
     /// The panel at the right edge, when it is open and focus mode is off.
+    #[allow(clippy::too_many_lines)]
     pub(super) fn render_panel(&self, theme: &Theme, cx: &Context<Self>) -> Option<AnyElement> {
         let tab = self.panel?;
         if self.editor.read(cx).focus_mode() {
@@ -242,13 +247,20 @@ impl Workspace {
             PanelTab::Info => self.render_info(theme, cx),
             PanelTab::Outline => self.render_outline(theme, cx),
             PanelTab::Recent => render_recent(self.editor.read(cx).path(), theme, cx),
+            PanelTab::Notes => self.render_notes(theme, cx),
         };
-        let tab_button = |id: &'static str, label: &'static str, which: PanelTab| {
+        let note_count = self.editor.read(cx).notes().len();
+        let notes_label: SharedString = if note_count > 0 {
+            format!("Notes {note_count}").into()
+        } else {
+            "Notes".into()
+        };
+        let tab_button = |id: &'static str, label: SharedString, which: PanelTab| {
             let selected = tab == which;
             div()
                 .id(id)
                 .test_support()
-                .aria_label(label)
+                .aria_label(label.clone())
                 .flex_1()
                 .py(px(3.))
                 .flex()
@@ -294,13 +306,18 @@ impl Workspace {
                                 .p(px(2.))
                                 .rounded(px(8.))
                                 .bg(theme.code_background)
-                                .child(tab_button("panel-tab-info", "Info", PanelTab::Info))
+                                .child(tab_button("panel-tab-info", "Info".into(), PanelTab::Info))
                                 .child(tab_button(
                                     "panel-tab-outline",
-                                    "Outline",
+                                    "Outline".into(),
                                     PanelTab::Outline,
                                 ))
-                                .child(tab_button("panel-tab-recent", "Recent", PanelTab::Recent)),
+                                .child(tab_button(
+                                    "panel-tab-recent",
+                                    "Recent".into(),
+                                    PanelTab::Recent,
+                                ))
+                                .child(tab_button("panel-tab-notes", notes_label, PanelTab::Notes)),
                         )
                         .child(
                             div()

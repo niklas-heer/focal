@@ -51,7 +51,9 @@ pub fn scan(root: &Path, depth: Depth, limit: usize) -> Vec<PathBuf> {
             let markdown = path
                 .extension()
                 .is_some_and(|e| EXTENSIONS.iter().any(|x| e.eq_ignore_ascii_case(x)));
+            // Review notes belong to their document; the Notes tab opens them.
             if markdown
+                && !focal_core::review::is_sidecar(&path)
                 && !name.to_string_lossy().starts_with('.')
                 && entry.file_type().is_ok_and(|t| t.is_file())
                 && let Ok(relative) = path.strip_prefix(root)
@@ -130,9 +132,6 @@ pub fn backlinks(
     let mut index: std::collections::HashMap<PathBuf, Vec<Backlink>> =
         std::collections::HashMap::new();
     for file in files {
-        if file.to_string_lossy().ends_with(".review.md") {
-            continue;
-        }
         let path = root.join(file);
         if std::fs::metadata(&path).is_ok_and(|m| m.len() > TAG_FILE_LIMIT) {
             continue;
@@ -244,6 +243,17 @@ pub fn watch(
 #[cfg(test)]
 pub mod tests {
     use super::*;
+
+    #[test]
+    fn review_sidecars_are_not_listed() {
+        let root = temp_folder("sidecars");
+        std::fs::write(root.join("a.md"), "").unwrap();
+        std::fs::write(root.join("a.review.md"), "").unwrap();
+        assert_eq!(
+            scan(&root, Depth::Tree, SCAN_LIMIT),
+            [PathBuf::from("a.md")]
+        );
+    }
 
     #[test]
     fn link_spellings_resolve_and_self_is_skipped() {

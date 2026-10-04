@@ -49,6 +49,8 @@ impl InlineStyle {
     pub const ADVERB: Self = Self(1 << 22);
     pub const VERB: Self = Self(1 << 23);
     pub const CONJUNCTION: Self = Self(1 << 24);
+    /// A passage a review note is about.
+    pub const NOTED: Self = Self(1 << 25);
 
     pub const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0 && other.0 != 0

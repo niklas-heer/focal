@@ -416,6 +416,7 @@ fn app_action(command: focal_core::keys::AppCommand) -> Box<dyn gpui_kit::Action
         AppCommand::Links => Box::new(crate::workspace::ShowLinkedFrom),
         AppCommand::NextChange => Box::new(super::NextChange),
         AppCommand::PreviousChange => Box::new(super::PreviousChange),
+        AppCommand::AddNote => Box::new(super::AddNote),
         AppCommand::DarkMode => Box::new(crate::workspace::ToggleDarkMode),
         AppCommand::FocusMode => Box::new(super::ToggleFocusMode),
         AppCommand::KeyReference => Box::new(crate::workspace::ShowEditingKeys),

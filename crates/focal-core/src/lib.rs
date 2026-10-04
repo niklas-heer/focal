@@ -27,6 +27,7 @@ pub mod links;
 pub mod modal;
 pub mod outline;
 pub mod paste;
+pub mod review;
 pub mod search;
 pub mod shadow;
 pub mod style;

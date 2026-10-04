@@ -40,6 +40,8 @@ pub enum AppCommand {
     /// The next or previous change, while changes show.
     NextChange,
     PreviousChange,
+    /// A review note on the selection, for an agent.
+    AddNote,
     DarkMode,
     FocusMode,
     KeyReference,
@@ -61,6 +63,7 @@ const MENU: &[(char, AppCommand, &str)] = &[
     ('r', AppCommand::Recent, "recent files"),
     ('l', AppCommand::Links, "files linking here"),
     ('c', AppCommand::NextChange, "next change"),
+    ('n', AppCommand::AddNote, "add a review note"),
     ('d', AppCommand::DarkMode, "light or dark"),
     ('z', AppCommand::FocusMode, "focus mode"),
     ('?', AppCommand::KeyReference, "all keys"),
@@ -76,6 +79,7 @@ const MENU_HINTS: &[Hint] = &[
     ("r", "recent files"),
     ("l", "files linking here"),
     ("c", "next change"),
+    ("n", "add a review note"),
     ("d", "light or dark"),
     ("z", "focus mode"),
     ("?", "all keys"),
@@ -135,6 +139,7 @@ const EX: &[(&[&str], Ex, &str)] = &[
         "sidebar of files",
     ),
     (&["recent"], Ex::App(AppCommand::Recent), "recent files"),
+    (&["note"], Ex::App(AppCommand::AddNote), "add a review note"),
     (
         &["changes", "change"],
         Ex::App(AppCommand::NextChange),

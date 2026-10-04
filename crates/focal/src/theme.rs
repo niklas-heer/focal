@@ -78,6 +78,8 @@ pub struct Theme {
     pub deleted: Hsla,
     /// The style check's underline.
     pub style_issue: Hsla,
+    /// Review notes: the passage's underline and the margin dot.
+    pub note: Hsla,
     /// Syntax highlighting: adjectives, nouns, adverbs, verbs, conjunctions.
     parts: [Hsla; 5],
     alerts: [Hsla; 5],
@@ -119,6 +121,7 @@ impl Theme {
             changed: rgb(0x002d_a44e).into(),
             deleted: rgb(0x00cf_222e).into(),
             style_issue: rgba(0x2121_2180).into(),
+            note: rgb(0x00d9_a400).into(),
             parts: [
                 rgb(0x00a0_702a).into(),
                 rgb(0x00c4_413b).into(),
@@ -159,6 +162,7 @@ impl Theme {
             changed: rgb(0x003f_b950).into(),
             deleted: rgb(0x00f8_5149).into(),
             style_issue: rgba(0xd9d7_d280).into(),
+            note: rgb(0x00e6_c04a).into(),
             parts: [
                 rgb(0x00d4_a259).into(),
                 rgb(0x00e8_746e).into(),
