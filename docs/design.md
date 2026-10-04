@@ -193,6 +193,8 @@ Built in M3: a settings window (⌘,) with the prose typeface (Quattro, Duo or M
 
 Redesigned 2026-10-04: the window has a toolbar of panes, as macOS preferences do (⌘1 to ⌘5, or ⌃Tab, switch them): **Text** (a live preview in the chosen typeface and size, then appearance, typeface, size and line length), **Writing** (grammar, automatic correction), **Focus** (what stays bright, typewriter scrolling), **Diagrams** (which optional tools are installed and how to install the others) and **General** (updates with Check Now, the `focal` command with Install or Uninstall, the version). Each pane groups its settings on cards with a sentence on what each does; choices are segmented controls and on/off settings are switches. An **appearance** setting (System, Light or Dark) sets Focal's appearance alone; `FOCAL_APPEARANCE` still overrides it.
 
+**About (2026-10-04).** Focal ▸ About Focal opens Focal's own window instead of AppKit's standard panel: the icon, the version and build, the tagline, links to the website, this version's release notes and a new issue, Check for Updates… in builds that update themselves, and the credits (iA Writer typefaces and their license, pulldown-cmark, MathJax, merman, GPUI).
+
 ## 7. Extras (Agreed scope, Proposed implementation)
 
 Built in M4 unless marked otherwise.

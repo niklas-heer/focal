@@ -5,7 +5,7 @@ use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSAlertStyle, NSAppearance,
     NSApplication, NSPasteboard,
 };
-use objc2_foundation::NSString;
+use objc2_foundation::{NSBundle, NSString};
 
 use crate::settings::Appearance;
 
@@ -161,9 +161,12 @@ pub fn copied_html() -> Option<(String, String)> {
     COPIED.with(|copied| copied.borrow().clone())
 }
 
-/// The standard About panel, with the bundle's name, version and icon.
-pub fn about_panel() {
-    if let Some(mtm) = MainThreadMarker::new() {
-        NSApplication::sharedApplication(mtm).orderFrontStandardAboutPanel(None);
-    }
+/// The bundle's build number (`CFBundleVersion`), when Focal runs from
+/// `Focal.app`.
+pub fn bundle_build() -> Option<String> {
+    let value = NSBundle::mainBundle()
+        .objectForInfoDictionaryKey(&NSString::from_str("CFBundleVersion"))?;
+    let build = value.downcast::<NSString>().ok()?.to_string();
+    // A development binary has no bundle of its own.
+    (!build.is_empty() && crate::cli_install::bundled_binary().is_some()).then_some(build)
 }

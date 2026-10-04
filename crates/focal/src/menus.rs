@@ -32,7 +32,7 @@ pub fn update_item(cx: &App) -> (&'static str, MenuItem) {
 }
 
 pub fn init(cx: &mut App) {
-    cx.on_action(|_: &AboutFocal, _| crate::mac::about_panel());
+    cx.on_action(|_: &AboutFocal, cx| crate::about::open_window(cx));
     set_menus(cx);
 }
 

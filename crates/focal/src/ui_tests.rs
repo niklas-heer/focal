@@ -1863,3 +1863,28 @@ fn settings_segments_change_the_setting(cx: &mut TestAppContext) {
         assert_eq!(settings.appearance, Appearance::Dark);
     });
 }
+
+#[gpui_kit::test]
+fn the_about_window_names_the_version_and_closes_with_escape(cx: &mut TestAppContext) {
+    let window = cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::about::init(cx);
+        cx.set_global(Settings::default());
+        crate::updates::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| crate::about::AboutView::new(window, cx))
+        })
+        .expect("open About")
+        .0
+    });
+    act(cx, window, |window, _| {
+        assert!(window.try_find("about-version").is_some());
+        assert!(
+            window.try_find("about-updates").is_none(),
+            "a development build cannot update itself"
+        );
+    });
+    assert!(crate::about::version_line().contains(env!("CARGO_PKG_VERSION")));
+    act(cx, window, |window, cx| window.press("escape", cx));
+    assert!(cx.update_window(window, |_, _, _| ()).is_err(), "closed");
+}

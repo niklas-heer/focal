@@ -1,6 +1,7 @@
 //! `focal`: open a Markdown file from the terminal in a calm, live-rendered
 //! editor window.
 
+mod about;
 mod accessibility;
 mod bar;
 mod cli_install;
@@ -216,6 +217,7 @@ fn run_app(launch: Launch) {
         find_bar::bind_keys(cx);
         windows::bind_keys(cx);
         settings::init(cx);
+        about::init(cx);
         windows::init(cx);
         cli_install::init(cx);
         updates::init(cx);
