@@ -12,6 +12,7 @@ pub mod analysis;
 pub mod blocks;
 pub mod buffer;
 pub mod callouts;
+pub mod diff;
 pub mod display;
 pub mod editing;
 pub mod encoding;

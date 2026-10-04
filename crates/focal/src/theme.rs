@@ -70,6 +70,12 @@ pub struct Theme {
     pub misspelled: Hsla,
     pub grammar: Hsla,
     pub checkbox: Hsla,
+    /// Text inserted since the baseline the changes are shown against.
+    pub inserted: Hsla,
+    /// The margin bar beside changed lines.
+    pub changed: Hsla,
+    /// Where text was deleted.
+    pub deleted: Hsla,
     alerts: [Hsla; 5],
 }
 
@@ -100,6 +106,9 @@ impl Theme {
             misspelled: rgb(0x00e0_3b30).into(),
             grammar: rgb(0x0028_9c4a).into(),
             checkbox: rgb(0x0026_6fb5).into(),
+            inserted: rgba(0x2da4_4e2e).into(),
+            changed: rgb(0x002d_a44e).into(),
+            deleted: rgb(0x00cf_222e).into(),
             alerts: [
                 rgb(0x0009_69da).into(),
                 rgb(0x001a_7f37).into(),
@@ -129,6 +138,9 @@ impl Theme {
             misspelled: rgb(0x00ff_5f57).into(),
             grammar: rgb(0x0045_c463).into(),
             checkbox: rgb(0x0068_a9e8).into(),
+            inserted: rgba(0x3fb9_5038).into(),
+            changed: rgb(0x003f_b950).into(),
+            deleted: rgb(0x00f8_5149).into(),
             alerts: [
                 rgb(0x0047_8be6).into(),
                 rgb(0x0034_a853).into(),

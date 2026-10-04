@@ -58,6 +58,7 @@ pub fn init(cx: &mut App) {
 }
 
 /// Builds the menu bar, again whenever Open Recent changes.
+#[allow(clippy::too_many_lines)]
 pub fn set_menus(cx: &mut App) {
     cx.set_menus(vec![
         Menu::new("Focal").items([
@@ -140,6 +141,16 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::action("Info Panel", ToggleInfo),
             MenuItem::action("Outline", ToggleOutline),
             MenuItem::action("Linked From…", crate::workspace::ShowLinkedFrom),
+            MenuItem::submenu(Menu::new("Changes").items([
+                MenuItem::action("Next Change", crate::editor::NextChange),
+                MenuItem::action("Previous Change", crate::editor::PreviousChange),
+                MenuItem::action("Dismiss Changes", crate::editor::DismissChanges),
+                MenuItem::separator(),
+                MenuItem::action(
+                    "Compare with Last Commit",
+                    crate::editor::CompareWithLastCommit,
+                ),
+            ])),
             MenuItem::action("Recent Files", crate::workspace::ToggleRecent),
             MenuItem::action("Quick Open…", QuickOpen),
             MenuItem::action("Go to Heading…", GoToHeading),

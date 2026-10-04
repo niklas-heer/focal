@@ -2487,3 +2487,157 @@ fn space_l_and_colon_links_open_the_linked_from_list(cx: &mut TestAppContext) {
         assert!(window.try_find("panel").is_some());
     });
 }
+
+// ---- What changed (M13) -----------------------------------------------------
+
+#[gpui_kit::test]
+fn an_outside_change_shows_and_dismisses(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "The fox jumps.\n");
+    editor.update(cx, |e, cx| {
+        e.load_theirs_for_test("The quick fox jumps.\n", cx);
+    });
+    act(cx, window, |window, _| {
+        assert_eq!(window.find("changes-count").label(), Some("1 change"));
+    });
+    editor.read_with(cx, |e, _| {
+        assert_eq!(
+            e.changes_for_test().inserted,
+            std::iter::once(4..10).collect::<Vec<_>>()
+        );
+    });
+    act(cx, window, |window, cx| window.click("changes-dismiss", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("changes-count").is_none());
+    });
+    editor.read_with(cx, |e, _| assert_eq!(e.changes_for_test().count(), 0));
+}
+
+#[gpui_kit::test]
+fn two_reloads_keep_the_first_baseline(cx: &mut TestAppContext) {
+    let (_, editor) = open_editor(cx, "one\n");
+    editor.update(cx, |e, cx| e.load_theirs_for_test("one\ntwo\n", cx));
+    editor.update(cx, |e, cx| e.load_theirs_for_test("one\ntwo\nthree\n", cx));
+    editor.read_with(cx, |e, _| {
+        assert_eq!(
+            e.changes_for_test().inserted,
+            std::iter::once(4..14).collect::<Vec<_>>()
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn own_typing_is_not_a_change(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "x");
+    act(cx, window, |window, cx| window.input("abc", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.changes_for_test().count(), 0));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("changes-count").is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn typing_after_an_outside_change_keeps_the_marks_in_step(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "one two\n");
+    editor.update(cx, |e, cx| e.load_theirs_for_test("one two\nnew\n", cx));
+    editor.update(cx, |e, cx| e.move_to(0, cx));
+    act(cx, window, |window, cx| window.input("so ", cx));
+    editor.read_with(cx, |e, _| {
+        let text = e.text();
+        assert_eq!(text, "so one two\nnew\n");
+        let marked: Vec<&str> = e
+            .changes_for_test()
+            .inserted
+            .iter()
+            .map(|range| text[range.clone()].trim())
+            .collect();
+        assert_eq!(marked, ["so", "new"], "in step with the typing");
+    });
+}
+
+#[gpui_kit::test]
+fn alt_cmd_down_goes_to_the_next_change(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "a\nb\nc\nd\n");
+    editor.update(cx, |e, cx| e.load_theirs_for_test("a\nB\nc\nD\n", cx));
+    editor.update(cx, |e, cx| e.move_to(0, cx));
+    act(cx, window, |window, cx| window.press("cmd-alt-down", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 2..2));
+    act(cx, window, |window, cx| window.press("cmd-alt-down", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 6..6));
+    act(cx, window, |window, cx| window.press("cmd-alt-up", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 2..2));
+}
+
+#[gpui_kit::test]
+fn escape_dismisses_changes_but_closes_the_find_bar_first(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "one\n");
+    editor.update(cx, |e, cx| e.load_theirs_for_test("one\ntwo\n", cx));
+    act(cx, window, |window, cx| window.press("cmd-f", cx));
+    act(cx, window, |window, cx| window.press("escape", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("find-bar").is_none());
+        assert!(window.try_find("changes-count").is_some(), "still showing");
+    });
+    act(cx, window, |window, cx| window.press("escape", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("changes-count").is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn vim_brackets_step_through_changes(cx: &mut TestAppContext) {
+    let (window, editor) = open_vim(cx, "a\nb\nc\nd\n");
+    editor.update(cx, |e, cx| e.load_theirs_for_test("a\nB\nc\nD\n", cx));
+    editor.update(cx, |e, cx| e.move_to(0, cx));
+    act(cx, window, |window, cx| window.input("]c", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 2..2));
+    act(cx, window, |window, cx| window.press("escape", cx));
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find("changes-count").is_some(),
+            "Esc stays Vim's"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn a_reload_without_changes_leaves_typing_unmarked(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "same\n");
+    editor.update(cx, |e, cx| e.load_theirs_for_test("same\n", cx));
+    act(cx, window, |window, cx| window.input("typed", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.changes_for_test().count(), 0));
+}
+
+#[gpui_kit::test]
+fn changes_since_the_last_commit(cx: &mut TestAppContext) {
+    use crate::git::tests::git;
+    let root = notes_folder("changes-commit", "committed line\n");
+    git(&root, &["init", "-q"]);
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-q", "-m", "one"]);
+    std::fs::write(root.join("new.md"), "committed line\nadded line\n").unwrap();
+    let (window, workspace) = open_folder(cx, &root);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.text(), "committed line\nadded line\n");
+    });
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::editor::CompareWithLastCommit), cx);
+    });
+    cx.run_until_parked();
+    act(cx, window, |window, _| {
+        assert_eq!(
+            window.find("changes-count").label(),
+            Some("1 change since last commit")
+        );
+        assert!(
+            window.try_find("changes-dismiss").is_none(),
+            "turned off in the menu"
+        );
+    });
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::editor::CompareWithLastCommit), cx);
+    });
+    act(cx, window, |window, _| {
+        assert!(window.try_find("changes-count").is_none());
+    });
+}

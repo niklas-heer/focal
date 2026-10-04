@@ -13,6 +13,7 @@ mod export;
 mod find_bar;
 mod fold_memory;
 mod folder;
+mod git;
 mod goals;
 mod grid;
 mod highlight;

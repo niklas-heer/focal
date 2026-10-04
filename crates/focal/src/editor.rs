@@ -42,6 +42,7 @@ use crate::settings::{FocusUnit, Settings};
 use crate::spell::{GrammarIssue, SpellChecker};
 use crate::theme::{BOLD_PROSE_FONT, DIMMED, PROSE_FONT, Theme, Typography};
 
+mod changes;
 mod modal;
 mod paste;
 #[cfg(test)]
@@ -83,6 +84,10 @@ actions!(
         Cut,
         Paste,
         PasteAsPlainText,
+        NextChange,
+        PreviousChange,
+        DismissChanges,
+        CompareWithLastCommit,
         Undo,
         Redo,
         Save,
@@ -230,6 +235,11 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-x", Cut, context),
         KeyBinding::new("cmd-v", Paste, context),
         KeyBinding::new("cmd-alt-shift-v", PasteAsPlainText, context),
+        KeyBinding::new("cmd-alt-down", NextChange, context),
+        KeyBinding::new("cmd-alt-up", PreviousChange, context),
+        // Only while changes show, with Focal's own keys, and nothing else
+        // (the find bar, a cell, Vim or Helix) wants Esc.
+        KeyBinding::new("escape", DismissChanges, Some("FocalEditor && changes")),
         KeyBinding::new("cmd-z", Undo, context),
         KeyBinding::new("cmd-shift-z", Redo, context),
         KeyBinding::new("cmd-s", Save, context),
@@ -468,6 +478,9 @@ pub struct Editor {
     _modal_keys: gpui_kit::Subscription,
     /// While files are dragged over: what dropping them does, and where.
     drop_hint: Option<(String, Point<Pixels>)>,
+    /// What changes are shown against, if anything.
+    baseline: Option<changes::Baseline>,
+    changes: Rc<focal_core::diff::Changes>,
 }
 
 impl Editor {
@@ -548,6 +561,8 @@ impl Editor {
             modal: modal::for_keyboard(settings.keyboard),
             _modal_keys: Self::intercept_modal_keys(cx),
             drop_hint: None,
+            baseline: None,
+            changes: Rc::default(),
         };
         // A single file's wiki links resolve among the files beside it.
         if let Some(dir) = editor
@@ -979,8 +994,13 @@ impl Editor {
     /// pointer, or hides the preview.
     pub(crate) fn preview_footnote_at(&mut self, offset: Option<usize>, cx: &mut Context<Self>) {
         let preview = offset.and_then(|offset| {
-            let start = self.snapshot.analysis.footnote_at(offset)?.range.start;
-            Some((start, self.footnote_text(offset)?))
+            let footnote = self
+                .snapshot
+                .analysis
+                .footnote_at(offset)
+                .and_then(|footnote| Some((footnote.range.start, self.footnote_text(offset)?)));
+            // Or the text deleted there, when changes show.
+            footnote.or_else(|| Some((offset, self.deleted_at(offset)?)))
         });
         let unchanged = self.footnote_preview.as_ref().map(|(start, _)| *start)
             == preview.as_ref().map(|(start, _)| *start);
@@ -1440,6 +1460,7 @@ impl Editor {
         self.selection = selection;
         self.reversed = false;
         self.goal_x = None;
+        self.recompute_changes(false);
         self.refresh();
         if self.grid.is_none() {
             self.reveal_caret();
@@ -1793,6 +1814,7 @@ impl Editor {
         let len = self.text().len();
         self.selection = selection.start.min(len)..selection.end.min(len);
         self.reversed = false;
+        self.recompute_changes(false);
         self.refresh();
         self.reveal_caret();
         self.schedule_save(cx);
@@ -2349,6 +2371,7 @@ impl Editor {
     ) {
         self.document.format = format;
         self.grid = None;
+        self.keep_baseline();
         let len = text.len();
         let selection = self.selection.start.min(len)..self.selection.end.min(len);
         self.buffer.replace_all(text, selection.clone());
@@ -2357,6 +2380,7 @@ impl Editor {
         self.document.saved_version = self.buffer.version();
         self.conflict = false;
         self.save_task = None;
+        self.recompute_changes(true);
         self.refresh();
         cx.notify();
     }
@@ -3232,6 +3256,10 @@ impl Editor {
         let selection_color = theme.selection;
         let found_color = theme.found;
         let found = self.found_on(&line_range);
+        let inserted = self.inserted_on(&line_range);
+        let deleted = self.deleted_on(&line_range);
+        let (inserted_color, deleted_color) = (theme.inserted, theme.deleted);
+        let change_bar = self.change_bar(&line_range, theme);
         let caret_color = theme.caret;
         let _ = (window, cx);
 
@@ -3269,6 +3297,30 @@ impl Editor {
                     let selection = selection.clone();
                     let line_range = line_range.clone();
                     move |_, (), window, _| {
+                        for inserted in &inserted {
+                            paint_selection(
+                                &layout,
+                                &view,
+                                inserted,
+                                &line_range,
+                                inserted_color,
+                                window,
+                            );
+                        }
+                        // A thin mark where text was deleted.
+                        for at in &deleted {
+                            if let Some(position) =
+                                caret_position(&layout, view.map.to_display(*at))
+                            {
+                                window.paint_quad(fill(
+                                    Bounds::new(
+                                        point(position.x - px(1.), position.y),
+                                        size(px(2.), layout.line_height()),
+                                    ),
+                                    deleted_color,
+                                ));
+                            }
+                        }
                         for found in &found {
                             paint_selection(
                                 &layout,
@@ -3384,7 +3436,7 @@ impl Editor {
             Some(fold) => self.with_fold_toggle(content, line, fold, theme, cx),
             None => content,
         };
-        crate::prefix::wrap(
+        let row = crate::prefix::wrap(
             content,
             &info.prefix,
             line,
@@ -3396,7 +3448,31 @@ impl Editor {
             },
             line_height,
             on_toggle,
-        )
+        );
+        match change_bar {
+            // Changed lines are marked in the left margin.
+            Some(color) => div()
+                .relative()
+                .child(row)
+                .child(
+                    div()
+                        .id(("change-bar", line))
+                        .test_support()
+                        .absolute()
+                        .top(px(top))
+                        .bottom_0()
+                        .left(px(-14.))
+                        .w(px(3.))
+                        .rounded(px(2.))
+                        .bg(if self.focus_mode {
+                            color.opacity(DIMMED)
+                        } else {
+                            color
+                        }),
+                )
+                .into_any_element(),
+            None => row,
+        }
     }
 
     /// The find matches inside a table `cell`, as ranges of its displayed
@@ -4023,7 +4099,14 @@ impl Render for Editor {
                         .ok();
                 }
             })
-            .key_context(CONTEXT)
+            .key_context({
+                let mut context = gpui_kit::KeyContext::new_with_defaults();
+                context.add(CONTEXT);
+                if self.dismissable_changes() && self.modal.is_none() && self.grid.is_none() {
+                    context.add("changes");
+                }
+                context
+            })
             .test_support()
             .track_focus(&self.focus_handle)
             .relative()
@@ -4067,6 +4150,10 @@ impl Render for Editor {
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::paste_plain))
+            .on_action(cx.listener(Self::next_change))
+            .on_action(cx.listener(Self::previous_change))
+            .on_action(cx.listener(Self::dismiss_changes))
+            .on_action(cx.listener(Self::compare_with_last_commit))
             .on_action(cx.listener(Self::undo))
             .on_action(cx.listener(Self::redo))
             .on_action(cx.listener(Self::save))
@@ -4156,6 +4243,7 @@ impl Render for Editor {
             .children(banner)
             .children(preview)
             .children(self.render_modal_status(&theme))
+            .children(self.render_changes_pill(&theme, cx))
             .children(self.render_drop_hint(&theme, cx))
     }
 }

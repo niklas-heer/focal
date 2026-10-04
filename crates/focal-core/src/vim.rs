@@ -1724,6 +1724,16 @@ fn read_action(keys: &[Key], visual: bool) -> Result<Option<ActionOrOperator>, (
                 .map_or(Err(()), |command| action(Action::App(command))),
             Some(_) => Err(()),
         },
+        // `]c` and `[c`: the next and previous change, as in Vim's diff mode.
+        Key::Char(bracket @ (']' | '[')) => match keys.get(1) {
+            None => Ok(None),
+            Some(Key::Char('c')) => action(Action::App(if bracket == ']' {
+                crate::keys::AppCommand::NextChange
+            } else {
+                crate::keys::AppCommand::PreviousChange
+            })),
+            Some(_) => Err(()),
+        },
         _ => Err(()),
     }
 }
@@ -2794,6 +2804,31 @@ mod tests {
             vim.key(key, &cx);
         }
         assert_eq!(vim.status().as_deref(), Some("Not a command: nope"));
+    }
+
+    #[test]
+    fn brackets_c_step_through_changes() {
+        use crate::keys::AppCommand;
+        let cx = Context {
+            text: "a",
+            anchor: 0,
+            head: 0,
+            clipboard: None,
+        };
+        let mut vim = Vim::new();
+        assert_eq!(vim.key(Key::Char(']'), &cx), Some(vec![]));
+        assert_eq!(
+            vim.key(Key::Char('c'), &cx),
+            Some(vec![Command::App(AppCommand::NextChange)])
+        );
+        vim.key(Key::Char('['), &cx);
+        assert_eq!(
+            vim.key(Key::Char('c'), &cx),
+            Some(vec![Command::App(AppCommand::PreviousChange)])
+        );
+        vim.key(Key::Char(']'), &cx);
+        assert_eq!(vim.key(Key::Char('x'), &cx), Some(vec![]), "nothing else");
+        assert_eq!(vim.status(), None);
     }
 
     #[test]
