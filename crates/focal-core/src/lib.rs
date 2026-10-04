@@ -26,6 +26,7 @@ pub mod shadow;
 pub mod table;
 pub mod texmath;
 pub mod text_stats;
+pub mod vim;
 
 pub use analysis::{Analysis, Bias, LinePrefix, ListMarker, PrefixLevel, analyze};
 pub use buffer::{Buffer, EditKind};

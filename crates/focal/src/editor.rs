@@ -42,6 +42,8 @@ use crate::settings::{FocusUnit, Settings};
 use crate::spell::{GrammarIssue, SpellChecker};
 use crate::theme::{BOLD_PROSE_FONT, DIMMED, MONO_FONT, PROSE_FONT, Theme, Typography};
 
+mod vim;
+
 actions!(
     focal,
     [
@@ -122,6 +124,8 @@ pub enum EditorEvent {
     /// The caret jumped (to an anchor or a footnote) from this selection,
     /// which "back" returns to.
     Jumped(Range<usize>),
+    /// Search for this text, as the find bar would (Vim's `*` and `#`).
+    Search { query: String, forward: bool },
 }
 
 impl EventEmitter<EditorEvent> for Editor {}
@@ -447,6 +451,10 @@ pub struct Editor {
     /// query they were found for.
     found: Rc<[Range<usize>]>,
     found_for: Option<(u64, String)>,
+    /// Vim's state while Vim mode is on.
+    vim: Option<focal_core::vim::Vim>,
+    /// Sends keys to Vim before Focal's bindings see them.
+    _vim_keys: gpui_kit::Subscription,
 }
 
 impl Editor {
@@ -524,6 +532,8 @@ impl Editor {
             query: None,
             found: Rc::default(),
             found_for: None,
+            vim: settings.vim_mode.then(focal_core::vim::Vim::new),
+            _vim_keys: Self::intercept_vim_keys(cx),
         };
         // A single file's wiki links resolve among the files beside it.
         if let Some(dir) = editor
@@ -1481,6 +1491,9 @@ impl Editor {
     // ---- Actions ---------------------------------------------------------
 
     fn backspace(&mut self, _: &Backspace, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(vim) = &mut self.vim {
+            vim.backspaced();
+        }
         if self.selection.is_empty() {
             let head = self.head();
             if let Some(change) = editing::backspace_prefix(&self.snapshot.analysis, head) {
@@ -1687,6 +1700,14 @@ impl Editor {
     }
 
     fn newline(&mut self, _: &Newline, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(vim) = &mut self.vim {
+            vim.typed("\n");
+        }
+        self.insert_newline(cx);
+    }
+
+    /// A new line that continues the list or quote it is typed in.
+    fn insert_newline(&mut self, cx: &mut Context<Self>) {
         let line = self.line_range_at(self.selection.start);
         let ending = self.buffer.line_ending();
         match editing::continue_list(self.text(), &line, &self.selection, ending) {
@@ -2461,6 +2482,9 @@ impl Editor {
     ) {
         window.focus(&self.focus_handle, cx);
         self.goal_x = None;
+        if let Some(vim) = &mut self.vim {
+            vim.reset();
+        }
         let Some(hit) = self.hit_test(event.position) else {
             return;
         };
@@ -2815,6 +2839,7 @@ impl Editor {
         self.check_grammar = settings.check_grammar;
         self.correct_spelling =
             settings.correct_spelling && crate::spell::system_corrects_spelling();
+        self.set_vim_mode(settings.vim_mode, cx);
         self.refresh();
         self.remeasure();
         cx.notify();
@@ -3146,6 +3171,10 @@ impl Editor {
 
         let selection = self.selection.clone();
         let head = self.head();
+        // Vim's block cursor, over the character it is on.
+        let block = self
+            .vim_block()
+            .map(|at| (at, self.buffer.next_grapheme(at).min(line_range.end)));
         let focused = self.focus_handle.clone();
         let painted = self.painted.clone();
         let paint_layout = layout.clone();
@@ -3237,13 +3266,34 @@ impl Editor {
                             view: Some(paint_view.clone()),
                             bounds,
                         });
+                        if !focused.is_focused(window) {
+                            return;
+                        }
+                        let height = paint_layout.line_height();
+                        if let Some((at, end)) = block {
+                            if line_range.start <= at
+                                && at <= line_range.end
+                                && let Some(position) =
+                                    caret_position(&paint_layout, paint_view.map.to_display(at))
+                            {
+                                // As wide as the character, or half a line on
+                                // an empty line or at a wrap.
+                                let width = paint_layout
+                                    .position_for_index(paint_view.map.to_display(end))
+                                    .filter(|next| next.y == position.y && next.x > position.x)
+                                    .map_or(height * 0.5, |next| next.x - position.x);
+                                window.paint_quad(fill(
+                                    Bounds::new(position, size(width, height)),
+                                    caret_color.opacity(0.35),
+                                ));
+                            }
+                            return;
+                        }
                         let on_line = line_range.start <= head && head <= line_range.end;
                         if on_line
-                            && focused.is_focused(window)
                             && let Some(position) =
                                 caret_position(&paint_layout, paint_view.map.to_display(head))
                         {
-                            let height = paint_layout.line_height();
                             window.paint_quad(fill(
                                 Bounds::new(position, size(px(2.), height)),
                                 caret_color,
@@ -3807,6 +3857,9 @@ impl EntityInputHandler for Editor {
         self.marked = None;
         let caret = range.start + text.len();
         self.edit(range, text, caret..caret, EditKind::Typing, cx);
+        if let Some(vim) = &mut self.vim {
+            vim.typed(text);
+        }
         self.correct_finished_word(text, cx);
     }
 
@@ -4046,5 +4099,6 @@ impl Render for Editor {
             )
             .children(banner)
             .children(preview)
+            .children(self.render_vim_status(&theme))
     }
 }

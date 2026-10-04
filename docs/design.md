@@ -195,6 +195,10 @@ Redesigned 2026-10-04: the window has a toolbar of panes, as macOS preferences d
 
 **About (2026-10-04).** Focal ▸ About Focal opens Focal's own window instead of AppKit's standard panel: the icon, the version and build, the tagline, links to the website, this version's release notes and a new issue, Check for Updates… in builds that update themselves, and the credits (iA Writer typefaces and their license, pulldown-cmark, MathJax, merman, GPUI).
 
+### Vim mode (Agreed feature, Proposed implementation)
+
+**Agreed (2026-10-04):** Vim mode can be turned on (Settings ▸ Writing ▸ Vim mode, or Edit ▸ Vim Mode); it is off by default. Built 2026-10-04 as a state machine in `focal-core` that the editor feeds keys and whose edits it applies ([decision](../decisions/2026-10-04_013139470_build-vim-mode-as-a-state-machine-in-focal-core.md), proposed): normal, insert, visual and visual-line modes, counts, operators, motions, text objects, `.`, undo, search through the find bar and `:w`, `:q`, `:wq` and `:N`. Normal mode draws a block cursor; the mode, pending keys and the command line show quietly in the bottom-left corner. Keys with ⌘ stay Focal's. `j` and `k` move by screen line; a change and its typing undo as one step; yanks reach the system clipboard; `o` continues lists.
+
 ## 7. Extras (Agreed scope, Proposed implementation)
 
 Built in M4 unless marked otherwise.

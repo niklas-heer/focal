@@ -1888,3 +1888,107 @@ fn the_about_window_names_the_version_and_closes_with_escape(cx: &mut TestAppCon
     act(cx, window, |window, cx| window.press("escape", cx));
     assert!(cx.update_window(window, |_, _, _| ()).is_err(), "closed");
 }
+
+/// An editor with Vim mode on, in normal mode.
+fn open_vim(cx: &mut TestAppContext, text: &str) -> (AnyWindowHandle, Entity<Editor>) {
+    let (window, editor) = open_editor(cx, text);
+    set_settings(cx, |s| s.vim_mode = true);
+    act(cx, window, |_, _| {});
+    (window, editor)
+}
+
+fn vim_status(window: &mut Window) -> bool {
+    window.try_find("vim-status").is_some()
+}
+
+#[gpui_kit::test]
+fn vim_normal_mode_moves_and_edits_without_typing(cx: &mut TestAppContext) {
+    let (window, editor) = open_vim(cx, "one two three");
+    editor.update(cx, |editor, cx| editor.move_to(0, cx));
+    act(cx, window, |window, cx| window.input("w", cx));
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.text(), "one two three", "no text typed");
+        assert_eq!(editor.selection(), 4..4);
+    });
+    act(cx, window, |window, cx| window.input("dw", cx));
+    editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "one three"));
+    act(cx, window, |window, cx| window.input("u", cx));
+    editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "one two three"));
+}
+
+#[gpui_kit::test]
+fn vim_insert_mode_types_and_escape_returns(cx: &mut TestAppContext) {
+    let (window, editor) = open_vim(cx, "ab");
+    editor.update(cx, |editor, cx| editor.move_to(0, cx));
+    act(cx, window, |window, cx| window.input("iXY", cx));
+    act(cx, window, |window, _| {
+        assert!(vim_status(window), "-- INSERT -- shows");
+    });
+    act(cx, window, |window, cx| window.press("escape", cx));
+    act(cx, window, |window, cx| window.input("x", cx));
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(
+            editor.text(),
+            "Xab",
+            "Esc stepped back onto Y, x deleted it"
+        );
+    });
+    act(cx, window, |window, _| {
+        assert!(!vim_status(window), "normal mode shows nothing");
+    });
+}
+
+#[gpui_kit::test]
+fn vim_change_and_its_typing_undo_together_and_repeat(cx: &mut TestAppContext) {
+    let (window, editor) = open_vim(cx, "one two three");
+    editor.update(cx, |editor, cx| editor.move_to(0, cx));
+    act(cx, window, |window, cx| window.input("cwnew", cx));
+    act(cx, window, |window, cx| window.press("escape", cx));
+    act(cx, window, |window, cx| window.input("w.", cx));
+    editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "new new three"));
+    act(cx, window, |window, cx| window.input("u", cx));
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.text(), "new two three", "one undo per change");
+    });
+}
+
+#[gpui_kit::test]
+fn vim_o_continues_a_list(cx: &mut TestAppContext) {
+    let (window, editor) = open_vim(cx, "- one");
+    act(cx, window, |window, cx| window.input("otwo", cx));
+    act(cx, window, |window, cx| window.press("escape", cx));
+    editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "- one\n- two"));
+}
+
+#[gpui_kit::test]
+fn vim_leaves_command_keys_to_focal(cx: &mut TestAppContext) {
+    let (window, editor) = open_vim(cx, "word");
+    act(cx, window, |window, cx| {
+        window.press("cmd-a", cx);
+        window.press("cmd-b", cx);
+    });
+    editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "**word**"));
+}
+
+#[gpui_kit::test]
+fn vim_shows_pending_keys_and_the_command_line(cx: &mut TestAppContext) {
+    let (window, editor) = open_vim(cx, "a\nb\nc");
+    act(cx, window, |window, cx| window.input("2d", cx));
+    act(cx, window, |window, _| assert!(vim_status(window)));
+    act(cx, window, |window, cx| window.press("escape", cx));
+    act(cx, window, |window, cx| window.input(":3", cx));
+    act(cx, window, |window, _| assert!(vim_status(window)));
+    act(cx, window, |window, cx| window.press("enter", cx));
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.text(), "a\nb\nc");
+        assert_eq!(editor.selection(), 4..4, ":3 goes to the third line");
+    });
+}
+
+#[gpui_kit::test]
+fn vim_mode_off_types_normally(cx: &mut TestAppContext) {
+    let (window, editor) = open_vim(cx, "");
+    set_settings(cx, |s| s.vim_mode = false);
+    act(cx, window, |window, cx| window.input("dw", cx));
+    editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "dw"));
+}

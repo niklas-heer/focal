@@ -17,7 +17,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::theme::{BOLD_PROSE_FONT, MONO_FONT, PROSE_FONT, Theme as Colors, Typography};
 
-actions!(focal, [OpenSettings, CloseSettings, NextPane, PreviousPane]);
+actions!(
+    focal,
+    [
+        OpenSettings,
+        CloseSettings,
+        NextPane,
+        PreviousPane,
+        ToggleVimMode
+    ]
+);
 
 /// Shows the settings pane with this index.
 #[derive(Clone, Debug, PartialEq, gpui_kit::Action)]
@@ -93,6 +102,8 @@ pub struct Settings {
     /// Correct a misspelled word when it is finished, if macOS's own
     /// "Correct spelling automatically" is on too.
     pub correct_spelling: bool,
+    /// Edit with Vim's modes, motions and operators.
+    pub vim_mode: bool,
 }
 
 impl Default for Settings {
@@ -107,6 +118,7 @@ impl Default for Settings {
             check_updates: true,
             check_grammar: true,
             correct_spelling: true,
+            vim_mode: false,
         }
     }
 }
@@ -181,6 +193,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-shift-tab", PreviousPane, context),
     ]);
     cx.on_action(|_: &OpenSettings, cx| open_window(cx));
+    cx.on_action(|_: &ToggleVimMode, cx| update(cx, |s| s.vim_mode = !s.vim_mode));
 }
 
 /// Keeps GPUI Kit's controls and tooltips in the system appearance, like
@@ -698,38 +711,56 @@ fn writing_pane(settings: &Settings, theme: &Colors) -> impl IntoElement {
     } else {
         "Turned off for every app in System Settings › Keyboard › Text Input.".into()
     };
-    div().flex().flex_col().gap(px(18.)).child(group(
-        "Spelling and grammar",
-        theme,
-        [
-            row(
-                "Check grammar as you type",
-                Some("Underlines what Apple's grammar checker would change, in green.".into()),
-                toggle(
-                    "check-grammar",
-                    settings.check_grammar,
-                    |s, v| {
-                        s.check_grammar = v;
-                    },
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(18.))
+        .child(group(
+            "Keyboard",
+            theme,
+            [row(
+                "Vim mode",
+                Some(
+                    "Normal, insert and visual modes with Vim's motions, operators and \
+                     text objects. Esc returns to normal mode; j and k move by screen line."
+                        .into(),
+                ),
+                toggle("vim-mode", settings.vim_mode, |s, v| s.vim_mode = v, theme),
+                theme,
+            )],
+        ))
+        .child(group(
+            "Spelling and grammar",
+            theme,
+            [
+                row(
+                    "Check grammar as you type",
+                    Some("Underlines what Apple's grammar checker would change, in green.".into()),
+                    toggle(
+                        "check-grammar",
+                        settings.check_grammar,
+                        |s, v| {
+                            s.check_grammar = v;
+                        },
+                        theme,
+                    ),
                     theme,
                 ),
-                theme,
-            ),
-            row(
-                "Correct spelling automatically",
-                Some(correction_hint),
-                toggle(
-                    "correct-spelling",
-                    settings.correct_spelling,
-                    |s, v| {
-                        s.correct_spelling = v;
-                    },
+                row(
+                    "Correct spelling automatically",
+                    Some(correction_hint),
+                    toggle(
+                        "correct-spelling",
+                        settings.correct_spelling,
+                        |s, v| {
+                            s.correct_spelling = v;
+                        },
+                        theme,
+                    ),
                     theme,
                 ),
-                theme,
-            ),
-        ],
-    ))
+            ],
+        ))
 }
 
 fn focus_pane(settings: &Settings, theme: &Colors) -> impl IntoElement {
@@ -971,6 +1002,7 @@ mod tests {
             check_updates: false,
             check_grammar: false,
             correct_spelling: false,
+            vim_mode: true,
         };
         settings.save_to(&path).unwrap();
         assert_eq!(Settings::load_from(&path), settings);

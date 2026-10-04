@@ -11,7 +11,7 @@ use crate::editor::{
     ToggleQuote, ToggleTask, Undo,
 };
 use crate::find_bar::{Find, FindAndReplace, FindNext, FindPrevious};
-use crate::settings::OpenSettings;
+use crate::settings::{OpenSettings, Settings, ToggleVimMode};
 use crate::switcher::{GoToHeading, QuickOpen};
 use crate::updates::{CheckForUpdates, OpenReleases};
 use crate::windows::{NewWindow, OpenFiles};
@@ -34,6 +34,16 @@ pub fn update_item(cx: &App) -> (&'static str, MenuItem) {
 pub fn init(cx: &mut App) {
     cx.on_action(|_: &AboutFocal, cx| crate::about::open_window(cx));
     set_menus(cx);
+    // Vim Mode's checkmark follows the setting.
+    let mut vim_mode = cx.global::<Settings>().vim_mode;
+    cx.observe_global::<Settings>(move |cx| {
+        let now = cx.global::<Settings>().vim_mode;
+        if now != vim_mode {
+            vim_mode = now;
+            set_menus(cx);
+        }
+    })
+    .detach();
 }
 
 /// Builds the menu bar, again whenever Open Recent changes.
@@ -79,6 +89,8 @@ pub fn set_menus(cx: &mut App) {
                 MenuItem::action("Find Next", FindNext),
                 MenuItem::action("Find Previous", FindPrevious),
             ])),
+            MenuItem::separator(),
+            MenuItem::action("Vim Mode", ToggleVimMode).checked(cx.global::<Settings>().vim_mode),
         ]),
         Menu::new("Format").items([
             MenuItem::action("Bold", Bold),

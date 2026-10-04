@@ -122,6 +122,12 @@ impl Workspace {
         let here = editor.path().map(PathBuf::from);
         match event {
             EditorEvent::Jumped(from) => self.history.push((here, from.clone())),
+            EditorEvent::Search { query, forward } => {
+                self.last_query = Some(query.clone());
+                let (query, forward) = (query.clone(), *forward);
+                self.editor
+                    .update(cx, |editor, cx| editor.find_again(query, forward, cx));
+            }
             EditorEvent::Open(path) => {
                 let in_folder = self
                     .folder

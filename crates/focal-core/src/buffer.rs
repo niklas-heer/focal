@@ -26,6 +26,8 @@ struct Transaction {
     selection_after: Range<usize>,
     kind: EditKind,
     at: Instant,
+    /// Edits of one group undo and redo together; 0 is no group.
+    group: u64,
 }
 
 /// The text of a document. The bytes on disk are the bytes held here; Focal
@@ -36,6 +38,9 @@ pub struct Buffer {
     undo: Vec<Transaction>,
     redo: Vec<Transaction>,
     version: u64,
+    /// The open group's number, 0 when none is open.
+    group: u64,
+    groups: u64,
 }
 
 impl Buffer {
@@ -64,6 +69,17 @@ impl Buffer {
         }
     }
 
+    /// Starts a group: the edits until [`Buffer::end_group`] undo as one
+    /// step, as a Vim change and the text typed after it do.
+    pub const fn begin_group(&mut self) {
+        self.groups += 1;
+        self.group = self.groups;
+    }
+
+    pub const fn end_group(&mut self) {
+        self.group = 0;
+    }
+
     /// Replaces `range` with `new` and records the change for undo.
     pub fn edit(
         &mut self,
@@ -90,6 +106,7 @@ impl Buffer {
         }
         if let Some(last) = self.undo.last_mut()
             && last.kind == kind
+            && last.group == self.group
             && now.duration_since(last.at) < COALESCE
         {
             let typed_on = kind == EditKind::Typing
@@ -123,30 +140,46 @@ impl Buffer {
             selection_after,
             kind,
             at: now,
+            group: self.group,
         });
     }
 
-    /// Reverts the last change and returns the selection to restore.
+    /// Reverts the last change, or the last group of changes, and returns
+    /// the selection to restore.
     pub fn undo(&mut self) -> Option<Range<usize>> {
-        let transaction = self.undo.pop()?;
-        let range = transaction.start..transaction.start + transaction.new.len();
-        self.text.replace_range(range, &transaction.old);
-        self.version += 1;
-        let selection = transaction.selection_before.clone();
-        self.redo.push(transaction);
-        Some(selection)
+        self.group = 0;
+        let mut selection = None;
+        while let Some(transaction) = self.undo.pop() {
+            let range = transaction.start..transaction.start + transaction.new.len();
+            self.text.replace_range(range, &transaction.old);
+            self.version += 1;
+            selection = Some(transaction.selection_before.clone());
+            let group = transaction.group;
+            self.redo.push(transaction);
+            if group == 0 || self.undo.last().is_none_or(|last| last.group != group) {
+                break;
+            }
+        }
+        selection
     }
 
     pub fn redo(&mut self) -> Option<Range<usize>> {
-        let mut transaction = self.redo.pop()?;
-        let range = transaction.start..transaction.start + transaction.old.len();
-        self.text.replace_range(range, &transaction.new);
-        self.version += 1;
-        let selection = transaction.selection_after.clone();
-        // A redone change never merges with the next one.
-        transaction.kind = EditKind::Other;
-        self.undo.push(transaction);
-        Some(selection)
+        self.group = 0;
+        let mut selection = None;
+        while let Some(mut transaction) = self.redo.pop() {
+            let range = transaction.start..transaction.start + transaction.old.len();
+            self.text.replace_range(range, &transaction.new);
+            self.version += 1;
+            selection = Some(transaction.selection_after.clone());
+            // A redone change never merges with the next one.
+            transaction.kind = EditKind::Other;
+            let group = transaction.group;
+            self.undo.push(transaction);
+            if group == 0 || self.redo.last().is_none_or(|last| last.group != group) {
+                break;
+            }
+        }
+        selection
     }
 
     /// Replaces the whole text, for example after the file changed on disk.
@@ -222,6 +255,25 @@ mod tests {
         );
         buffer.undo();
         assert_eq!(buffer.text(), "x | a | y", "one session is one step");
+    }
+
+    #[test]
+    fn a_group_of_edits_undoes_and_redoes_as_one_step() {
+        let mut buffer = Buffer::new("one two".into());
+        buffer.edit(0..1, "", 0..0, 0..0, EditKind::Other);
+        buffer.begin_group();
+        buffer.edit(3..6, "", 3..3, 3..3, EditKind::Other);
+        buffer.edit(3..3, "x", 3..3, 4..4, EditKind::Typing);
+        buffer.edit(4..4, "y", 4..4, 5..5, EditKind::Typing);
+        buffer.end_group();
+        assert_eq!(buffer.text(), "ne xy");
+        assert_eq!(buffer.undo(), Some(3..3), "back to before the group");
+        assert_eq!(buffer.text(), "ne two");
+        assert_eq!(buffer.redo(), Some(5..5));
+        assert_eq!(buffer.text(), "ne xy");
+        buffer.undo();
+        buffer.undo();
+        assert_eq!(buffer.text(), "one two", "the edit before is its own step");
     }
 
     #[test]
