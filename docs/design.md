@@ -81,6 +81,12 @@ Built in M6: Sparkle 2.10, as in Keywink and Spokn, with an appcast attached to 
 - **Writing Tools** (M12): Edit ▸ Writing Tools (Proofread, Rewrite, Make Friendly, Summarize, …) works on the selection, or on the whole document when nothing is selected. Apple shows the result in its panel; Replace puts it in as one undo step. Focal adds the Services methods Writing Tools asks for to GPUI's view class at runtime; inline rewriting with animations (`NSWritingToolsCoordinator`) is not built. Writing Tools sees the Markdown source, so it may touch syntax too.
 - **Exact round-trip.** The trailing newline and all whitespace are preserved. Files keep their encoding (UTF-8 with or without BOM, UTF-16, or Windows-1252 for other bytes) and line endings (LF, CRLF or classic Mac CR); the bar names anything other than plain UTF-8, and a character the encoding cannot hold makes the file UTF-8, with a note.
 
+- **Review and writing (Agreed 2026-10-04, built in M13; [spec](superpowers/specs/2026-10-04-m13-review-and-writing-design.md)):**
+  - *Paste:* a URL over selected text makes a link; HTML on the pasteboard becomes Markdown (`htmd`) outside code, math, front matter, HTML and table cells, unless it is styling only or Focal's own Copy as HTML (marked `net.daringfireball.markdown`); ⌥⇧⌘V pastes plain text. Pasted, dropped or Finder-copied images are saved in the images folder beside the document (`assets/` by default; Settings › Writing › Pasting) and linked; other files are linked. A card says what a drop will do.
+  - *What changed:* after a reload from disk, the text before stays the baseline (several rewrites show together; your typing alone is never marked) until dismissed; View › Changes › Compare with Last Commit uses `git show HEAD`. Inserted words get a green tint, deletions a red mark with the deleted text on hover, changed lines a margin bar; a pill counts and steps through them (⌥⌘↓ ⌥⌘↑, Vim `]c` `[c`, Helix `]g` `[g`). Diffs run word by word (`similar`) with a deadline, on the main thread so marks never lag the text.
+  - *Style tools:* View › Syntax Highlight colors parts of speech from `NLTagger` (a named `unsafe` bridge); View › Style Check underlines filler words, clichés and redundancies from English and German lists, by the paragraph's language. Off by default, prose only.
+  - *Review notes:* Add Note… (⌥⌘M, right-click) keeps a note in `NAME.review.md` beside the document ([decision](../decisions/2026-10-04_210928981_keep-review-notes-in-a-sidecar-file-beside-the-document.md)); notes are underlined, dotted in the right margin, listed in the Notes tab, and copied for an agent as a prompt. Sidecars stay out of every file list.
+
 ### Folder mode
 
 - One window with a sidebar of Markdown files. The sidebar is collapsed by default and toggled with ⌃⌘S (the macOS "Show Sidebar" shortcut; ⌘\\ belongs to 1Password on many Macs).
@@ -89,6 +95,7 @@ Built in M6: Sparkle 2.10, as in Keywink and Spokn, with an appcast attached to 
 - ⌘P opens a fuzzy quick switcher by file name (and folder path); with no query, the newest files come first.
 - Switching files saves the current one first, including a table cell being edited.
 - Wiki links resolve against this folder.
+- **Backlinks (2026-10-04, M13):** the info panel's "Linked from" lists the files whose wiki links or relative Markdown links lead here, read in the background with the tags; a single file's panel loads the files beside it.
 - **Tags (2026-10-04, after Bear):** the sidebar lists the folder's tags above its files: `#name` and `#name/sub` in the text (outside code) and `tags:` in front matter, each with how many files carry it. A nested tag's parents are listed too, holding the files of the tags under them, and nested tags are indented. Choosing a tag shows only its files; choosing it again shows all. Tags are read in the background after each scan, skipping files over 2 MB.
 - **Agreed (2026-10-04):** a window opened on a single file has the sidebar and the quick switcher too, listing the Markdown files beside it (not in subfolders), the same files its wiki links resolve against. The list is read the first time ⌃⌘S or ⌘P asks for it and follows changes on disk. Such a window does not stand for the folder: `focal .` there still opens folder mode.
 
@@ -308,6 +315,7 @@ Raw HTML: CommonMark and GFM pass HTML through untouched, as blocks and inline; 
 | **M10 — Diagrams** | Done: Graphviz, Svgbob, Pikchr, WaveDrom, GeoJSON and TopoJSON natively, D2 and PlantUML through their tools, all Mermaid types; every drawing in Focal's palette; see section 7a. |
 | **M11 — Completeness** | Done: folding callouts and `<details>`, Vega and Vega-Lite, STL, PlantUML's dark mode, WaveDrom in the dark, centered HTML, and export that renders callouts in one pass (footnotes and references reach into them; folding callouts export as `<details>`). |
 | **M12 — Writing and output** | Done: grammar checking and automatic correction, Print… and Export as PDF…, HTML tables drawn as grids, folds remembered per file, Vega text measured, focus mode dimming syntax and chrome, the diagram tools in Settings, and CI on macOS with Dependabot and a Claude fix workflow. |
+| **M13 — Review and writing** | Done: smarter paste (links over selections, rich text as Markdown, images into `assets/`), backlinks in the info panel, what changed since an outside rewrite or the last commit, style tools (parts of speech, style check in English and German), and review notes for agents in a sidecar file. [Spec](superpowers/specs/2026-10-04-m13-review-and-writing-design.md). |
 
 Each milestone gets its own implementation plan before work starts.
 

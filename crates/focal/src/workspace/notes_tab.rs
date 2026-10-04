@@ -66,7 +66,7 @@ impl Workspace {
         let notes = editor.notes();
         if notes.is_empty() {
             let text: SharedString = format!(
-                "Select text and choose Add Note (⌥⌘N), or right-click it. Notes are saved \
+                "Select text and choose Add Note (⌥⌘M), or right-click it. Notes are saved \
                  beside the file in {sidecar}, and Copy for Agent hands them to an agent."
             )
             .into();

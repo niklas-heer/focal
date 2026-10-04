@@ -224,12 +224,14 @@ impl Editor {
                 .tooltip(move |window, cx| {
                     gpui_kit::component::tooltip::Tooltip::new(tooltip).build(window, cx)
                 })
+                .flex()
+                .items_center()
                 .px(px(6.))
                 .py(px(1.))
                 .rounded(px(5.))
                 .cursor_pointer()
                 .hover(move |style| style.bg(hover))
-                .child(text)
+                .when(!text.is_empty(), |d| d.child(text))
         };
         Some(
             div()

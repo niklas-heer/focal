@@ -121,8 +121,9 @@ fn words(old: &str, new: &str, base: usize, out: &mut Changes) {
     }
 }
 
-/// Joins touching ranges, so "quick " is one tint rather than two, and
-/// drops what is only whitespace.
+/// Joins touching ranges, so "quick " is one tint rather than two, then
+/// splits them by line and trims them, so blank lines and line ends are
+/// never tinted.
 fn tidy(ranges: &mut Vec<Range<usize>>, text: &str) {
     ranges.sort_by_key(|range| range.start);
     let mut merged: Vec<Range<usize>> = Vec::with_capacity(ranges.len());
@@ -132,8 +133,18 @@ fn tidy(ranges: &mut Vec<Range<usize>>, text: &str) {
             _ => merged.push(range),
         }
     }
-    merged.retain(|range| !text[range.clone()].trim().is_empty());
-    *ranges = merged;
+    for range in merged {
+        let mut start = range.start;
+        for piece in text[range.clone()].split_inclusive('\n') {
+            let lead = piece.len() - piece.trim_start().len();
+            let trimmed = piece.trim();
+            if !trimmed.is_empty() {
+                let from = start + lead;
+                ranges.push(from..from + trimmed.len());
+            }
+            start += piece.len();
+        }
+    }
 }
 
 /// The hunk after `from` going forward (one starting after it), or the
@@ -161,7 +172,7 @@ mod tests {
         let new = "The quick fox leaps.\nSame line.\n";
         let c = changes("The fox jumps.\nSame line.\n", new);
         let inserted: Vec<&str> = c.inserted.iter().map(|r| &new[r.clone()]).collect();
-        assert_eq!(inserted, ["quick ", "leaps"]);
+        assert_eq!(inserted, ["quick", "leaps"]);
         assert_eq!(c.deleted, [(14, "jumps".to_owned())]);
         assert_eq!(c.count(), 1, "one changed line is one hunk");
     }
@@ -170,7 +181,7 @@ mod tests {
     fn deleted_lines_and_added_lines() {
         let c = changes("a\nb\nc\n", "a\nc\nd\n");
         assert_eq!(c.deleted, [(2, "b\n".to_owned())]);
-        assert_eq!(c.inserted, std::iter::once(4..6).collect::<Vec<_>>());
+        assert_eq!(c.inserted, std::iter::once(4..5).collect::<Vec<_>>());
         assert_eq!(c.count(), 2);
     }
 
@@ -203,6 +214,18 @@ mod tests {
     }
 
     #[test]
+    fn a_new_paragraph_leaves_the_blank_line_before_it_alone() {
+        let new = "One.\n\nTwo, new.\n";
+        let c = changes("One.\n", new);
+        let inserted: Vec<&str> = c.inserted.iter().map(|r| &new[r.clone()]).collect();
+        assert_eq!(
+            inserted,
+            ["Two, new."],
+            "no tint on blank lines or line ends"
+        );
+    }
+
+    #[test]
     fn identical_texts_have_no_changes() {
         assert_eq!(changes("x\n", "x\n"), Changes::default());
     }
@@ -210,7 +233,7 @@ mod tests {
     #[test]
     fn a_new_file_is_all_inserted() {
         let c = changes("", "one\ntwo\n");
-        assert_eq!(c.inserted, std::iter::once(0..8).collect::<Vec<_>>());
+        assert_eq!(c.inserted, [0..3, 4..7]);
         assert_eq!(c.count(), 1);
     }
 

@@ -1,6 +1,6 @@
 # Milestone 13 — Review and Writing: Design
 
-**Status:** design agreed with Niklas on 2026-10-04 (all four open choices as recommended). This spec turns it into something to plan against.
+**Status:** design agreed with Niklas on 2026-10-04 (all four open choices as recommended); built in Milestone 13 on 2026-10-04.
 
 **Why:** Focal's primary use is reading and reviewing a file, often one an agent just wrote (design section 1). Today a rewrite reloads silently, pasting is plain text only, links only go one way, and there is no way to hand feedback back to an agent. These five features close those gaps, in this order:
 
@@ -112,7 +112,7 @@ It runs in the background after a reload or a commit-baseline load, and after ed
 
 - Select a passage, then use any of:
   - right-click ▸ **Add Note…**;
-  - Edit ▸ **Add Note…** (⌥⌘N);
+  - Edit ▸ **Add Note…** (⌥⌘M);
   - Vim `\n`, Helix `space n`, `:note`.
 - A small card opens under the selection with a text field; Return saves and Esc cancels.
 - With no selection, the note is about the caret's line.
@@ -169,7 +169,7 @@ Every feature has a menu item; menus are where Mac users look. Each also has its
 | Backlinks | Info panel section "Linked from" with its count; View ▸ Linked From… opens the Info panel at that section; space menu `l` and `:links`. |
 | Changes | The changes pill appears by itself after an outside change; it is the main entry point. View ▸ Changes submenu: Next Change, Previous Change, Dismiss Changes, Compare with Last Commit (checked). Space menu `c`, `:changes`. |
 | Style | View ▸ Syntax Highlight submenu and View ▸ Style Check; Settings ▸ Writing; the Info panel's Writing section. Right-clicking an underlined word explains it. |
-| Notes | Right-click ▸ Add Note… on any selection; Edit ▸ Add Note… (⌥⌘N); the Notes tab, which when empty explains: "Select text and choose Add Note (⌥⌘N). Notes are saved beside the file in notes.review.md, and Copy for Agent hands them to an agent." Space menu `n`, `:note`. |
+| Notes | Right-click ▸ Add Note… on any selection; Edit ▸ Add Note… (⌥⌘M); the Notes tab, which when empty explains: "Select text and choose Add Note (⌥⌘M). Notes are saved beside the file in notes.review.md, and Copy for Agent hands them to an agent." Space menu `n`, `:note`. |
 
 The README's feature list and the in-app help gain a short section for each. Tooltips name every new button and show its shortcut, as the bar's do.
 
@@ -184,7 +184,7 @@ The README's feature list and the in-app help gain a short section for each. Too
 
 **Keys.** New shortcuts were checked against every existing binding (2026-10-04):
 
-- ⌥⌘↓ ⌥⌘↑ ⌥⌘N ⌥⇧⌘V are free;
+- ⌥⌘↓ ⌥⌘↑ ⌥⌘M ⌥⇧⌘V are free;
 - `[` and `]` are unused in both Vim and Helix;
 - the space and `\` menu keys `c`, `l` and `n` are free.
 

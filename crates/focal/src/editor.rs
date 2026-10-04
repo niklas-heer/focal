@@ -259,7 +259,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-alt-shift-v", PasteAsPlainText, context),
         KeyBinding::new("cmd-alt-down", NextChange, context),
         KeyBinding::new("cmd-alt-up", PreviousChange, context),
-        KeyBinding::new("cmd-alt-n", AddNote, context),
+        KeyBinding::new("cmd-alt-m", AddNote, context),
         KeyBinding::new("escape", CancelNote, Some("FocalNote > Input")),
         // Only while changes show, with Focal's own keys, and nothing else
         // (the find bar, a cell, Vim or Helix) wants Esc.

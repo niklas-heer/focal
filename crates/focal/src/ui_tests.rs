@@ -2502,7 +2502,7 @@ fn an_outside_change_shows_and_dismisses(cx: &mut TestAppContext) {
     editor.read_with(cx, |e, _| {
         assert_eq!(
             e.changes_for_test().inserted,
-            std::iter::once(4..10).collect::<Vec<_>>()
+            std::iter::once(4..9).collect::<Vec<_>>()
         );
     });
     act(cx, window, |window, cx| window.click("changes-dismiss", cx));
@@ -2518,10 +2518,7 @@ fn two_reloads_keep_the_first_baseline(cx: &mut TestAppContext) {
     editor.update(cx, |e, cx| e.load_theirs_for_test("one\ntwo\n", cx));
     editor.update(cx, |e, cx| e.load_theirs_for_test("one\ntwo\nthree\n", cx));
     editor.read_with(cx, |e, _| {
-        assert_eq!(
-            e.changes_for_test().inserted,
-            std::iter::once(4..14).collect::<Vec<_>>()
-        );
+        assert_eq!(e.changes_for_test().inserted, [4..7, 8..13]);
     });
 }
 
@@ -2761,7 +2758,7 @@ fn adding_a_note_writes_the_sidecar_and_copy_makes_a_prompt(cx: &mut TestAppCont
     let (window, workspace) = open_folder(cx, &root);
     let editor = workspace.read_with(cx, |w, _| w.editor().clone());
     editor.update(cx, |e, cx| e.select(4..7, cx));
-    act(cx, window, |window, cx| window.press("cmd-alt-n", cx));
+    act(cx, window, |window, cx| window.press("cmd-alt-m", cx));
     act(cx, window, |window, _| {
         assert!(
             window.try_find("note-draft").is_some(),
@@ -2802,7 +2799,7 @@ fn escape_cancels_a_note(cx: &mut TestAppContext) {
     let (window, workspace) = open_folder(cx, &root);
     let editor = workspace.read_with(cx, |w, _| w.editor().clone());
     editor.update(cx, |e, cx| e.select(4..7, cx));
-    act(cx, window, |window, cx| window.press("cmd-alt-n", cx));
+    act(cx, window, |window, cx| window.press("cmd-alt-m", cx));
     act(cx, window, |window, cx| window.input("never mind", cx));
     act(cx, window, |window, cx| window.press("escape", cx));
     act(cx, window, |window, cx| {
@@ -2854,7 +2851,7 @@ fn the_empty_notes_tab_explains_itself(cx: &mut TestAppContext) {
             .label()
             .unwrap_or_default()
             .to_owned();
-        assert!(label.contains("Add Note (⌥⌘N)"), "{label}");
+        assert!(label.contains("Add Note (⌥⌘M)"), "{label}");
         assert!(label.contains("new.review.md"), "{label}");
     });
 }
@@ -2887,4 +2884,43 @@ fn a_sidecar_changed_on_disk_is_read_again(cx: &mut TestAppContext) {
     std::fs::remove_file(root.join("new.review.md")).unwrap();
     editor.update(cx, |e, cx| e.reload_notes(cx));
     editor.read_with(cx, |e, _| assert!(e.notes().is_empty()));
+}
+
+#[gpui_kit::test]
+fn the_new_tools_leave_the_file_untouched(cx: &mut TestAppContext) {
+    use crate::style::Part;
+    let original = "# Notes\r\n\r\nIt was very late, the end result.\r\nNo trailing newline";
+    let root = notes_folder("round-trip-m13", original);
+    let (window, workspace) = open_folder(cx, &root);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    set_settings(cx, |s| {
+        s.style_check = true;
+        s.syntax_highlight = Part::ALL.to_vec();
+    });
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::workspace::ShowLinkedFrom), cx);
+    });
+    editor.update(cx, |e, cx| e.select(17..21, cx));
+    act(cx, window, |window, cx| window.press("cmd-alt-m", cx));
+    act(cx, window, |window, cx| window.input("Cut this.", cx));
+    act(cx, window, |window, cx| window.press("enter", cx));
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::editor::CopyNotesForAgent), cx);
+    });
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::workspace::ShowNotes), cx);
+    });
+    act(cx, window, |window, cx| {
+        window.click(("note-delete", 0usize), cx);
+    });
+    act(cx, window, |window, cx| {
+        editor.update(cx, |e, cx| e.flush(window, cx));
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        std::fs::read(root.join("new.md")).unwrap(),
+        original.as_bytes(),
+        "identical bytes"
+    );
+    assert!(!root.join("new.review.md").exists());
 }
