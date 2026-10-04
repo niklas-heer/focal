@@ -181,7 +181,7 @@ Milestone 0 compared TextKit 1 and TextKit 2 in a throwaway AppKit spike ([findi
 
 ### Typography and themes (Proposed)
 
-- Prose in iA Writer Quattro; code in iA Writer Mono. Settings offer Quattro, Duo or Mono for prose. Bold prose currently uses Duo S Bold, because the static Quattro S Bold files report weight 400 and GPUI cannot select them.
+- Prose in iA Writer Quattro; code in iA Writer Mono. Settings offer Quattro, Duo or Mono for prose. **Added 2026-10-04:** typefaces every Mac has: Charter, Georgia and Palatino (serif), Avenir Next, Helvetica Neue and SF Pro (sans) and Menlo, chosen from tiles that show each face. Code stays in iA Writer Mono, and export and print keep the iA Writer faces. Bold prose currently uses Duo S Bold, because the static Quattro S Bold files report weight 400 and GPUI cannot select them.
 - Fonts are bundled unmodified with their SIL Open Font License 1.1. "iA Writer" is a reserved font name, so the files must not be modified (for example subset) under that name.
 - A text column of about 70 characters with generous margins that scale with the window.
 - Light and dark palettes follow the system: iA-like warm off-white and near-black backgrounds, low-contrast syntax markers and restrained accent colors.

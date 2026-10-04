@@ -123,7 +123,7 @@ Lists, tasks, quotes, tables, code and math blocks are in the **Format** menu an
 
 ## Settings
 
-Focal keeps its settings few (⌘,): light, dark or the system's appearance, the typeface (iA Writer Quattro, Duo or Mono) with a live preview, text size, line length, what focus mode keeps bright, typewriter scrolling, grammar checking, automatic spelling correction, Vim mode, update checks and the `focal` command.
+Focal keeps its settings few (⌘,): light, dark or the system's appearance, the typeface (iA Writer Quattro, Duo or Mono, or Charter, Georgia, Palatino, Avenir Next, Helvetica Neue, SF Pro or Menlo) with a live preview, text size, line length, what focus mode keeps bright, typewriter scrolling, grammar checking, automatic spelling correction, Vim mode, update checks and the `focal` command.
 
 ### Optional diagram tools
 

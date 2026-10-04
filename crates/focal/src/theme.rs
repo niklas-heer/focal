@@ -1,6 +1,6 @@
 //! Focal's palettes, following the system's light or dark appearance.
 
-use crate::settings::{ColumnWidth, ProseFont, Settings, TextSize};
+use crate::settings::{ColumnWidth, Settings, TextSize};
 use focal_core::analysis::Alert;
 use gpui_kit::{Hsla, WindowAppearance, rgb, rgba};
 
@@ -32,11 +32,7 @@ impl Typography {
             ColumnWidth::Medium => 40.,
             ColumnWidth::Wide => 48.,
         };
-        let prose = match settings.prose_font {
-            ProseFont::Quattro => PROSE_FONT,
-            ProseFont::Duo => BOLD_PROSE_FONT,
-            ProseFont::Mono => MONO_FONT,
-        };
+        let prose = settings.prose_font.family();
         Self {
             size,
             column: column * size,

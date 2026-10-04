@@ -57,7 +57,8 @@ pub enum FocusUnit {
     Paragraph,
 }
 
-/// The typeface for prose; code is always in iA Writer Mono.
+/// The typeface for prose; code is always in iA Writer Mono. The iA Writer
+/// faces come with Focal; the others come with every Mac.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProseFont {
@@ -65,6 +66,61 @@ pub enum ProseFont {
     Quattro,
     Duo,
     Mono,
+    Charter,
+    Georgia,
+    Palatino,
+    Avenir,
+    Helvetica,
+    System,
+    Menlo,
+}
+
+impl ProseFont {
+    pub const ALL: [Self; 10] = [
+        Self::Quattro,
+        Self::Duo,
+        Self::Mono,
+        Self::Charter,
+        Self::Georgia,
+        Self::Palatino,
+        Self::Avenir,
+        Self::Helvetica,
+        Self::System,
+        Self::Menlo,
+    ];
+
+    /// The name people know the typeface by.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Quattro => "Quattro",
+            Self::Duo => "Duo",
+            Self::Mono => "Mono",
+            Self::Charter => "Charter",
+            Self::Georgia => "Georgia",
+            Self::Palatino => "Palatino",
+            Self::Avenir => "Avenir Next",
+            Self::Helvetica => "Helvetica Neue",
+            Self::System => "SF Pro",
+            Self::Menlo => "Menlo",
+        }
+    }
+
+    /// The font family GPUI draws it with.
+    pub const fn family(self) -> &'static str {
+        match self {
+            Self::Quattro => crate::theme::PROSE_FONT,
+            Self::Duo => crate::theme::BOLD_PROSE_FONT,
+            Self::Mono => crate::theme::MONO_FONT,
+            Self::Charter => "Charter",
+            Self::Georgia => "Georgia",
+            Self::Palatino => "Palatino",
+            Self::Avenir => "Avenir Next",
+            Self::Helvetica => "Helvetica Neue",
+            // The Mac's own San Francisco, which has no public family name.
+            Self::System => ".SystemUIFont",
+            Self::Menlo => "Menlo",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -245,7 +301,7 @@ struct SettingsWindow(Option<AnyWindowHandle>);
 impl Global for SettingsWindow {}
 
 const WINDOW_WIDTH: f32 = 600.;
-const WINDOW_HEIGHT: f32 = 640.;
+const WINDOW_HEIGHT: f32 = 720.;
 /// The toolbar of panes, under the window buttons.
 const TOOLBAR_HEIGHT: f32 = 76.;
 
@@ -652,12 +708,82 @@ fn preview(settings: &Settings, theme: &Colors) -> impl IntoElement {
         )
 }
 
+/// The typefaces as tiles, each showing "Aa" in its own face; clicking one
+/// chooses it.
+pub(crate) fn typeface_grid(settings: &Settings, theme: &Colors, tile: f32) -> impl IntoElement {
+    let hover = theme.code_background;
+    let tiles = ProseFont::ALL.into_iter().map(move |font| {
+        let selected = font == settings.prose_font;
+        div()
+            .id(SharedString::from(format!("prose-font-{}", font.name())))
+            .test_support()
+            .aria_label(font.name())
+            .w(px(tile))
+            .h(px(tile * 0.72))
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(2.))
+            .rounded(px(9.))
+            .cursor_pointer()
+            .bg(theme.surface)
+            .map(|d| {
+                if selected {
+                    d.border_2().border_color(theme.caret)
+                } else {
+                    d.border_1()
+                        .border_color(theme.rule)
+                        .hover(move |style| style.bg(hover))
+                }
+            })
+            .child(
+                div()
+                    .font_family(font.family())
+                    .text_size(px(tile * 0.24))
+                    .text_color(theme.text)
+                    .child("Aa"),
+            )
+            .child(
+                div()
+                    .text_size(px(10.5))
+                    .text_color(if selected { theme.text } else { theme.marker })
+                    .whitespace_nowrap()
+                    .child(font.name()),
+            )
+            .on_click(move |_, _, cx| update(cx, |settings| settings.prose_font = font))
+    });
+    div().flex().flex_wrap().gap(px(8.)).children(tiles)
+}
+
 fn text_pane(settings: &Settings, theme: &Colors) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
         .gap(px(18.))
         .child(preview(settings, theme))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .child(
+                    div()
+                        .px(px(4.))
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.marker)
+                        .child("Typeface"),
+                )
+                .child(typeface_grid(settings, theme, 100.))
+                .child(
+                    div()
+                        .px(px(4.))
+                        .text_size(px(12.))
+                        .text_color(theme.marker)
+                        .child("Code is always set in iA Writer Mono."),
+                ),
+        )
         .child(group(
             "Text",
             theme,
@@ -674,22 +800,6 @@ fn text_pane(settings: &Settings, theme: &Colors) -> impl IntoElement {
                         ],
                         settings.appearance,
                         |s, v| s.appearance = v,
-                        theme,
-                    ),
-                    theme,
-                ),
-                row(
-                    "Typeface",
-                    Some("iA Writer's faces; code is always in Mono.".into()),
-                    segmented(
-                        "prose-font",
-                        &[
-                            (ProseFont::Quattro, "Quattro"),
-                            (ProseFont::Duo, "Duo"),
-                            (ProseFont::Mono, "Mono"),
-                        ],
-                        settings.prose_font,
-                        |s, v| s.prose_font = v,
                         theme,
                     ),
                     theme,
