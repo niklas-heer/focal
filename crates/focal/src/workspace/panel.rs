@@ -25,7 +25,13 @@ use crate::theme::{DIMMED, MONO_FONT, Theme};
 
 actions!(
     focal,
-    [ToggleInfo, ToggleOutline, ToggleRecent, ToggleDarkMode]
+    [
+        ToggleInfo,
+        ToggleOutline,
+        ToggleRecent,
+        ToggleDarkMode,
+        ShowLinkedFrom
+    ]
 );
 
 pub const PANEL_WIDTH: f32 = 300.;
@@ -46,7 +52,109 @@ impl Workspace {
         } else {
             Some(tab)
         };
+        // The info panel lists the files linking here, so it needs the
+        // files beside a single file too.
+        if self.panel == Some(PanelTab::Info) {
+            self.folder(cx);
+        }
         cx.notify();
+    }
+
+    /// View ▸ Linked From…: the info panel, where the links to this file
+    /// are listed.
+    pub(super) fn show_linked_from(
+        &mut self,
+        _: &ShowLinkedFrom,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.panel != Some(PanelTab::Info) {
+            self.toggle_panel(PanelTab::Info, cx);
+        }
+    }
+
+    /// Opens a file linking here, on its link, remembering this place for
+    /// ⌘[.
+    fn open_backlink(
+        &mut self,
+        file: PathBuf,
+        offset: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(root) = self.folder_root().map(std::path::Path::to_path_buf) else {
+            return;
+        };
+        let editor = self.editor.read(cx);
+        let here = editor.path().map(PathBuf::from);
+        let selection = editor.selection.clone();
+        self.history.push((here, selection));
+        self.open_file(root.join(file), window, cx);
+        self.editor
+            .update(cx, |editor, cx| editor.move_to(offset, cx));
+    }
+
+    /// The files linking to this one, with the line of each link; `None`
+    /// when the window lists no files.
+    fn render_backlinks(&self, theme: &Theme, cx: &Context<Self>) -> Option<AnyElement> {
+        let path = self.editor.read(cx).path()?;
+        let backlinks = self.backlinks_for(path)?;
+        let title: SharedString = format!("LINKED FROM · {}", backlinks.len()).into();
+        let mut section = div().flex().flex_col().gap(px(8.)).child(
+            div()
+                .text_size(px(11.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme.marker)
+                .child(title),
+        );
+        if backlinks.is_empty() {
+            section = section.child(
+                div()
+                    .id("backlinks-empty")
+                    .test_support()
+                    .aria_label("No other file links here.")
+                    .text_size(px(12.))
+                    .text_color(theme.marker)
+                    .child("No other file links here."),
+            );
+        }
+        let hover = theme.code_background;
+        for (ix, backlink) in backlinks.iter().enumerate() {
+            let name = backlink.file.to_string_lossy().into_owned();
+            let line = gpui_kit::StyledText::new(backlink.line.clone()).with_highlights([(
+                backlink.label.clone(),
+                gpui_kit::HighlightStyle {
+                    color: Some(theme.link),
+                    ..Default::default()
+                },
+            )]);
+            let (file, offset) = (backlink.file.clone(), backlink.offset);
+            section = section.child(
+                div()
+                    .id(("backlink", ix))
+                    .test_support()
+                    .aria_label(format!("{name}: {}", backlink.line))
+                    .px(px(8.))
+                    .py(px(5.))
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(hover))
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(div().text_size(px(12.)).text_color(theme.text).child(name))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme.marker)
+                            .child(line),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.open_backlink(file.clone(), offset, window, cx);
+                    })),
+            );
+        }
+        Some(section.id("panel-backlinks").into_any_element())
     }
 
     /// Light when Focal looks dark, dark when it looks light.
@@ -242,6 +350,7 @@ impl Workspace {
                 theme,
             ))
             .child(document_section(editor, theme))
+            .children(self.render_backlinks(theme, cx))
             .child(appearance_section(settings, theme))
             .child(writing_section(settings, editor.focus_mode(), theme))
             .child(

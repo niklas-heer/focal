@@ -5,6 +5,56 @@ use std::path::{Path, PathBuf};
 
 use crate::analysis::{Analysis, LineKind};
 
+/// Where a link in a document leads, before it is resolved.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LinkTarget {
+    /// `[[name]]`, resolved against the folder's files.
+    Wiki(String),
+    /// A relative path to a Markdown file (`#part` dropped), resolved against
+    /// the document's folder.
+    Path(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutgoingLink {
+    /// The whole link, markers included.
+    pub range: std::ops::Range<usize>,
+    pub target: LinkTarget,
+}
+
+/// The links in `text` that lead to other documents: wiki links, and
+/// relative links to Markdown files. Web links, anchors, images and
+/// anything in code are left out.
+pub fn outgoing_links(text: &str) -> Vec<OutgoingLink> {
+    crate::analysis::analyze(text)
+        .links
+        .into_iter()
+        .filter_map(|link| {
+            let target = if link.wiki {
+                let (name, _) = wiki_target(&link.destination);
+                (!name.is_empty()).then_some(LinkTarget::Wiki(name))?
+            } else {
+                let destination = &link.destination;
+                if destination.contains("://")
+                    || destination.starts_with("mailto:")
+                    || destination.starts_with('#')
+                {
+                    return None;
+                }
+                let path = destination.split(['#', '?']).next().unwrap_or_default();
+                let markdown = Path::new(path).extension().is_none_or(|ext| {
+                    ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown")
+                });
+                (!path.is_empty() && markdown).then(|| LinkTarget::Path(path.to_owned()))?
+            };
+            Some(OutgoingLink {
+                range: link.range,
+                target,
+            })
+        })
+        .collect()
+}
+
 /// Splits the inside of `[[…]]` into the target name and the label after
 /// `|`; a `#heading` part is dropped.
 pub fn wiki_target(inner: &str) -> (String, Option<String>) {
@@ -166,6 +216,27 @@ pub fn find_file(root: &Path, name: &str, limit: usize) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn outgoing_links_find_wiki_and_relative_links_outside_code() {
+        let text = "See [[Design]] and [x](./notes/Two.md#part).\n`[[not]]`\n```\n[[no]]\n```\n[web](https://a.com) [top](#top) ![pic](a.png)";
+        let found: Vec<_> = outgoing_links(text).into_iter().map(|l| l.target).collect();
+        assert_eq!(
+            found,
+            [
+                LinkTarget::Wiki("Design".into()),
+                LinkTarget::Path("./notes/Two.md".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn outgoing_links_keep_their_ranges() {
+        let text = "a [[B|label]] c";
+        let links = outgoing_links(text);
+        assert_eq!(links[0].range, 2..13);
+        assert_eq!(links[0].target, LinkTarget::Wiki("B".into()));
+    }
     use crate::analysis::analyze;
 
     fn paths(list: &[&str]) -> Vec<PathBuf> {

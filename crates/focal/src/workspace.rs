@@ -25,7 +25,9 @@ mod keys;
 mod panel;
 
 pub use keys::ShowEditingKeys;
-pub use panel::{PanelTab, ToggleDarkMode, ToggleInfo, ToggleOutline, ToggleRecent};
+pub use panel::{
+    PanelTab, ShowLinkedFrom, ToggleDarkMode, ToggleInfo, ToggleOutline, ToggleRecent,
+};
 
 actions!(focal, [ToggleSidebar, GoBack, Minimize, Zoom]);
 
@@ -56,6 +58,8 @@ struct Folder {
     files: Vec<PathBuf>,
     /// Each tag in the files, with the files that carry it.
     tags: Vec<(String, Vec<PathBuf>)>,
+    /// The links between the files, by the file they lead to.
+    backlinks: std::collections::HashMap<PathBuf, Vec<folder::Backlink>>,
     sidebar: bool,
     _watch: Option<(notify::RecommendedWatcher, Task<()>)>,
     /// Reads the files' tags in the background; kept to keep it running.
@@ -215,7 +219,7 @@ impl Workspace {
         }
         this.folder = Some(Self::watched_folder(root, folder::Depth::Tree, files, cx));
         this.share_files(cx);
-        this.index_tags(cx);
+        this.index_folder(cx);
         this
     }
 
@@ -245,6 +249,7 @@ impl Workspace {
             depth,
             files,
             tags: Vec::new(),
+            backlinks: std::collections::HashMap::new(),
             sidebar: false,
             _watch: watch,
             tagging: None,
@@ -259,7 +264,7 @@ impl Workspace {
             let root = self.editor.read(cx).path()?.parent()?.to_path_buf();
             let files = folder::scan(&root, folder::Depth::Level, folder::SCAN_LIMIT);
             self.folder = Some(Self::watched_folder(root, folder::Depth::Level, files, cx));
-            self.index_tags(cx);
+            self.index_folder(cx);
         }
         self.folder.as_mut()
     }
@@ -284,7 +289,7 @@ impl Workspace {
                     if let Some(folder) = &mut this.folder {
                         folder.files = files;
                         this.share_files(cx);
-                        this.index_tags(cx);
+                        this.index_folder(cx);
                         cx.notify();
                     }
                 });
@@ -295,9 +300,9 @@ impl Workspace {
         })
     }
 
-    /// Reads the folder's tags in the background; a tag filter whose tag is
-    /// gone is cleared.
-    fn index_tags(&mut self, cx: &mut Context<Self>) {
+    /// Reads the folder's tags and links in the background; a tag filter
+    /// whose tag is gone is cleared.
+    fn index_folder(&mut self, cx: &mut Context<Self>) {
         let Some(folder) = &mut self.folder else {
             return;
         };
@@ -305,8 +310,14 @@ impl Workspace {
         folder.tagging = Some(cx.spawn(async move |this, cx| {
             let tags = cx
                 .background_executor()
-                .spawn(async move { folder::tags(&root, &files) })
+                .spawn(async move {
+                    (
+                        folder::tags(&root, &files),
+                        folder::backlinks(&root, &files),
+                    )
+                })
                 .await;
+            let (tags, backlinks) = tags;
             this.update(cx, |this, cx| {
                 if this
                     .tag_filter
@@ -317,11 +328,25 @@ impl Workspace {
                 }
                 if let Some(folder) = &mut this.folder {
                     folder.tags = tags;
+                    folder.backlinks = backlinks;
                     cx.notify();
                 }
             })
             .ok();
         }));
+    }
+
+    /// The links to `path` from the other files this window lists, or
+    /// `None` when it lists none.
+    pub(crate) fn backlinks_for(&self, path: &std::path::Path) -> Option<&[folder::Backlink]> {
+        let folder = self.folder.as_ref()?;
+        let relative = path.strip_prefix(&folder.root).ok()?;
+        Some(folder.backlinks.get(relative).map_or(&[], Vec::as_slice))
+    }
+
+    /// The root the window's files are listed under.
+    pub(crate) fn folder_root(&self) -> Option<&std::path::Path> {
+        self.folder.as_ref().map(|folder| folder.root.as_path())
     }
 
     /// Saves the current file, then opens `path` in its place.
@@ -902,6 +927,7 @@ impl Render for Workspace {
             // Entering or leaving focus mode starts from a quiet page, from
             // the keys, the menu or the bar's own button.
             .capture_action(cx.listener(|this, _: &ToggleFocusMode, _, cx| this.hide_bar(cx)))
+            .on_action(cx.listener(Self::show_linked_from))
             .on_action(cx.listener(|this, _: &ToggleInfo, _, cx| {
                 this.toggle_panel(PanelTab::Info, cx);
             }))

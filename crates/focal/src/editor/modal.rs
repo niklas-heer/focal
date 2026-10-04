@@ -413,6 +413,7 @@ fn app_action(command: focal_core::keys::AppCommand) -> Box<dyn gpui_kit::Action
         AppCommand::Outline => Box::new(crate::workspace::ToggleOutline),
         AppCommand::Sidebar => Box::new(crate::workspace::ToggleSidebar),
         AppCommand::Recent => Box::new(crate::workspace::ToggleRecent),
+        AppCommand::Links => Box::new(crate::workspace::ShowLinkedFrom),
         AppCommand::DarkMode => Box::new(crate::workspace::ToggleDarkMode),
         AppCommand::FocusMode => Box::new(super::ToggleFocusMode),
         AppCommand::KeyReference => Box::new(crate::workspace::ShowEditingKeys),

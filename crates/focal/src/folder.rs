@@ -103,6 +103,111 @@ pub fn tags(root: &Path, files: &[PathBuf]) -> Vec<(String, Vec<PathBuf>)> {
     tags
 }
 
+/// A link to a document from another file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Backlink {
+    /// The linking file, relative to the folder's root.
+    pub file: PathBuf,
+    /// Where the link starts in that file.
+    pub offset: usize,
+    /// The line holding the link, trimmed and shortened.
+    pub line: String,
+    /// The link within `line`.
+    pub label: std::ops::Range<usize>,
+}
+
+/// How much of a linking line the panel shows.
+const BACKLINK_LINE: usize = 120;
+
+/// Every link between `files` (relative to `root`), by the file it leads
+/// to: wiki links and relative Markdown links, each counted once per link,
+/// a file's links to itself left out. Review notes are not documents.
+pub fn backlinks(
+    root: &Path,
+    files: &[PathBuf],
+) -> std::collections::HashMap<PathBuf, Vec<Backlink>> {
+    use focal_core::links::{self, LinkTarget};
+    let mut index: std::collections::HashMap<PathBuf, Vec<Backlink>> =
+        std::collections::HashMap::new();
+    for file in files {
+        if file.to_string_lossy().ends_with(".review.md") {
+            continue;
+        }
+        let path = root.join(file);
+        if std::fs::metadata(&path).is_ok_and(|m| m.len() > TAG_FILE_LIMIT) {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for link in links::outgoing_links(&text) {
+            let target = match &link.target {
+                LinkTarget::Wiki(name) => links::resolve_wiki(name, file, files),
+                LinkTarget::Path(destination) => {
+                    let dir = path.parent().unwrap_or(root);
+                    links::relative_target(destination, dir)
+                        .and_then(|target| target.strip_prefix(root).ok().map(Path::to_path_buf))
+                        .and_then(|target| {
+                            files
+                                .iter()
+                                .find(|file| {
+                                    file.to_string_lossy().to_lowercase()
+                                        == target.to_string_lossy().to_lowercase()
+                                })
+                                .cloned()
+                        })
+                }
+            };
+            let Some(target) = target.filter(|target| target != file) else {
+                continue;
+            };
+            index
+                .entry(target)
+                .or_default()
+                .push(backlink(file, &text, link.range));
+        }
+    }
+    index
+}
+
+/// The backlink for `range` in `file`'s `text`: its line, trimmed and cut
+/// to [`BACKLINK_LINE`] characters around the link.
+fn backlink(file: &Path, text: &str, range: std::ops::Range<usize>) -> Backlink {
+    let start = text[..range.start].rfind('\n').map_or(0, |at| at + 1);
+    let end = text[range.start..]
+        .find('\n')
+        .map_or(text.len(), |at| range.start + at);
+    let raw = &text[start..end];
+    let trimmed_start = raw.len() - raw.trim_start().len();
+    let line = raw.trim();
+    let label_start = range.start - start - trimmed_start;
+    let label_end = (range.end - start - trimmed_start).min(line.len());
+    // Keep the link in view: cut before it when the line is long.
+    let cut = line
+        .char_indices()
+        .map(|(ix, _)| ix)
+        .find(|&ix| label_start.saturating_sub(ix) < BACKLINK_LINE / 2)
+        .unwrap_or(0);
+    let tail = &line[cut..];
+    let kept = tail
+        .char_indices()
+        .nth(BACKLINK_LINE)
+        .map_or(tail.len(), |(ix, _)| ix);
+    let (prefix, suffix) = (
+        if cut > 0 { "…" } else { "" },
+        if kept < tail.len() { "…" } else { "" },
+    );
+    let shown = format!("{prefix}{}{suffix}", &tail[..kept]);
+    let shift = prefix.len();
+    Backlink {
+        file: file.to_path_buf(),
+        offset: range.start,
+        label: (label_start - cut + shift).min(shown.len())
+            ..(label_end - cut + shift).min(shown.len()),
+        line: shown,
+    }
+}
+
 /// The most recently modified of `files` (relative to `root`).
 pub fn newest(root: &Path, files: &[PathBuf]) -> Option<PathBuf> {
     files
@@ -139,6 +244,33 @@ pub fn watch(
 #[cfg(test)]
 pub mod tests {
     use super::*;
+
+    #[test]
+    fn link_spellings_resolve_and_self_is_skipped() {
+        let root = temp_folder("backlinks");
+        std::fs::write(root.join("Name Two.md"), "[[Name Two]] links itself").unwrap();
+        std::fs::write(root.join("a.md"), "[[Name Two]] and [[name two.md]]").unwrap();
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/b.md"), "[x](../Name%20Two.md#part)").unwrap();
+        std::fs::write(root.join("a.review.md"), "[[Name Two]]").unwrap();
+        let files = scan(&root, Depth::Tree, SCAN_LIMIT);
+        let index = backlinks(&root, &files);
+        let from: Vec<_> = index[Path::new("Name Two.md")]
+            .iter()
+            .map(|b| b.file.clone())
+            .collect();
+        assert_eq!(
+            from,
+            [
+                PathBuf::from("a.md"),
+                PathBuf::from("a.md"),
+                PathBuf::from("sub/b.md")
+            ]
+        );
+        let first = &index[Path::new("Name Two.md")][0];
+        assert_eq!(first.line, "[[Name Two]] and [[name two.md]]");
+        assert_eq!(&first.line[first.label.clone()], "[[Name Two]]");
+    }
 
     /// A fresh folder under the system's temporary folder.
     pub fn temp_folder(name: &str) -> PathBuf {

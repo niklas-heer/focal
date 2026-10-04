@@ -2424,3 +2424,66 @@ fn a_drag_says_what_dropping_will_do(cx: &mut TestAppContext) {
         );
     });
 }
+
+// ---- Backlinks (M13) ----------------------------------------------------------
+
+#[gpui_kit::test]
+fn the_info_panel_lists_files_linking_here(cx: &mut TestAppContext) {
+    let root = notes_folder("backlinks-ui", "# Target");
+    std::fs::write(root.join("other.md"), "Intro\nSee [[new]].").unwrap();
+    // Older than new.md, which the folder opens.
+    std::fs::File::options()
+        .write(true)
+        .open(root.join("other.md"))
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_hours(2))
+        .unwrap();
+    let (window, workspace) = open_folder(cx, &root);
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::workspace::ShowLinkedFrom), cx);
+    });
+    cx.run_until_parked();
+    act(cx, window, |window, _| {
+        assert_eq!(
+            window.find(("backlink", 0usize)).label(),
+            Some("other.md: See [[new]].")
+        );
+    });
+    act(cx, window, |window, cx| {
+        window.click(("backlink", 0usize), cx);
+    });
+    assert_eq!(current_title(cx, &workspace), "other.md");
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 10..10, "on the link"));
+}
+
+#[gpui_kit::test]
+fn a_file_nobody_links_to_says_so(cx: &mut TestAppContext) {
+    let root = notes_folder("backlinks-none", "# Alone");
+    let (window, _) = open_folder(cx, &root);
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::workspace::ShowLinkedFrom), cx);
+    });
+    cx.run_until_parked();
+    act(cx, window, |window, _| {
+        assert_eq!(
+            window.find("backlinks-empty").label(),
+            Some("No other file links here.")
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn space_l_and_colon_links_open_the_linked_from_list(cx: &mut TestAppContext) {
+    let (window, _) = open_helix(cx, "text");
+    act(cx, window, |window, cx| window.input(" l", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("panel").is_some());
+    });
+    let (window, _) = open_vim(cx, "text");
+    act(cx, window, |window, cx| window.input(":links", cx));
+    act(cx, window, |window, cx| window.press("enter", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("panel").is_some());
+    });
+}

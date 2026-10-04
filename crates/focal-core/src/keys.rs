@@ -35,6 +35,8 @@ pub enum AppCommand {
     Outline,
     Sidebar,
     Recent,
+    /// The files linking to this one, in the info panel.
+    Links,
     DarkMode,
     FocusMode,
     KeyReference,
@@ -54,6 +56,7 @@ const MENU: &[(char, AppCommand, &str)] = &[
     ('o', AppCommand::Outline, "outline"),
     ('e', AppCommand::Sidebar, "sidebar of files"),
     ('r', AppCommand::Recent, "recent files"),
+    ('l', AppCommand::Links, "files linking here"),
     ('d', AppCommand::DarkMode, "light or dark"),
     ('z', AppCommand::FocusMode, "focus mode"),
     ('?', AppCommand::KeyReference, "all keys"),
@@ -67,6 +70,7 @@ const MENU_HINTS: &[Hint] = &[
     ("o", "outline"),
     ("e", "sidebar of files"),
     ("r", "recent files"),
+    ("l", "files linking here"),
     ("d", "light or dark"),
     ("z", "focus mode"),
     ("?", "all keys"),
@@ -126,6 +130,11 @@ const EX: &[(&[&str], Ex, &str)] = &[
         "sidebar of files",
     ),
     (&["recent"], Ex::App(AppCommand::Recent), "recent files"),
+    (
+        &["links", "backlinks"],
+        Ex::App(AppCommand::Links),
+        "files linking here",
+    ),
     (
         &["goal"],
         Ex::Nothing,
