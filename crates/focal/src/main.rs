@@ -209,7 +209,6 @@ fn run_app(launch: Launch) {
     });
     app.run(move |cx: &mut App| {
         gpui_kit::init(cx);
-        mac::force_appearance();
         load_fonts(cx);
         editor::bind_keys(cx);
         workspace::bind_keys(cx);

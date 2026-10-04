@@ -34,6 +34,24 @@ pub fn bundled_binary() -> Option<PathBuf> {
     is_focal(&exe).then_some(exe)
 }
 
+/// Where the `focal` command runs this Focal: on `PATH`, in Homebrew's
+/// folders or where "Install Command Line Tool…" puts it.
+pub fn command_path() -> Option<PathBuf> {
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect())
+        .unwrap_or_default();
+    dirs.extend([PathBuf::from("/opt/homebrew/bin"), link_dir()]);
+    dirs.into_iter()
+        .map(|dir| dir.join("focal"))
+        .find(|path| path.canonicalize().is_ok_and(|target| is_focal(&target)))
+}
+
+/// Whether `path` is the link "Install Command Line Tool…" makes, which
+/// "Uninstall" may remove.
+pub fn is_own_link(path: &Path) -> bool {
+    path == link_dir().join("focal")
+}
+
 /// Links `link_dir/focal` to `target`. A link to another Focal is replaced;
 /// any other file is left alone and reported. When the folder is missing or
 /// not writable, `escalate` runs one shell script as an administrator.

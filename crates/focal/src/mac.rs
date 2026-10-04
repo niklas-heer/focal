@@ -7,18 +7,25 @@ use objc2_app_kit::{
 };
 use objc2_foundation::NSString;
 
-/// `FOCAL_APPEARANCE=light` or `dark` overrides the system appearance for
-/// Focal alone, to check both palettes without switching the whole Mac.
-pub fn force_appearance() {
+use crate::settings::Appearance;
+
+/// Sets Focal's appearance, light or dark, for every window. The setting
+/// decides, unless `FOCAL_APPEARANCE=light` or `dark` overrides it to check
+/// both palettes; [`Appearance::System`] follows the Mac.
+pub fn set_appearance(choice: Appearance) {
     let name = match std::env::var("FOCAL_APPEARANCE").as_deref() {
-        Ok("light") => "NSAppearanceNameAqua",
-        Ok("dark") => "NSAppearanceNameDarkAqua",
-        _ => return,
+        Ok("light") => Some("NSAppearanceNameAqua"),
+        Ok("dark") => Some("NSAppearanceNameDarkAqua"),
+        _ => match choice {
+            Appearance::System => None,
+            Appearance::Light => Some("NSAppearanceNameAqua"),
+            Appearance::Dark => Some("NSAppearanceNameDarkAqua"),
+        },
     };
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
-    let appearance = NSAppearance::appearanceNamed(&NSString::from_str(name));
+    let appearance = name.and_then(|name| NSAppearance::appearanceNamed(&NSString::from_str(name)));
     NSApplication::sharedApplication(mtm).setAppearance(appearance.as_deref());
 }
 

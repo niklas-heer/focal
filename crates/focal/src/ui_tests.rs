@@ -1818,3 +1818,48 @@ fn moving_to_the_end_of_a_short_document_does_not_scroll(cx: &mut TestAppContext
         assert!(caret.top() >= px(0.));
     });
 }
+
+fn open_settings(
+    cx: &mut TestAppContext,
+) -> (AnyWindowHandle, Entity<crate::settings::SettingsView>) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::settings::init(cx);
+        cx.set_global(Settings::default());
+        crate::updates::init(cx);
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| crate::settings::SettingsView::new(window, cx))
+        })
+        .expect("open the settings")
+    })
+}
+
+#[gpui_kit::test]
+fn settings_switch_panes_from_the_toolbar_and_the_keys(cx: &mut TestAppContext) {
+    use crate::settings::Pane;
+    let (window, view) = open_settings(cx);
+    act(cx, window, |window, _| {
+        assert!(window.try_find("settings-preview").is_some(), "Text first");
+    });
+    act(cx, window, |window, cx| window.click("pane-Focus", cx));
+    view.read_with(cx, |view, _| assert_eq!(view.pane(), Pane::Focus));
+    act(cx, window, |window, cx| window.press("cmd-5", cx));
+    view.read_with(cx, |view, _| assert_eq!(view.pane(), Pane::General));
+    act(cx, window, |window, cx| window.press("ctrl-tab", cx));
+    view.read_with(cx, |view, _| assert_eq!(view.pane(), Pane::Text, "wraps"));
+}
+
+#[gpui_kit::test]
+fn settings_segments_change_the_setting(cx: &mut TestAppContext) {
+    use crate::settings::{Appearance, ProseFont, TextSize};
+    let (window, _) = open_settings(cx);
+    act(cx, window, |window, cx| window.click("prose-font-Duo", cx));
+    act(cx, window, |window, cx| window.click("text-size-XL", cx));
+    act(cx, window, |window, cx| window.click("appearance-Dark", cx));
+    cx.update(|cx| {
+        let settings = cx.global::<Settings>();
+        assert_eq!(settings.prose_font, ProseFont::Duo);
+        assert_eq!(settings.text_size, TextSize::Huge);
+        assert_eq!(settings.appearance, Appearance::Dark);
+    });
+}

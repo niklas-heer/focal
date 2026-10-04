@@ -120,7 +120,7 @@ Lists, tasks, quotes, tables, code and math blocks are in the **Format** menu an
 
 ## Settings
 
-Focal keeps its settings few: the typeface (iA Writer Quattro, Duo or Mono), text size, column width, what focus mode keeps bright, typewriter scrolling, grammar checking, automatic spelling correction, and update checks.
+Focal keeps its settings few (⌘,): light, dark or the system's appearance, the typeface (iA Writer Quattro, Duo or Mono) with a live preview, text size, line length, what focus mode keeps bright, typewriter scrolling, grammar checking, automatic spelling correction, update checks and the `focal` command.
 
 ### Optional diagram tools
 
@@ -131,7 +131,7 @@ Two diagram languages need a tool on your Mac. Without it, their blocks stay cod
 | D2 | `brew install d2` |
 | PlantUML | `brew install plantuml` |
 
-With `brew install graphviz`, Graphviz blocks use the real `dot`, which reads every DOT feature. **Settings ▸ Diagram tools** shows what your Mac has.
+With `brew install graphviz`, Graphviz blocks use the real `dot`, which reads every DOT feature. **Settings ▸ Diagrams** shows what your Mac has.
 
 ## Privacy
 

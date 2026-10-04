@@ -191,6 +191,8 @@ Kept deliberately small: prose font, text size, column width, focus unit, typewr
 
 Built in M3: a settings window (⌘,) with the prose typeface (Quattro, Duo or Mono), text size (16, 18, 21 or 24 pt), column width (about 60, 70 or 85 characters), focus unit and typewriter scrolling, applied at once and saved to `~/Library/Application Support/Focal/settings.json`. The updates setting comes with M6.
 
+Redesigned 2026-10-04: the window has a toolbar of panes, as macOS preferences do (⌘1 to ⌘5, or ⌃Tab, switch them): **Text** (a live preview in the chosen typeface and size, then appearance, typeface, size and line length), **Writing** (grammar, automatic correction), **Focus** (what stays bright, typewriter scrolling), **Diagrams** (which optional tools are installed and how to install the others) and **General** (updates with Check Now, the `focal` command with Install or Uninstall, the version). Each pane groups its settings on cards with a sentence on what each does; choices are segmented controls and on/off settings are switches. An **appearance** setting (System, Light or Dark) sets Focal's appearance alone; `FOCAL_APPEARANCE` still overrides it.
+
 ## 7. Extras (Agreed scope, Proposed implementation)
 
 Built in M4 unless marked otherwise.
