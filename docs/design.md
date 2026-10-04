@@ -202,6 +202,7 @@ Three quiet buttons sit in the title bar's right corner, faded in focus mode: **
 
 - **Info:** statistics (words, characters with and without spaces, sentences, paragraphs, reading time, and the selection's words and characters); the document (name, folder, which shows it in Finder, when it changed, its size and storage); appearance (Light, Dark or Auto, the typeface tiles, text size, line length); writing (focus mode, typewriter scrolling, Mac, Vim or Helix keys); and All Settings….
 - **Outline:** the headings, indented by level, the caret's own marked; clicking one moves there, and ⌘[ comes back.
+- **Word goal** (in Info): presets of 500 to 5,000 words, then a progress bar with − and + by 250 and Clear; reached goals turn green, and the bar's word count reads "340 / 1000 words" with a check once reached. `:goal 1000` sets one, `:goal` clears it. Goals are kept per file in `goals.json` beside the settings, never in the file; an untitled document gets one once saved.
 - **Recent:** the files and folders opened lately (File ▸ Open Recent's list), the current one marked; clicking one opens it or brings its window forward. View ▸ Recent Files, `space r` or `:recent`.
 
 Toggle Dark Mode (⇧⌘L, View menu) switches Focal's own appearance to the opposite of what it shows.

@@ -2190,3 +2190,22 @@ fn the_recent_tab_lists_opened_files(cx: &mut TestAppContext) {
         assert!(window.try_find(("recent", 1usize)).is_some());
     });
 }
+
+#[gpui_kit::test]
+fn a_word_goal_is_set_from_the_panel_and_from_colon(cx: &mut TestAppContext) {
+    let root = notes_folder("goal", "a few words here");
+    let path = root.join("new.md");
+    let (document, text) = Document::open(path.clone()).unwrap();
+    let (window, _) = open_document(cx, document, &text);
+    cx.update(|cx| cx.set_global(crate::goals::Goals::default()));
+    act(cx, window, |window, cx| window.click("corner-info", cx));
+    act(cx, window, |window, cx| window.click("goal-1000", cx));
+    cx.update(|cx| assert_eq!(crate::goals::goal(Some(&path), cx), Some(1000)));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("goal-progress").is_some());
+    });
+    set_settings(cx, |s| s.keyboard = crate::settings::Keyboard::Vim);
+    act(cx, window, |window, cx| window.input(":goal 500", cx));
+    act(cx, window, |window, cx| window.press("enter", cx));
+    cx.update(|cx| assert_eq!(crate::goals::goal(Some(&path), cx), Some(500)));
+}

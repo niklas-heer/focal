@@ -41,6 +41,8 @@ pub enum AppCommand {
     ExportHtml,
     ExportPdf,
     Print,
+    /// A word goal for the document; 0 removes it.
+    Goal(usize),
 }
 
 /// The space menu (Helix's `space`, Vim's `\`).
@@ -124,6 +126,11 @@ const EX: &[(&[&str], Ex, &str)] = &[
     ),
     (&["recent"], Ex::App(AppCommand::Recent), "recent files"),
     (
+        &["goal"],
+        Ex::Nothing,
+        "goal 1000 sets a word goal; goal clears it",
+    ),
+    (
         &["dark", "light"],
         Ex::App(AppCommand::DarkMode),
         "light or dark",
@@ -161,6 +168,17 @@ pub(crate) fn run_ex(line: &str, text: &str) -> Result<Vec<Command>, String> {
     if let Ok(number) = line.parse::<usize>() {
         let at = first_non_blank(text, line_offset(text, number.saturating_sub(1)));
         return Ok(vec![caret(at)]);
+    }
+    if let Some(goal) = line.strip_prefix("goal") {
+        let goal = goal.trim();
+        let words = if goal.is_empty() {
+            Ok(0)
+        } else {
+            goal.parse::<usize>()
+        };
+        return words
+            .map(|words| vec![Command::App(AppCommand::Goal(words))])
+            .map_err(|_| format!("A goal is a number of words: {goal}"));
     }
     let ex = EX
         .iter()
@@ -415,6 +433,14 @@ mod tests {
         );
         assert_eq!(run_ex("wq", ""), Ok(vec![Command::Save, Command::Close]));
         assert_eq!(run_ex("2", "a\nb"), Ok(vec![caret(2)]));
+        assert_eq!(
+            run_ex("goal 1000", ""),
+            Ok(vec![Command::App(AppCommand::Goal(1000))])
+        );
+        assert_eq!(
+            run_ex("goal", ""),
+            Ok(vec![Command::App(AppCommand::Goal(0))])
+        );
         assert!(run_ex("nope", "").is_err());
     }
 

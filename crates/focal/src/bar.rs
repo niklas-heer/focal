@@ -186,7 +186,7 @@ fn buttons(heading: String, theme: &Theme) -> impl IntoElement {
 
 /// The bar: a floating strip of formatting buttons centered at the bottom,
 /// with the word count at its end.
-pub fn render(state: &BarState, theme: &Theme) -> impl IntoElement {
+pub fn render(state: &BarState, goal: Option<usize>, theme: &Theme) -> impl IntoElement {
     let heading = if state.heading == 0 {
         "¶".to_owned()
     } else {
@@ -194,6 +194,10 @@ pub fn render(state: &BarState, theme: &Theme) -> impl IntoElement {
     };
     let mut words = if state.selected_words > 0 {
         format!("{} of {} words", state.selected_words, state.words)
+    } else if let Some(goal) = goal {
+        // A word goal: how far along, and a check once it is reached.
+        let reached = if state.words >= goal { "✓ " } else { "" };
+        format!("{reached}{} / {goal} words", state.words)
     } else {
         format!(
             "{} words · {} min",

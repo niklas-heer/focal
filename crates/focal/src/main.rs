@@ -13,6 +13,7 @@ mod export;
 mod find_bar;
 mod fold_memory;
 mod folder;
+mod goals;
 mod grid;
 mod highlight;
 mod icons;
@@ -225,6 +226,7 @@ fn run_app(launch: Launch) {
         recent::init(cx);
         drafts::init(cx);
         fold_memory::init(cx);
+        goals::init(cx);
         menus::init(cx);
         serve(cx);
         drafts::restore(cx);

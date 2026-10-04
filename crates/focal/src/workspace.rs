@@ -687,13 +687,15 @@ impl Workspace {
             Bar::Shown(n) => (n, true),
             Bar::Leaving(n) => (n, false),
         };
-        let state = self.editor.read(cx).bar_state();
+        let editor = self.editor.read(cx);
+        let state = editor.bar_state();
+        let goal = crate::goals::goal(editor.path(), cx);
         let bar = div()
             .absolute()
             .left_0()
             .right_0()
             .bottom_0()
-            .child(bar::render(&state, theme));
+            .child(bar::render(&state, goal, theme));
         Some(if fading_in {
             bar.with_animation(("bar-in", n), Animation::new(BAR_FADE), |el, t| {
                 el.opacity(t)
@@ -754,6 +756,13 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &ToggleOutline, _, cx| {
                 this.toggle_panel(PanelTab::Outline, cx);
+            }))
+            .on_action(cx.listener(|this, action: &crate::goals::SetGoal, _, cx| {
+                if let Some(path) = this.editor.read(cx).path().map(PathBuf::from) {
+                    let goal = action.0;
+                    crate::goals::set(&path, goal, cx);
+                    cx.notify();
+                }
             }))
             .on_action(cx.listener(|this, _: &ToggleRecent, _, cx| {
                 this.toggle_panel(PanelTab::Recent, cx);

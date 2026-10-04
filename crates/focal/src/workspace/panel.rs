@@ -235,6 +235,12 @@ impl Workspace {
             .flex_col()
             .gap(px(18.))
             .child(statistics_section(editor.text(), &editor.selection, theme))
+            .child(goal_section(
+                focal_core::text_stats::word_count(editor.text()),
+                editor.path().is_some(),
+                crate::goals::goal(editor.path(), cx),
+                theme,
+            ))
             .child(document_section(editor, theme))
             .child(appearance_section(settings, theme))
             .child(writing_section(settings, editor.focus_mode(), theme))
@@ -347,6 +353,101 @@ fn statistics_section(
                     )),
             )
         })
+}
+
+/// The document's word goal: presets to set one; once set, how far along,
+/// steps to change it, and a way to remove it.
+fn goal_section(words: usize, saved: bool, goal: Option<usize>, theme: &Theme) -> impl IntoElement {
+    let set = |id: &'static str, label: String, goal: Option<usize>| {
+        let hover = theme.rule;
+        div()
+            .id(id)
+            .test_support()
+            .aria_label(label.clone())
+            .px(px(8.))
+            .py(px(2.))
+            .rounded(px(6.))
+            .border_1()
+            .border_color(theme.rule)
+            .bg(theme.background)
+            .cursor_pointer()
+            .text_size(px(12.))
+            .hover(move |style| style.bg(hover))
+            .child(label)
+            .on_click(move |_, window, cx| {
+                window.dispatch_action(Box::new(crate::goals::SetGoal(goal)), cx);
+            })
+    };
+    let section = section("Word goal", theme);
+    if !saved {
+        return section.child(
+            div()
+                .text_size(px(12.))
+                .text_color(theme.marker)
+                .child("Save the document to give it a goal."),
+        );
+    }
+    let Some(goal) = goal else {
+        return section.child(
+            div()
+                .flex()
+                .gap(px(6.))
+                .child(set("goal-500", "500".to_owned(), Some(500)))
+                .child(set("goal-1000", "1,000".to_owned(), Some(1000)))
+                .child(set("goal-2000", "2,000".to_owned(), Some(2000)))
+                .child(set("goal-5000", "5,000".to_owned(), Some(5000))),
+        );
+    };
+    let progress = crate::goals::progress(words, goal);
+    let reached = words >= goal;
+    let done = theme.alert(focal_core::analysis::Alert::Tip);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let percent = (progress * 100.).round() as usize;
+    section
+        .child(
+            div()
+                .id("goal-progress")
+                .test_support()
+                .h(px(6.))
+                .w_full()
+                .rounded(px(3.))
+                .bg(theme.code_background)
+                .child(
+                    div()
+                        .h_full()
+                        .w(gpui_kit::relative(progress))
+                        .rounded(px(3.))
+                        .bg(if reached { done } else { theme.caret }),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(if reached { done } else { theme.text })
+                        .child(if reached {
+                            format!("Reached: {words} of {goal} words")
+                        } else {
+                            format!("{words} of {goal} words · {percent}%")
+                        }),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(4.))
+                        .child(set(
+                            "goal-less",
+                            "−".to_owned(),
+                            Some(goal.saturating_sub(250).max(250)),
+                        ))
+                        .child(set("goal-more", "+".to_owned(), Some(goal + 250)))
+                        .child(set("goal-clear", "Clear".to_owned(), None)),
+                ),
+        )
 }
 
 /// The file: its name, its folder (which shows it in Finder), when it last

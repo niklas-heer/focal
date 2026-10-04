@@ -388,6 +388,7 @@ fn app_action(command: focal_core::keys::AppCommand) -> Box<dyn gpui_kit::Action
         AppCommand::ExportHtml => Box::new(super::ExportHtml),
         AppCommand::ExportPdf => Box::new(super::ExportPdf),
         AppCommand::Print => Box::new(super::Print),
+        AppCommand::Goal(words) => Box::new(crate::goals::SetGoal((words > 0).then_some(words))),
     }
 }
 
