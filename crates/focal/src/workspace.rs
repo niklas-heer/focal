@@ -14,7 +14,7 @@ use gpui_kit::{
 
 use crate::bar;
 use crate::document::Document;
-use crate::editor::{Editor, EditorEvent};
+use crate::editor::{Editor, EditorEvent, ToggleFocusMode};
 use crate::find_bar::{Find, FindAndReplace, FindBar, FindBarEvent, FindNext, FindPrevious};
 use crate::folder;
 use crate::instance::Request;
@@ -542,7 +542,9 @@ impl Render for Workspace {
         let editor = self.editor.read(cx);
         let focus_mode = editor.focus_mode();
         // The word count reads the whole text; only count while the bar shows.
-        let bar = (!focus_mode && self.bar != Bar::Hidden).then(|| (self.bar, editor.bar_state()));
+        // Focus mode keeps it out of the way while you write, but the pointer
+        // still brings it up.
+        let bar = (self.bar != Bar::Hidden).then(|| (self.bar, editor.bar_state()));
         let sidebar = if focus_mode {
             None
         } else {
@@ -598,6 +600,9 @@ impl Render for Workspace {
             .on_mouse_move(cx.listener(Self::pointer_moved))
             // The bar never shows while you type.
             .capture_key_down(cx.listener(|this, _: &KeyDownEvent, _, cx| this.hide_bar(cx)))
+            // Entering or leaving focus mode starts from a quiet page, from
+            // the keys, the menu or the bar's own button.
+            .capture_action(cx.listener(|this, _: &ToggleFocusMode, _, cx| this.hide_bar(cx)))
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::go_back))
             .on_action(cx.listener(Self::quick_open))

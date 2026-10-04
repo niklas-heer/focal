@@ -533,14 +533,21 @@ fn focus_mode_keeps_the_caret_sentence_or_paragraph(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn focus_mode_hides_the_bar(cx: &mut TestAppContext) {
+fn focus_mode_shows_the_bar_only_when_the_pointer_asks(cx: &mut TestAppContext) {
     let (window, _) = open_workspace(cx, "text");
     act(cx, window, |window, cx| window.hover("bar-zone", cx));
     act(cx, window, |window, _| assert!(bar_shown(window)));
-    act(cx, window, |window, cx| {
-        window.dispatch_action(Box::new(editor::ToggleFocusMode), cx);
+    act(cx, window, |window, cx| window.press("cmd-d", cx));
+    act(cx, window, |window, _| {
+        assert!(!bar_shown(window), "entering focus mode hides it");
     });
-    act(cx, window, |window, _| assert!(!bar_shown(window)));
+    act(cx, window, |window, cx| window.hover("bar-zone", cx));
+    act(cx, window, |window, _| {
+        assert!(
+            bar_shown(window),
+            "the pointer at the bottom brings it back"
+        );
+    });
 }
 
 #[gpui_kit::test]

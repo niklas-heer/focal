@@ -174,7 +174,7 @@ Milestone 0 compared TextKit 1 and TextKit 2 in a throwaway AppKit spike ([findi
 - Off by default, toggled with ⌘D, as in iA Writer.
 - Dims everything except the current sentence or paragraph; the unit is a setting. In a list, a sentence ends with its item. List markers, checkboxes and highlights dim with their text.
 - Typewriter scrolling keeps the current line vertically centered (a setting, on by default), except while a table cell is edited.
-- Hides the sidebar and the bar.
+- Hides the sidebar and the bar. **Agreed (2026-10-04):** the bar still comes up when the pointer reaches the bottom edge, as outside focus mode; entering focus mode with ⌘D hides it like any key press.
 - Built in M12: syntax markers, checkboxes, quote bars and rules dim in the bright paragraph too, as in iA Writer, and so does the title bar.
 
 ### Typography and themes (Proposed)
