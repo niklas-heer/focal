@@ -831,7 +831,12 @@ fn a_folder_whose_newest_file_is_latin1_opens_it(cx: &mut TestAppContext) {
     workspace.read_with(cx, |w, cx| {
         let editor = w.editor().read(cx);
         assert_eq!(editor.text(), "café");
-        assert!(editor.bar_state().file_name.contains("Windows-1252"));
+        assert!(
+            editor
+                .bar_state()
+                .storage
+                .is_some_and(|storage| storage.contains("Windows-1252"))
+        );
     });
 }
 

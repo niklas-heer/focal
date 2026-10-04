@@ -15,6 +15,7 @@ mod fold_memory;
 mod folder;
 mod grid;
 mod highlight;
+mod icons;
 mod instance;
 mod islands;
 mod mac;
@@ -203,7 +204,7 @@ fn start_instance() -> Result<()> {
 }
 
 fn run_app(launch: Launch) {
-    let app = gpui_kit::application();
+    let app = gpui_kit::application().with_assets(icons::Assets);
     let (urls_tx, urls_rx) = async_channel::unbounded::<Vec<String>>();
     app.on_open_urls(move |urls| {
         let _ = urls_tx.try_send(urls);

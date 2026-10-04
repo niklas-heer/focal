@@ -134,7 +134,8 @@ impl EventEmitter<EditorEvent> for Editor {}
 
 /// What the bottom bar shows about the document and the caret.
 pub(crate) struct BarState {
-    pub file_name: SharedString,
+    /// How the file is stored, when it is not plain UTF-8.
+    pub storage: Option<String>,
     /// The caret line's heading level, 0 for a paragraph.
     pub heading: u8,
     pub words: usize,
@@ -1890,6 +1891,17 @@ impl Editor {
         self.insert_block(editing::Block::Math, cx);
     }
 
+    /// How the file is stored, when it is not plain UTF-8: its encoding and
+    /// classic Mac line endings.
+    pub(crate) fn storage_note(&self) -> Option<String> {
+        let format = &self.document.format;
+        let notes: Vec<&str> = [format.name(), format.cr_only.then_some("CR line endings")]
+            .into_iter()
+            .flatten()
+            .collect();
+        (!notes.is_empty()).then(|| notes.join(" · "))
+    }
+
     pub(crate) const fn focus_mode(&self) -> bool {
         self.focus_mode
     }
@@ -1912,16 +1924,8 @@ impl Editor {
                 words
             }
         };
-        // A file that is not plain UTF-8 says how it is stored.
-        let format = &self.document.format;
-        let stored = [format.name(), format.cr_only.then_some("CR line endings")];
-        let mut file_name = self.title();
-        for note in stored.into_iter().flatten() {
-            file_name.push_str(" · ");
-            file_name.push_str(note);
-        }
         BarState {
-            file_name: file_name.into(),
+            storage: self.storage_note(),
             heading,
             words,
             selected_words: word_count(&self.text()[self.selection.clone()]),

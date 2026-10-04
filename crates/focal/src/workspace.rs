@@ -585,7 +585,7 @@ impl Workspace {
     ) {
         let from_bottom = window.viewport_size().height - event.position.y;
         let reach = if matches!(self.bar, Bar::Shown(_)) {
-            bar::BAR_HEIGHT
+            bar::BAR_REACH
         } else {
             bar::SHOW_ZONE
         };

@@ -168,7 +168,8 @@ Milestone 0 compared TextKit 1 and TextKit 2 in a throwaway AppKit spike ([findi
 - It never appears while you type.
 - It holds the file name, heading level, bold, italic, strikethrough, inline code, link, lists, task, quote, table, code block, math and a focus toggle. The same actions are in the Format menu, several with shortcuts (see the README).
 - Built in M3: word count and reading time on its trailing side ("12 of 340 words" with a selection); it fades in over 150 ms and out one second after the pointer leaves; it hides on any key press.
-- Proposed: Liquid Glass material; today it is a plain strip with a top rule.
+- Proposed: Liquid Glass material.
+- **Redesigned 2026-10-04, after Bear:** a floating rounded strip centered above the bottom edge, with a soft shadow, holding Lucide icons (ISC license, `assets/icons`, drawn in the text color) in groups: heading level, inline styles (bold, italic, strikethrough, highlight, code, link), blocks (bullets, numbers, tasks, quote), inserts (table, code block, math) and focus mode, then the word count. The file name left the bar, since the title shows it; a file that is not plain UTF-8 still says how it is stored beside the word count.
 
 ### Focus mode (Agreed)
 
