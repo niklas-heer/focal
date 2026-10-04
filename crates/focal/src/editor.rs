@@ -45,6 +45,7 @@ use crate::theme::{BOLD_PROSE_FONT, DIMMED, PROSE_FONT, Theme, Typography};
 mod changes;
 mod modal;
 mod paste;
+mod style_marks;
 #[cfg(test)]
 pub(crate) use paste::drop_hint as paste_drop_hint;
 
@@ -166,6 +167,21 @@ pub struct ReplaceWord {
 #[action(namespace = focal, no_json)]
 pub struct IgnoreSpelling {
     word: String,
+}
+
+/// Removes a filler word the style check found, with a space beside it.
+#[derive(Clone, Debug, PartialEq, gpui_kit::Action)]
+#[action(namespace = focal, no_json)]
+pub struct RemoveStyleWord {
+    pub(crate) range: Range<usize>,
+    pub(crate) word: String,
+}
+
+/// Stops marking a style finding in this document.
+#[derive(Clone, Debug, PartialEq, gpui_kit::Action)]
+#[action(namespace = focal, no_json)]
+pub struct IgnoreStyle {
+    pub(crate) word: String,
 }
 
 #[derive(Clone, Debug, PartialEq, gpui_kit::Action)]
@@ -478,12 +494,21 @@ pub struct Editor {
     _modal_keys: gpui_kit::Subscription,
     /// While files are dragged over: what dropping them does, and where.
     drop_hint: Option<(String, Point<Pixels>)>,
+    /// Mark filler words, clichés and redundancies; color these parts of
+    /// speech.
+    style_check: bool,
+    syntax_highlight: Vec<crate::style::Part>,
+    /// Parts of speech and language by line text, like the spelling cache.
+    tag_cache: RefCell<std::collections::HashMap<String, Rc<crate::style::Tagged>>>,
+    /// Style findings ignored in this document, lowercase.
+    ignored_style: std::collections::HashSet<String>,
     /// What changes are shown against, if anything.
     baseline: Option<changes::Baseline>,
     changes: Rc<focal_core::diff::Changes>,
 }
 
 impl Editor {
+    #[allow(clippy::too_many_lines)]
     pub fn new(
         document: Document,
         text: String,
@@ -561,6 +586,10 @@ impl Editor {
             modal: modal::for_keyboard(settings.keyboard),
             _modal_keys: Self::intercept_modal_keys(cx),
             drop_hint: None,
+            style_check: settings.style_check,
+            syntax_highlight: settings.syntax_highlight.clone(),
+            tag_cache: RefCell::default(),
+            ignored_style: std::collections::HashSet::new(),
             baseline: None,
             changes: Rc::default(),
         };
@@ -2867,6 +2896,12 @@ impl Editor {
                 .find(|issue| issue.range.start <= at && at <= issue.range.end)
             {
                 self.grammar_menu(&view, &issue, event.position, window, cx);
+            } else if let Some(issue) = self
+                .style_issues(line, &view, &kind)
+                .into_iter()
+                .find(|issue| issue.range.start <= at && at <= issue.range.end)
+            {
+                self.style_menu(&view, &issue, event.position, window, cx);
             }
             return;
         };
@@ -2910,6 +2945,8 @@ impl Editor {
         self.typography = Typography::new(settings);
         self.typewriter = settings.typewriter;
         self.check_grammar = settings.check_grammar;
+        self.style_check = settings.style_check;
+        self.syntax_highlight.clone_from(&settings.syntax_highlight);
         self.correct_spelling =
             settings.correct_spelling && crate::spell::system_corrects_spelling();
         self.set_keyboard(settings.keyboard, cx);
@@ -3200,6 +3237,22 @@ impl Editor {
             .map(|issue| issue.range)
             .collect();
         let marked = mark_runs(&marked, &grammar, InlineStyle::GRAMMAR);
+        let mut marked = mark_runs(
+            &marked,
+            &self.style_ranges(line, &view, &info.kind),
+            InlineStyle::STYLE,
+        );
+        let parts = self.part_ranges(line, &view, &info.kind);
+        for part in crate::style::Part::ALL {
+            let ranges: Vec<Range<usize>> = parts
+                .iter()
+                .filter(|(_, p)| *p == part)
+                .map(|(range, _)| range.clone())
+                .collect();
+            if !ranges.is_empty() {
+                marked = mark_runs(&marked, &ranges, part.style());
+            }
+        }
         let dark = matches!(
             window.appearance(),
             WindowAppearance::Dark | WindowAppearance::VibrantDark
@@ -3768,6 +3821,11 @@ pub(crate) fn text_runs(
                 theme.link
             } else if style.contains(InlineStyle::CODE) {
                 theme.code_text
+            } else if let Some(part) = crate::style::Part::ALL
+                .into_iter()
+                .find(|part| style.contains(part.style()))
+            {
+                theme.part(part)
             } else {
                 base
             };
@@ -3793,6 +3851,12 @@ pub(crate) fn text_runs(
                     Some(UnderlineStyle {
                         color: Some(theme.grammar),
                         thickness: px(1.5),
+                        wavy: false,
+                    })
+                } else if style.contains(InlineStyle::STYLE) {
+                    Some(UnderlineStyle {
+                        color: Some(theme.style_issue),
+                        thickness: px(1.),
                         wavy: false,
                     })
                 } else {
@@ -4180,6 +4244,8 @@ impl Render for Editor {
             .on_action(cx.listener(Self::close_window))
             .on_action(cx.listener(Self::replace_word))
             .on_action(cx.listener(Self::ignore_spelling))
+            .on_action(cx.listener(Self::remove_style_word))
+            .on_action(cx.listener(Self::ignore_style))
             .on_action(cx.listener(Self::learn_spelling))
             .on_action(cx.listener(Self::cell_exit))
             .on_action(cx.listener(Self::table_op))

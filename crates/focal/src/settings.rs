@@ -29,8 +29,53 @@ actions!(
         BiggerText,
         SmallerText,
         DefaultTextSize,
+        ToggleStyleCheck,
+        ClearSyntaxHighlight,
     ]
 );
+
+/// Colors one part of speech, or no longer.
+#[derive(Clone, Debug, PartialEq, gpui_kit::Action)]
+#[action(namespace = focal, no_json)]
+pub struct ToggleSyntaxPart(pub crate::style::Part);
+
+/// Adds `part` to the colored parts of speech, or takes it out.
+fn toggle_part(settings: &mut Settings, part: crate::style::Part) {
+    if let Some(ix) = settings.syntax_highlight.iter().position(|p| *p == part) {
+        settings.syntax_highlight.remove(ix);
+    } else {
+        settings.syntax_highlight.push(part);
+    }
+}
+
+/// The parts of speech as chips that turn their colors on and off, each in
+/// its color when on.
+pub(crate) fn part_chips(settings: &Settings, theme: &Colors) -> impl IntoElement {
+    let hover = theme.code_background;
+    div()
+        .flex()
+        .flex_wrap()
+        .gap(px(4.))
+        .children(crate::style::Part::ALL.map(|part| {
+            let on = settings.syntax_highlight.contains(&part);
+            let color = theme.part(part);
+            div()
+                .id(SharedString::from(format!("syntax-{}", part.name())))
+                .test_support()
+                .aria_label(part.name())
+                .px(px(8.))
+                .py(px(2.))
+                .rounded(px(5.))
+                .border_1()
+                .border_color(if on { color } else { theme.rule })
+                .text_size(px(12.))
+                .text_color(if on { color } else { theme.marker })
+                .cursor_pointer()
+                .hover(move |style| style.bg(hover))
+                .child(part.name())
+                .on_click(move |_, _, cx| update(cx, |s| toggle_part(s, part)))
+        }))
+}
 
 /// Shows the settings pane with this index.
 #[derive(Clone, Debug, PartialEq, gpui_kit::Action)]
@@ -288,6 +333,10 @@ pub struct Settings {
     pub keyboard: Keyboard,
     /// Where pasted and dropped images are saved, beside the document.
     pub images_folder: String,
+    /// The parts of speech colored, after iA Writer; none by default.
+    pub syntax_highlight: Vec<crate::style::Part>,
+    /// Mark filler words, clichés and redundancies.
+    pub style_check: bool,
 }
 
 impl TextSize {
@@ -320,6 +369,8 @@ impl Default for Settings {
             correct_spelling: true,
             keyboard: Keyboard::Standard,
             images_folder: "assets".to_owned(),
+            syntax_highlight: Vec::new(),
+            style_check: false,
         }
     }
 }
@@ -398,6 +449,12 @@ pub fn init(cx: &mut App) {
         let keyboard = action.0;
         update(cx, |s| s.keyboard = keyboard);
     });
+    cx.on_action(|_: &ToggleStyleCheck, cx| update(cx, |s| s.style_check = !s.style_check));
+    cx.on_action(|action: &ToggleSyntaxPart, cx| {
+        let part = action.0;
+        update(cx, |s| toggle_part(s, part));
+    });
+    cx.on_action(|_: &ClearSyntaxHighlight, cx| update(cx, |s| s.syntax_highlight.clear()));
     cx.on_action(|_: &BiggerText, cx| update(cx, |s| s.text_size = s.text_size.step(true)));
     cx.on_action(|_: &SmallerText, cx| update(cx, |s| s.text_size = s.text_size.step(false)));
     cx.on_action(|_: &DefaultTextSize, cx| update(cx, |s| s.text_size = TextSize::default()));
@@ -1123,6 +1180,7 @@ pub(crate) const fn keyboard_hint(keyboard: Keyboard) -> &'static str {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn writing_pane(settings: &Settings, theme: &Colors) -> impl IntoElement {
     let correction_hint: SharedString = if crate::spell::system_corrects_spelling() {
         "Fixes a typo once you finish the word, as its own undo step.".into()
@@ -1179,6 +1237,32 @@ fn writing_pane(settings: &Settings, theme: &Colors) -> impl IntoElement {
                         |s, v| {
                             s.correct_spelling = v;
                         },
+                        theme,
+                    ),
+                    theme,
+                ),
+            ],
+        ))
+        .child(group(
+            "Style",
+            theme,
+            [
+                row(
+                    "Syntax highlight",
+                    Some("Colors the parts of speech you choose, after iA Writer.".into()),
+                    part_chips(settings, theme),
+                    theme,
+                ),
+                row(
+                    "Style check",
+                    Some(
+                        "Underlines filler words, clichés and redundancies, in English and German."
+                            .into(),
+                    ),
+                    toggle(
+                        "style-check",
+                        settings.style_check,
+                        |s, v| s.style_check = v,
                         theme,
                     ),
                     theme,
@@ -1474,6 +1558,8 @@ mod tests {
             correct_spelling: false,
             keyboard: Keyboard::Helix,
             images_folder: "img".to_owned(),
+            syntax_highlight: vec![crate::style::Part::Verb],
+            style_check: true,
         };
         settings.save_to(&path).unwrap();
         assert_eq!(Settings::load_from(&path), settings);

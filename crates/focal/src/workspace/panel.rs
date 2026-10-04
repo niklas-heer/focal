@@ -713,6 +713,22 @@ fn writing_section(settings: &Settings, focus_mode: bool, theme: &Theme) -> impl
                 theme,
             )),
         )
+        .child(
+            quick_row("Style check", theme).child(crate::settings::toggle(
+                "panel-style-check",
+                settings.style_check,
+                |s, v| s.style_check = v,
+                theme,
+            )),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(4.))
+                .child(div().text_size(px(12.)).child("Syntax highlight"))
+                .child(crate::settings::part_chips(settings, theme)),
+        )
         .child(quick_row("Keys", theme).child(crate::settings::segmented(
             "panel-keys",
             &[

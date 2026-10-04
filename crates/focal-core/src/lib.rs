@@ -29,6 +29,7 @@ pub mod outline;
 pub mod paste;
 pub mod search;
 pub mod shadow;
+pub mod style;
 pub mod table;
 pub mod tags;
 pub mod texmath;

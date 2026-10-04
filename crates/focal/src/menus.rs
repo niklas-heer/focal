@@ -45,12 +45,20 @@ pub fn init(cx: &mut App) {
     });
     cx.on_action(|_: &ReportIssue, cx| cx.open_url(&format!("{REPOSITORY}/issues/new")));
     set_menus(cx);
-    // Vim Mode's checkmark follows the setting.
-    let mut keyboard = cx.global::<Settings>().keyboard;
+    // The checkmarks of the editing keys and the style tools follow the
+    // settings.
+    let checked = |settings: &Settings| {
+        (
+            settings.keyboard,
+            settings.syntax_highlight.clone(),
+            settings.style_check,
+        )
+    };
+    let mut shown = checked(cx.global::<Settings>());
     cx.observe_global::<Settings>(move |cx| {
-        let now = cx.global::<Settings>().keyboard;
-        if now != keyboard {
-            keyboard = now;
+        let now = checked(cx.global::<Settings>());
+        if now != shown {
+            shown = now;
             set_menus(cx);
         }
     })
@@ -155,6 +163,21 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::action("Quick Open…", QuickOpen),
             MenuItem::action("Go to Heading…", GoToHeading),
             MenuItem::action("Focus Mode", ToggleFocusMode),
+            MenuItem::submenu(
+                Menu::new("Syntax Highlight").items(
+                    std::iter::once(
+                        MenuItem::action("None", crate::settings::ClearSyntaxHighlight)
+                            .checked(cx.global::<Settings>().syntax_highlight.is_empty()),
+                    )
+                    .chain(std::iter::once(MenuItem::separator()))
+                    .chain(crate::style::Part::ALL.map(|part| {
+                        MenuItem::action(part.name(), crate::settings::ToggleSyntaxPart(part))
+                            .checked(cx.global::<Settings>().syntax_highlight.contains(&part))
+                    })),
+                ),
+            ),
+            MenuItem::action("Style Check", crate::settings::ToggleStyleCheck)
+                .checked(cx.global::<Settings>().style_check),
             MenuItem::separator(),
             MenuItem::action("Toggle Dark Mode", ToggleDarkMode),
             MenuItem::separator(),

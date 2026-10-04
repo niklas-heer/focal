@@ -2641,3 +2641,104 @@ fn changes_since_the_last_commit(cx: &mut TestAppContext) {
         assert!(window.try_find("changes-count").is_none());
     });
 }
+
+// ---- Style tools (M13) --------------------------------------------------------
+
+#[gpui_kit::test]
+fn style_check_marks_fillers_only_when_on(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "It was very late.\n\n```\nvery code\n```");
+    editor.read_with(cx, |e, _| {
+        assert!(e.style_issues_for_test(0).is_empty(), "off by default");
+    });
+    set_settings(cx, |s| s.style_check = true);
+    act(cx, window, |_, _| {});
+    editor.read_with(cx, |e, _| {
+        assert_eq!(
+            e.style_issues_for_test(0),
+            std::iter::once(7..11).collect::<Vec<_>>()
+        );
+        assert!(e.style_issues_for_test(3).is_empty(), "never in code");
+    });
+}
+
+#[gpui_kit::test]
+fn syntax_highlight_colors_the_chosen_parts(cx: &mut TestAppContext) {
+    use crate::style::Part;
+    let (window, editor) = open_editor(cx, "The quick fox jumps over the lazy dog.");
+    editor.read_with(cx, |e, _| {
+        assert!(e.parts_for_test(0).is_empty(), "off by default");
+    });
+    set_settings(cx, |s| s.syntax_highlight = vec![Part::Adjective]);
+    act(cx, window, |_, _| {});
+    editor.read_with(cx, |e, _| {
+        let text = e.text().to_owned();
+        let words: Vec<&str> = e
+            .parts_for_test(0)
+            .into_iter()
+            .map(|(range, _)| &text[range])
+            .collect();
+        assert_eq!(words, ["quick", "lazy"]);
+    });
+}
+
+#[gpui_kit::test]
+fn style_tools_are_chosen_in_settings_and_the_menu(cx: &mut TestAppContext) {
+    use crate::style::Part;
+    let (window, _) = open_settings(cx);
+    act(cx, window, |window, cx| window.click("pane-Writing", cx));
+    act(cx, window, |window, cx| {
+        window.click("syntax-Adjectives", cx);
+    });
+    act(cx, window, |window, cx| window.click("syntax-Verbs", cx));
+    act(cx, window, |window, cx| {
+        window.click("syntax-Adjectives", cx);
+    });
+    act(cx, window, |window, cx| window.click("style-check", cx));
+    cx.update(|cx| {
+        let settings = cx.global::<Settings>();
+        assert_eq!(settings.syntax_highlight, [Part::Verb]);
+        assert!(settings.style_check);
+    });
+    cx.update(|cx| {
+        cx.dispatch_action(&crate::settings::ToggleStyleCheck);
+        cx.dispatch_action(&crate::settings::ToggleSyntaxPart(Part::Noun));
+    });
+    cx.update(|cx| {
+        let settings = cx.global::<Settings>();
+        assert!(!settings.style_check);
+        assert_eq!(settings.syntax_highlight, [Part::Verb, Part::Noun]);
+    });
+}
+
+#[gpui_kit::test]
+fn a_filler_word_is_removed_or_ignored(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "It was very late. Very good.");
+    set_settings(cx, |s| s.style_check = true);
+    act(cx, window, |window, cx| {
+        window.dispatch_action(
+            Box::new(crate::editor::RemoveStyleWord {
+                range: 7..11,
+                word: "very".into(),
+            }),
+            cx,
+        );
+    });
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.text(), "It was late. Very good.", "with one space");
+        assert_eq!(
+            e.style_issues_for_test(0),
+            std::iter::once(13..17).collect::<Vec<_>>()
+        );
+    });
+    act(cx, window, |window, cx| {
+        window.dispatch_action(
+            Box::new(crate::editor::IgnoreStyle {
+                word: "Very".into(),
+            }),
+            cx,
+        );
+    });
+    editor.read_with(cx, |e, _| {
+        assert!(e.style_issues_for_test(0).is_empty(), "ignored here");
+    });
+}

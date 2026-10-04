@@ -35,6 +35,7 @@ objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAlert", "NSAppearance", "NSApplication", "NSButton", "NSControl", "NSGraphics", "NSPasteboard", "NSPrintInfo", "NSPrintOperation", "NSPrintPanel", "NSResponder", "NSSpellChecker", "NSView", "NSWindow"] }
 objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKWebViewConfiguration", "WKNavigation"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSDictionary", "NSGeometry", "NSOrthography", "NSRange", "NSString", "NSTextCheckingResult", "NSURL", "NSValue"] }
+objc2-natural-language = { version = "0.3.2", default-features = false, features = ["std", "NLTagger", "NLTagScheme", "NLLanguage", "NLTokenizer"] }
 unicode-segmentation.workspace = true
 
 [lints]

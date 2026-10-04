@@ -76,10 +76,19 @@ pub struct Theme {
     pub changed: Hsla,
     /// Where text was deleted.
     pub deleted: Hsla,
+    /// The style check's underline.
+    pub style_issue: Hsla,
+    /// Syntax highlighting: adjectives, nouns, adverbs, verbs, conjunctions.
+    parts: [Hsla; 5],
     alerts: [Hsla; 5],
 }
 
 impl Theme {
+    /// The color syntax highlighting gives `part`.
+    pub const fn part(&self, part: crate::style::Part) -> Hsla {
+        self.parts[part as usize]
+    }
+
     pub fn for_appearance(appearance: WindowAppearance) -> Self {
         match appearance {
             WindowAppearance::Dark | WindowAppearance::VibrantDark => Self::dark(),
@@ -109,6 +118,14 @@ impl Theme {
             inserted: rgba(0x2da4_4e2e).into(),
             changed: rgb(0x002d_a44e).into(),
             deleted: rgb(0x00cf_222e).into(),
+            style_issue: rgba(0x2121_2180).into(),
+            parts: [
+                rgb(0x00a0_702a).into(),
+                rgb(0x00c4_413b).into(),
+                rgb(0x008a_4fb3).into(),
+                rgb(0x002f_6fb3).into(),
+                rgb(0x003b_8a4f).into(),
+            ],
             alerts: [
                 rgb(0x0009_69da).into(),
                 rgb(0x001a_7f37).into(),
@@ -141,6 +158,14 @@ impl Theme {
             inserted: rgba(0x3fb9_5038).into(),
             changed: rgb(0x003f_b950).into(),
             deleted: rgb(0x00f8_5149).into(),
+            style_issue: rgba(0xd9d7_d280).into(),
+            parts: [
+                rgb(0x00d4_a259).into(),
+                rgb(0x00e8_746e).into(),
+                rgb(0x00b9_8ae0).into(),
+                rgb(0x006a_a5e6).into(),
+                rgb(0x006c_c283).into(),
+            ],
             alerts: [
                 rgb(0x0047_8be6).into(),
                 rgb(0x0034_a853).into(),

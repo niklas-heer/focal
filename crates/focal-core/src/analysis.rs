@@ -41,6 +41,14 @@ impl InlineStyle {
     pub const TAG: Self = Self(1 << 17);
     /// Words the grammar checker has a suggestion for.
     pub const GRAMMAR: Self = Self(1 << 18);
+    /// A filler word, cliché or redundancy the style check found.
+    pub const STYLE: Self = Self(1 << 19);
+    /// Parts of speech, colored by syntax highlighting.
+    pub const ADJECTIVE: Self = Self(1 << 20);
+    pub const NOUN: Self = Self(1 << 21);
+    pub const ADVERB: Self = Self(1 << 22);
+    pub const VERB: Self = Self(1 << 23);
+    pub const CONJUNCTION: Self = Self(1 << 24);
 
     pub const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0 && other.0 != 0

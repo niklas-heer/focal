@@ -30,6 +30,7 @@ mod recent;
 mod settings;
 mod spell;
 mod stl;
+mod style;
 mod switcher;
 mod table_view;
 mod theme;
