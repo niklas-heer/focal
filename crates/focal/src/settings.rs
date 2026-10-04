@@ -85,8 +85,8 @@ pub enum FocusUnit {
     Paragraph,
 }
 
-/// The typeface for prose. The iA Writer, Commit Mono and `JetBrains` Mono
-/// faces come with Focal; the others come with every Mac, and any installed
+/// The typeface for prose. The iA Writer, Libron, Commit Mono and
+/// `JetBrains` Mono faces come with Focal; the others come with every Mac, and any installed
 /// family can be chosen as `Custom`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -96,6 +96,7 @@ pub enum ProseFont {
     Duo,
     Mono,
     Charter,
+    Libron,
     Georgia,
     Palatino,
     Avenir,
@@ -109,11 +110,12 @@ pub enum ProseFont {
 }
 
 impl ProseFont {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Quattro,
         Self::Duo,
         Self::Mono,
         Self::Charter,
+        Self::Libron,
         Self::Georgia,
         Self::Palatino,
         Self::Avenir,
@@ -131,6 +133,7 @@ impl ProseFont {
             Self::Duo => "Duo",
             Self::Mono => "Mono",
             Self::Charter => "Charter",
+            Self::Libron => "Libron",
             Self::Georgia => "Georgia",
             Self::Palatino => "Palatino",
             Self::Avenir => "Avenir Next",

@@ -33,4 +33,4 @@ Focal is a native macOS Markdown editor: iA Writer's minimal look with Bear-styl
 - Conventional commits, such as `feat(tables): …` or `fix(render): …`.
 - Record lasting choices as vrdx decision records in `decisions/`: run `vrdx guide` first, create with `vrdx new "<title>" --body-file <file>`, and check with `vrdx validate`. Use `accepted` only for choices Niklas made.
 - Update `docs/design.md` when a Proposed section becomes Agreed or changes.
-- The iA Writer fonts are licensed under the SIL Open Font License 1.1 with the reserved name "iA Writer". Bundle them unmodified, with their license (`assets/fonts/LICENSE.md`). Commit Mono and JetBrains Mono are bundled the same way, with their own OFL texts beside them; Lucide's icons keep `assets/icons/LICENSE`.
+- The iA Writer fonts are licensed under the SIL Open Font License 1.1 with the reserved name "iA Writer". Bundle them unmodified, with their license (`assets/fonts/LICENSE.md`). Commit Mono, JetBrains Mono and Libron are bundled the same way, with their own OFL texts beside them; Lucide's icons keep `assets/icons/LICENSE`.

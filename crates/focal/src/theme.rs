@@ -173,9 +173,14 @@ impl Theme {
     }
 }
 
-/// Monospaced typefaces Focal carries besides iA Writer's, under the SIL
-/// Open Font License (`assets/fonts`). Loaded at launch, not exported.
-pub const MONO_FONTS: [&[u8]; 6] = [
+/// Typefaces Focal carries besides iA Writer's, under the SIL Open Font
+/// License (`assets/fonts`): Commit Mono, `JetBrains` Mono and Libron. Loaded
+/// at launch, not exported.
+pub const MORE_FONTS: [&[u8]; 10] = [
+    include_bytes!("../../../assets/fonts/Libron-Regular.ttf"),
+    include_bytes!("../../../assets/fonts/Libron-Italic.ttf"),
+    include_bytes!("../../../assets/fonts/Libron-Bold.ttf"),
+    include_bytes!("../../../assets/fonts/Libron-BoldItalic.ttf"),
     include_bytes!("../../../assets/fonts/CommitMono-400-Regular.ttf"),
     include_bytes!("../../../assets/fonts/CommitMono-700-Regular.ttf"),
     include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf"),

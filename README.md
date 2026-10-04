@@ -127,7 +127,7 @@ Lists, tasks, quotes, tables, code and math blocks are in the **Format** menu an
 
 ## Settings
 
-Focal keeps its settings few (⌘,): light, dark or the system's appearance, the typeface for prose (iA Writer Quattro, Duo or Mono, Charter, Georgia, Palatino, Avenir Next, Helvetica Neue, SF Pro, Menlo, Commit Mono, JetBrains Mono, or any font you have) and for code (iA Writer Mono, Commit Mono, JetBrains Mono, Menlo, Monaco, PT Mono, or any monospaced font you have) with a live preview, text size, line length, what focus mode keeps bright, typewriter scrolling, grammar checking, automatic spelling correction, Vim or Helix keys, update checks and the `focal` command.
+Focal keeps its settings few (⌘,): light, dark or the system's appearance, the typeface for prose (iA Writer Quattro, Duo or Mono, Charter, Libron, Georgia, Palatino, Avenir Next, Helvetica Neue, SF Pro, Menlo, Commit Mono, JetBrains Mono, or any font you have) and for code (iA Writer Mono, Commit Mono, JetBrains Mono, Menlo, Monaco, PT Mono, or any monospaced font you have) with a live preview, text size, line length, what focus mode keeps bright, typewriter scrolling, grammar checking, automatic spelling correction, Vim or Helix keys, update checks and the `focal` command.
 
 ### Optional diagram tools
 
@@ -173,4 +173,4 @@ An earlier Focal was an Electron, React and CodeMirror prototype. It stalled on 
 
 ## License
 
-[MIT](LICENSE). The bundled iA Writer typefaces are licensed under the [SIL Open Font License 1.1](assets/fonts/LICENSE.md), as are [Commit Mono](assets/fonts/CommitMono-LICENSE.txt) and [JetBrains Mono](assets/fonts/JetBrainsMono-OFL.txt). The icons are [Lucide](https://lucide.dev)'s, under the [ISC license](assets/icons/LICENSE).
+[MIT](LICENSE). The bundled iA Writer typefaces are licensed under the [SIL Open Font License 1.1](assets/fonts/LICENSE.md), as are [Commit Mono](assets/fonts/CommitMono-LICENSE.txt), [JetBrains Mono](assets/fonts/JetBrainsMono-OFL.txt) and [Libron](assets/fonts/Libron-OFL.txt). The icons are [Lucide](https://lucide.dev)'s, under the [ISC license](assets/icons/LICENSE).
