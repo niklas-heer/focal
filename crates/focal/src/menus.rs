@@ -166,7 +166,8 @@ fn window_menu() -> Menu {
 fn help_menu() -> Menu {
     Menu::new("Help").items([
         MenuItem::action("Focal Help", OpenHelp),
-        MenuItem::action("Keyboard Shortcuts", OpenShortcuts),
+        MenuItem::action("Editing Keys", crate::workspace::ShowEditingKeys),
+        MenuItem::action("Keyboard Shortcuts Online", OpenShortcuts),
         MenuItem::separator(),
         MenuItem::action("Report an Issue…", ReportIssue),
     ])

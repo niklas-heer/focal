@@ -9,6 +9,7 @@ use focal_core::Bias;
 use focal_core::helix::Helix;
 use focal_core::modal::Modal;
 use focal_core::vim::{Command, Context as KeyContext, EditorCommand, Key, Vim};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, ClipboardItem, Context, InteractiveElement as _, IntoElement as _, Keystroke,
     ParentElement as _, Styled as _, Subscription, TestSupportExt as _, Window, div, px,
@@ -59,6 +60,19 @@ impl Editor {
         self.buffer.end_group();
         self.modal = for_keyboard(keyboard);
         self.settle_modal(cx);
+    }
+
+    /// The keys this editor answers to, for the reference: Vim's or
+    /// Helix's with Focal's menu, or `None` for the Mac's own.
+    pub(crate) fn key_reference(&self) -> Option<(&'static str, Vec<focal_core::keys::Group>)> {
+        let modal = self.modal.as_ref()?;
+        let title = match modal {
+            Modal::Vim(_) => "Vim keys",
+            Modal::Helix(_) => "Helix keys",
+        };
+        let mut groups = modal.reference().to_vec();
+        groups.push(focal_core::keys::MENU_REFERENCE);
+        Some((title, groups))
     }
 
     /// Where the block cursor is drawn, if anywhere.
@@ -177,6 +191,7 @@ impl Editor {
             Command::Repeat { keys, text } => self.repeat_modal_change(keys, &text, window, cx),
             Command::Save => self.save(&Save, window, cx),
             Command::Close => self.close_window(&CloseWindow, window, cx),
+            Command::App(command) => window.dispatch_action(app_action(command), cx),
         }
     }
 
@@ -262,7 +277,14 @@ impl Editor {
         let modal = self.modal.as_ref()?;
         let label = modal.label().map(|label| format!("-- {label} --"));
         let status = modal.status();
-        if label.is_none() && status.is_none() {
+        // While a command waits, what can finish it; while `:` is open, the
+        // commands that match.
+        let card = match (modal.completions(), modal.hints()) {
+            (Some(commands), _) => Some((":", commands)),
+            (None, Some(hints)) => Some((hints.title, hints.hints)),
+            (None, None) => None,
+        };
+        if label.is_none() && status.is_none() && card.is_none() {
             return None;
         }
         let text = [label, status]
@@ -272,21 +294,99 @@ impl Editor {
             .join("  ");
         Some(
             div()
-                .id("modal-status")
-                .test_support()
                 .absolute()
                 .left(px(16.))
                 .bottom(px(12.))
-                .px(px(8.))
-                .py(px(2.))
-                .rounded(px(4.))
-                .bg(theme.background)
+                .flex()
+                .flex_col()
+                .items_start()
+                .gap(px(6.))
                 .font_family(MONO_FONT)
                 .text_size(px(12.))
-                .text_color(theme.marker)
-                .child(text)
+                .when_some(card, |d, (title, hints)| {
+                    d.child(hint_card(title, &hints, theme))
+                })
+                .when(!text.is_empty(), |d| {
+                    d.child(
+                        div()
+                            .id("modal-status")
+                            .test_support()
+                            .px(px(8.))
+                            .py(px(2.))
+                            .rounded(px(4.))
+                            .bg(theme.background)
+                            .text_color(theme.marker)
+                            .child(text),
+                    )
+                })
                 .into_any_element(),
         )
+    }
+}
+
+/// What the waiting keys can be followed by, Helix's infobox: the keys in
+/// the caret's color, what they do beside them.
+fn hint_card(
+    title: &str,
+    hints: &[focal_core::keys::Hint],
+    theme: &Theme,
+) -> impl gpui_kit::IntoElement {
+    let rows = hints.iter().take(14).map(|(keys, does)| {
+        div()
+            .flex()
+            .gap(px(12.))
+            .child(
+                div()
+                    .w(px(84.))
+                    .flex_none()
+                    .text_color(theme.caret)
+                    .child(*keys),
+            )
+            .child(div().text_color(theme.text).child(*does))
+    });
+    div()
+        .id("modal-hints")
+        .test_support()
+        .min_w(px(260.))
+        .px(px(12.))
+        .py(px(10.))
+        .rounded(px(10.))
+        .bg(theme.surface)
+        .border_1()
+        .border_color(theme.rule)
+        .shadow_lg()
+        .flex()
+        .flex_col()
+        .gap(px(3.))
+        .child(
+            div()
+                .pb(px(4.))
+                .text_size(px(11.))
+                .text_color(theme.marker)
+                .child(title.to_owned()),
+        )
+        .children(rows)
+        .when(hints.is_empty(), |d| {
+            d.child(div().text_color(theme.marker).child("No such command"))
+        })
+}
+
+/// The GPUI action behind one of Focal's commands from the space menu or `:`.
+fn app_action(command: focal_core::keys::AppCommand) -> Box<dyn gpui_kit::Action> {
+    use focal_core::keys::AppCommand;
+    match command {
+        AppCommand::OpenFile => Box::new(crate::switcher::QuickOpen),
+        AppCommand::GoToHeading => Box::new(crate::switcher::GoToHeading),
+        AppCommand::Find => Box::new(Find),
+        AppCommand::Info => Box::new(crate::workspace::ToggleInfo),
+        AppCommand::Outline => Box::new(crate::workspace::ToggleOutline),
+        AppCommand::Sidebar => Box::new(crate::workspace::ToggleSidebar),
+        AppCommand::DarkMode => Box::new(crate::workspace::ToggleDarkMode),
+        AppCommand::FocusMode => Box::new(super::ToggleFocusMode),
+        AppCommand::KeyReference => Box::new(crate::workspace::ShowEditingKeys),
+        AppCommand::ExportHtml => Box::new(super::ExportHtml),
+        AppCommand::ExportPdf => Box::new(super::ExportPdf),
+        AppCommand::Print => Box::new(super::Print),
     }
 }
 

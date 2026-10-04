@@ -75,7 +75,9 @@ enum Action {
     Delete,
     Change,
     Yank,
-    Paste { after: bool },
+    Paste {
+        after: bool,
+    },
     ReplaceWithYank,
     Replace(char),
     ToggleCase,
@@ -91,11 +93,17 @@ enum Action {
     AppendAtEnd,
     OpenBelow,
     OpenAbove,
-    Search { forward: bool },
-    SearchNext { reverse: bool },
+    Search {
+        forward: bool,
+    },
+    SearchNext {
+        reverse: bool,
+    },
     SearchSelection,
     CommandLine,
     Repeat,
+    /// `space` and a key: one of Focal's own commands.
+    App(crate::keys::AppCommand),
 }
 
 enum Parse {
@@ -171,6 +179,25 @@ impl Helix {
             return Some(message.clone());
         }
         (!self.keys.is_empty()).then(|| self.keys.iter().map(|key| key_name(*key)).collect())
+    }
+
+    /// The command line's text after `:`, while it is open.
+    pub fn command_line(&self) -> Option<&str> {
+        self.command_line.as_deref()
+    }
+
+    /// What the keys typed so far wait for, to show beside them.
+    pub fn hints(&self) -> Option<crate::keys::Hints> {
+        let typed: String = self
+            .keys
+            .iter()
+            .filter_map(|key| match key {
+                Key::Char(c) => Some(*c),
+                _ => None,
+            })
+            .skip_while(char::is_ascii_digit)
+            .collect();
+        crate::keys::helix_hints(&typed)
     }
 
     /// The block cursor is the selection's head, except while inserting.
@@ -303,26 +330,23 @@ impl Helix {
                     self.command_line = None;
                 }
             }
+            Key::Tab => {
+                if let Some(name) = crate::keys::complete(line) {
+                    name.clone_into(line);
+                }
+            }
             Key::Enter => {
                 let line = self.command_line.take().unwrap_or_default();
-                return match line.trim() {
-                    "w" | "write" | "w!" => vec![Command::Save],
-                    "q" | "quit" | "q!" | "quit!" => vec![Command::Close],
-                    "wq" | "x" | "write-quit" | "wq!" => vec![Command::Save, Command::Close],
-                    "" => Vec::new(),
-                    other => {
-                        if let Ok(number) = other.parse::<usize>() {
-                            let at = line_offset(cx.text, number.saturating_sub(1));
-                            self.selection = (at, at);
-                            return vec![self.show(cx.text)];
-                        }
-                        self.message = Some(format!("no such command: '{other}'"));
-                        Vec::new()
-                    }
-                };
+                let commands = crate::keys::run_ex(&line, cx.text).unwrap_or_else(|message| {
+                    self.message = Some(message);
+                    Vec::new()
+                });
+                // A line number moved the cursor.
+                self.shown = None;
+                return commands;
             }
             Key::Escape | Key::Ctrl('[' | 'c') => self.command_line = None,
-            _ => {}
+            Key::Ctrl(_) => {}
         }
         Vec::new()
     }
@@ -617,6 +641,7 @@ impl Helix {
                 self.command_line = Some(String::new());
                 return Vec::new();
             }
+            Action::App(command) => return vec![Command::App(command)],
             Action::Repeat => {
                 if let Some(change) = &self.last_change {
                     return vec![Command::Repeat {
@@ -822,7 +847,7 @@ fn parse_motion(rest: &[Key], count: Option<usize>) -> Option<Parse> {
     let motion = |motion| done(Action::Move(motion));
     Some(match first {
         Key::Char('h') | Key::Backspace => motion(Motion::Left),
-        Key::Char('l' | ' ') => motion(Motion::Right),
+        Key::Char('l') => motion(Motion::Right),
         Key::Char('j') => motion(Motion::Down),
         Key::Char('k') => motion(Motion::Up),
         Key::Char('w') => motion(Motion::NextWordStart(false)),
@@ -921,6 +946,12 @@ fn parse(keys: &[Key]) -> Parse {
         return parse;
     }
     match first {
+        Key::Char(' ') => match rest.get(1) {
+            None => Parse::Pending,
+            Some(Key::Char(c)) => crate::keys::menu_command(*c)
+                .map_or(Parse::Invalid, |command| done(Action::App(command))),
+            Some(_) => Parse::Invalid,
+        },
         Key::Char('x') => done(Action::SelectLine),
         Key::Char('X') => done(Action::ExtendToLineBounds),
         Key::Char('%') => done(Action::SelectAll),

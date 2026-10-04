@@ -21,13 +21,16 @@ use crate::instance::Request;
 use crate::switcher::{GoToHeading, PickItem, QuickOpen, Switcher, SwitcherEvent};
 use crate::theme::Theme;
 
+mod keys;
 mod panel;
 
+pub use keys::ShowEditingKeys;
 pub use panel::{PanelTab, ToggleDarkMode, ToggleInfo, ToggleOutline};
 
 actions!(focal, [ToggleSidebar, GoBack, Minimize, Zoom]);
 
 pub fn bind_keys(cx: &mut App) {
+    keys::bind_keys(cx);
     cx.bind_keys([
         KeyBinding::new("cmd-m", Minimize, None),
         KeyBinding::new("cmd-alt-i", ToggleInfo, None),
@@ -95,6 +98,8 @@ pub struct Workspace {
     last_query: Option<String>,
     /// The panel at the right edge, when open.
     panel: Option<PanelTab>,
+    /// The key reference, while it is open, and its focus.
+    key_reference: Option<gpui_kit::FocusHandle>,
 }
 
 impl Workspace {
@@ -119,6 +124,7 @@ impl Workspace {
             find_bar: None,
             last_query: None,
             panel: None,
+            key_reference: None,
         }
     }
 
@@ -750,6 +756,9 @@ impl Render for Workspace {
                 this.toggle_panel(PanelTab::Outline, cx);
             }))
             .on_action(|_: &ToggleDarkMode, window, cx| Self::toggle_dark_mode(window, cx))
+            .on_action(cx.listener(|this, _: &ShowEditingKeys, window, cx| {
+                this.show_editing_keys(window, cx);
+            }))
             .on_action(|_: &Minimize, window, _| window.minimize_window())
             .on_action(|_: &Zoom, window, _| window.zoom_window())
             .on_action(cx.listener(Self::toggle_sidebar))
@@ -786,5 +795,6 @@ impl Render for Workspace {
                         .child(switcher.clone()),
                 )
             })
+            .children(self.render_key_reference(&theme, cx))
     }
 }

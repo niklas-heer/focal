@@ -20,6 +20,7 @@ pub mod find;
 pub mod fuzzy;
 pub mod helix;
 pub mod html_inline;
+pub mod keys;
 mod lines;
 pub mod links;
 pub mod modal;

@@ -63,7 +63,7 @@ Focal runs as one app: every `focal` call opens a window in it, and an open file
 - **Tables you edit as tables.** Every table is a grid. Tab and Return move between cells, rows and columns can be added, moved, deleted and aligned, and the Markdown is rewritten neatly aligned.
 - **Spelling, grammar and Apple's Writing Tools.** macOS's own checker underlines misspelled words in red and grammar issues in green, and corrects typos as you finish a word. **Edit ▸ Writing Tools** proofreads, rewrites or summarizes the selection, or the whole document.
 - **Find and replace**, **Go to Heading** (⇧⌘O), undo that understands lists and tables, and formatting shortcuts for everything in the bottom bar.
-- **Vim and Helix keys**, if your fingers want them: Vim's normal, insert and visual modes with counts, operators, motions, text objects, `.` and `:w`, or Helix's select-then-act editing (`w`, `x`, `mi`, `d`, `c`, `y`). Choose in **Settings ▸ Writing** or **Edit ▸ Editing Keys**; ⌘ shortcuts keep working.
+- **Vim and Helix keys**, if your fingers want them: Vim's normal, insert and visual modes with counts, operators, motions, text objects, `.` and `:w`, or Helix's select-then-act editing (`w`, `x`, `mi`, `d`, `c`, `y`). Choose in **Settings ▸ Writing** or **Edit ▸ Editing Keys**; ⌘ shortcuts keep working. A card shows what each waiting key can do, `space` (Helix) or `\` (Vim) opens a menu of Focal's commands, `:` lists commands as you type, and **Help ▸ Editing Keys** shows them all.
 
 ### Focus
 

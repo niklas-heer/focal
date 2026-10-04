@@ -2115,3 +2115,59 @@ fn other_typeface_lists_installed_families(cx: &mut TestAppContext) {
         assert!(window.try_find("switcher").is_none());
     });
 }
+
+fn hints_shown(window: &mut Window) -> bool {
+    window.try_find("modal-hints").is_some()
+}
+
+#[gpui_kit::test]
+fn helix_shows_what_a_waiting_key_can_do(cx: &mut TestAppContext) {
+    let (window, _) = open_helix(cx, "text");
+    act(cx, window, |window, cx| window.input("g", cx));
+    act(cx, window, |window, _| {
+        assert!(hints_shown(window), "goto hints");
+    });
+    act(cx, window, |window, cx| window.press("escape", cx));
+    act(cx, window, |window, _| assert!(!hints_shown(window)));
+}
+
+#[gpui_kit::test]
+fn the_space_menu_opens_the_key_reference(cx: &mut TestAppContext) {
+    let (window, _) = open_helix(cx, "text");
+    act(cx, window, |window, cx| window.input(" ", cx));
+    act(cx, window, |window, _| {
+        assert!(hints_shown(window), "Focal's menu");
+    });
+    act(cx, window, |window, cx| window.input("?", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("key-reference").is_some());
+    });
+    act(cx, window, |window, cx| window.press("escape", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("key-reference").is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn colon_lists_and_runs_focal_commands(cx: &mut TestAppContext) {
+    use crate::settings::Appearance;
+    let (window, _) = open_vim(cx, "text");
+    act(cx, window, |window, cx| window.input(":da", cx));
+    act(cx, window, |window, _| {
+        assert!(hints_shown(window), "matching commands");
+    });
+    act(cx, window, |window, cx| window.press("tab", cx));
+    act(cx, window, |window, cx| window.press("enter", cx));
+    cx.update(|cx| {
+        assert_eq!(cx.global::<Settings>().appearance, Appearance::Dark);
+    });
+}
+
+#[gpui_kit::test]
+fn vim_leader_opens_the_outline(cx: &mut TestAppContext) {
+    let (window, _) = open_vim(cx, "# One\n\ntext");
+    act(cx, window, |window, cx| window.input("\\o", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("panel").is_some());
+    });
+}

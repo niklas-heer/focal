@@ -36,6 +36,37 @@ impl Modal {
         }
     }
 
+    /// What the keys typed so far wait for: the keys that finish the
+    /// command, and what they do.
+    pub fn hints(&self) -> Option<crate::keys::Hints> {
+        match self {
+            Self::Vim(vim) => vim.hints(),
+            Self::Helix(helix) => helix.hints(),
+        }
+    }
+
+    /// The `:` commands that match what was typed after `:`, while the
+    /// command line is open.
+    pub fn completions(&self) -> Option<Vec<crate::keys::Hint>> {
+        let line = match self {
+            Self::Vim(vim) => vim.command_line(),
+            Self::Helix(helix) => helix.command_line(),
+        }?;
+        // A line number needs no list.
+        if line.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        Some(crate::keys::completions(line))
+    }
+
+    /// Which reference describes these keys.
+    pub const fn reference(&self) -> &'static [crate::keys::Group] {
+        match self {
+            Self::Vim(_) => crate::keys::VIM_REFERENCE,
+            Self::Helix(_) => crate::keys::HELIX_REFERENCE,
+        }
+    }
+
     pub fn inserting(&self) -> bool {
         match self {
             Self::Vim(vim) => vim.mode() == vim::Mode::Insert,

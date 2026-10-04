@@ -97,6 +97,8 @@ pub enum Command {
     },
     Save,
     Close,
+    /// One of Focal's own commands, from the space menu or `:`.
+    App(crate::keys::AppCommand),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -200,6 +202,21 @@ enum Operator {
     ToggleCase,
 }
 
+impl Operator {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Delete => "delete",
+            Self::Change => "change",
+            Self::Yank => "yank",
+            Self::Indent => "indent",
+            Self::Outdent => "outdent",
+            Self::Lower => "lower case",
+            Self::Upper => "upper case",
+            Self::ToggleCase => "toggle case",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Action {
     Insert,
@@ -239,6 +256,8 @@ enum Action {
     /// Visual mode: go to the other end.
     SwapEnds,
     Escape,
+    /// `\` and a key: one of Focal's own commands.
+    App(crate::keys::AppCommand),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -343,6 +362,27 @@ impl Vim {
             return Some(message.clone());
         }
         (!self.keys.is_empty()).then(|| self.keys.iter().map(|key| key_name(*key)).collect())
+    }
+
+    /// The command line's text after `:`, while it is open.
+    pub fn command_line(&self) -> Option<&str> {
+        self.command_line.as_deref()
+    }
+
+    /// What the keys typed so far wait for, to show beside them.
+    pub fn hints(&self) -> Option<crate::keys::Hints> {
+        let (_, rest) = read_count(&self.keys);
+        let operator = read_operator(rest)
+            .filter(|(_, used)| *used <= rest.len())
+            .map(|(operator, _)| operator.name());
+        let typed: String = rest
+            .iter()
+            .filter_map(|key| match key {
+                Key::Char(c) => Some(*c),
+                _ => None,
+            })
+            .collect();
+        crate::keys::vim_hints(&typed, operator)
     }
 
     /// Where the block cursor is drawn, if anywhere: on the caret in normal
@@ -503,33 +543,22 @@ impl Vim {
                     self.command_line = None;
                 }
             }
+            Key::Tab => {
+                if let Some(name) = crate::keys::complete(line) {
+                    name.clone_into(line);
+                }
+            }
             Key::Enter => {
                 let line = self.command_line.take().unwrap_or_default();
-                return self.ex(line.trim(), cx);
+                return crate::keys::run_ex(&line, cx.text).unwrap_or_else(|message| {
+                    self.message = Some(message);
+                    Vec::new()
+                });
             }
             Key::Escape | Key::Ctrl('[' | 'c') => self.command_line = None,
-            _ => {}
+            Key::Ctrl(_) => {}
         }
         Vec::new()
-    }
-
-    /// Runs an Ex command typed after `:`.
-    fn ex(&mut self, line: &str, cx: &Context) -> Vec<Command> {
-        match line {
-            "w" | "w!" | "up" | "update" => vec![Command::Save],
-            "q" | "q!" | "quit" | "close" => vec![Command::Close],
-            "wq" | "wq!" | "x" | "xit" => vec![Command::Save, Command::Close],
-            "" | "noh" | "nohlsearch" => Vec::new(),
-            _ => {
-                if let Ok(number) = line.parse::<usize>() {
-                    let at =
-                        first_non_blank(cx.text, line_offset(cx.text, number.saturating_sub(1)));
-                    return vec![caret(at)];
-                }
-                self.message = Some(format!("Not an editor command: {line}"));
-                Vec::new()
-            }
-        }
     }
 
     fn run(
@@ -1102,6 +1131,7 @@ impl Vim {
                 commands.push(self.show_visual(text));
             }
             Action::CommandLine => self.command_line = Some(String::new()),
+            Action::App(command) => commands.push(Command::App(command)),
             Action::Search { forward } => {
                 self.search_backward = !forward;
                 commands.push(Command::Find { forward });
@@ -1315,6 +1345,7 @@ const fn changes_text(parsed: Parsed) -> bool {
 
 pub(crate) fn key_name(key: Key) -> String {
     match key {
+        Key::Char(' ') => "␣".to_owned(),
         Key::Char(c) => c.to_string(),
         Key::Escape => "⎋".to_owned(),
         Key::Enter => "↩".to_owned(),
@@ -1583,6 +1614,12 @@ fn read_action(keys: &[Key], visual: bool) -> Result<Option<ActionOrOperator>, (
             None => Ok(None),
             Some(Key::Char(c)) => action(Action::Replace(*c)),
             Some(Key::Enter) => action(Action::Replace('\n')),
+            Some(_) => Err(()),
+        },
+        Key::Char('\\') => match keys.get(1) {
+            None => Ok(None),
+            Some(Key::Char(c)) => crate::keys::menu_command(*c)
+                .map_or(Err(()), |command| action(Action::App(command))),
             Some(_) => Err(()),
         },
         _ => Err(()),
@@ -2395,7 +2432,8 @@ mod tests {
                 | Command::Find { .. }
                 | Command::FindNext { .. }
                 | Command::Save
-                | Command::Close => {}
+                | Command::Close
+                | Command::App(_) => {}
             }
         }
     }
@@ -2654,7 +2692,7 @@ mod tests {
         for key in parse_keys(":nope<CR>") {
             vim.key(key, &cx);
         }
-        assert_eq!(vim.status().as_deref(), Some("Not an editor command: nope"));
+        assert_eq!(vim.status().as_deref(), Some("Not a command: nope"));
     }
 
     #[test]
