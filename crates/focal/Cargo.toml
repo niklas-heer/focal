@@ -1,6 +1,6 @@
 [package]
 name = "focal"
-version = "0.4.0"
+version = "0.5.0"
 description = "A focused Markdown editor for macOS, opened from the terminal."
 publish = false
 edition.workspace = true
