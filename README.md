@@ -87,7 +87,7 @@ Code blocks with a diagram language draw in place, in Focal's colors, light or d
 
 <img src="docs/images/folder-mode.png" alt="Folder mode: a sidebar lists the folder's Markdown files, and a wiki link points to another note" width="880">
 
-Open a folder to get a sidebar of its Markdown files (⌃⌘S), a quick switcher (⌘P), and `[[wiki links]]` between notes. ⌘-click a link to follow it and ⌘[ to come back. A single file gets the sidebar and switcher too, listing the Markdown files beside it.
+Open a folder to get a sidebar of its Markdown files (⌃⌘S), a quick switcher (⌘P), and `[[wiki links]]` between notes. ⌘-click a link to follow it and ⌘[ to come back. A single file gets the sidebar and switcher too, listing the Markdown files beside it. Like Bear, the sidebar lists your `#tags` (and front matter `tags:`), nested ones under their parents; click one to see only its notes.
 
 ### Every Markdown dialect
 

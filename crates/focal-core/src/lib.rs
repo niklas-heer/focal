@@ -27,6 +27,7 @@ pub mod modal;
 pub mod outline;
 pub mod shadow;
 pub mod table;
+pub mod tags;
 pub mod texmath;
 pub mod text_stats;
 pub mod vim;

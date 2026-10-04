@@ -89,6 +89,7 @@ Built in M6: Sparkle 2.10, as in Keywink and Spokn, with an appcast attached to 
 - ⌘P opens a fuzzy quick switcher by file name (and folder path); with no query, the newest files come first.
 - Switching files saves the current one first, including a table cell being edited.
 - Wiki links resolve against this folder.
+- **Tags (2026-10-04, after Bear):** the sidebar lists the folder's tags above its files: `#name` and `#name/sub` in the text (outside code) and `tags:` in front matter, each with how many files carry it. A nested tag's parents are listed too, holding the files of the tags under them, and nested tags are indented. Choosing a tag shows only its files; choosing it again shows all. Tags are read in the background after each scan, skipping files over 2 MB.
 - **Agreed (2026-10-04):** a window opened on a single file has the sidebar and the quick switcher too, listing the Markdown files beside it (not in subfolders), the same files its wiki links resolve against. The list is read the first time ⌃⌘S or ⌘P asks for it and follows changes on disk. Such a window does not stand for the folder: `focal .` there still opens folder mode.
 
 ### Stack

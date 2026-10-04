@@ -68,6 +68,41 @@ pub fn scan(root: &Path, depth: Depth, limit: usize) -> Vec<PathBuf> {
     files
 }
 
+/// Files larger than this are not read for their tags.
+const TAG_FILE_LIMIT: u64 = 2_000_000;
+
+/// The tags of `files` (relative to `root`): each tag with the files that
+/// carry it, by name without regard to case; a nested tag's parents are
+/// listed with the files of the tags under them.
+pub fn tags(root: &Path, files: &[PathBuf]) -> Vec<(String, Vec<PathBuf>)> {
+    let mut by_tag: std::collections::BTreeMap<String, Vec<PathBuf>> =
+        std::collections::BTreeMap::new();
+    for file in files {
+        let path = root.join(file);
+        if std::fs::metadata(&path).is_ok_and(|m| m.len() > TAG_FILE_LIMIT) {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for tag in focal_core::tags::document_tags(&text) {
+            // A nested tag counts for its parents too: `a/b` lists under `a`.
+            let mut parent = tag.as_str();
+            while let Some((up, _)) = parent.rsplit_once('/') {
+                parent = up;
+                let files = by_tag.entry(up.to_owned()).or_default();
+                if files.last() != Some(file) {
+                    files.push(file.clone());
+                }
+            }
+            by_tag.entry(tag).or_default().push(file.clone());
+        }
+    }
+    let mut tags: Vec<_> = by_tag.into_iter().collect();
+    tags.sort_by_cached_key(|(tag, _)| tag.to_lowercase());
+    tags
+}
+
 /// The most recently modified of `files` (relative to `root`).
 pub fn newest(root: &Path, files: &[PathBuf]) -> Option<PathBuf> {
     files
@@ -140,6 +175,29 @@ pub mod tests {
             .map(|p| p.to_string_lossy().into_owned())
             .collect();
         assert_eq!(files, ["a.MD", "A/c.markdown", "b.md"]);
+    }
+
+    #[test]
+    fn tags_list_the_files_that_carry_them() {
+        let root = temp_folder("tags");
+        std::fs::write(root.join("a.md"), "An #idea and #work/focal").unwrap();
+        std::fs::write(root.join("b.md"), "---\ntags: [idea]\n---\nText #work/home").unwrap();
+        let files = scan(&root, Depth::Tree, SCAN_LIMIT);
+        let tags = tags(&root, &files);
+        let names: Vec<_> = tags
+            .iter()
+            .map(|(tag, files)| (tag.as_str(), files.len()))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("idea", 2),
+                ("work", 2),
+                ("work/focal", 1),
+                ("work/home", 1)
+            ],
+            "parents are listed with their children's files"
+        );
     }
 
     #[test]

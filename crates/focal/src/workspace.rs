@@ -54,8 +54,13 @@ struct Folder {
     depth: folder::Depth,
     /// Relative to `root`.
     files: Vec<PathBuf>,
+    /// Each tag in the files, with the files that carry it.
+    tags: Vec<(String, Vec<PathBuf>)>,
     sidebar: bool,
     _watch: Option<(notify::RecommendedWatcher, Task<()>)>,
+    /// Reads the files' tags in the background; kept to keep it running.
+    #[allow(dead_code)]
+    tagging: Option<Task<()>>,
 }
 
 impl Folder {
@@ -100,6 +105,8 @@ pub struct Workspace {
     panel: Option<PanelTab>,
     /// The key reference, while it is open, and its focus.
     key_reference: Option<gpui_kit::FocusHandle>,
+    /// The sidebar shows only files with this tag.
+    tag_filter: Option<String>,
 }
 
 impl Workspace {
@@ -125,6 +132,7 @@ impl Workspace {
             last_query: None,
             panel: None,
             key_reference: None,
+            tag_filter: None,
         }
     }
 
@@ -212,6 +220,7 @@ impl Workspace {
         }
         this.folder = Some(Self::watched_folder(root, folder::Depth::Tree, files, cx));
         this.share_files(cx);
+        this.index_tags(cx);
         this
     }
 
@@ -240,8 +249,10 @@ impl Workspace {
             root,
             depth,
             files,
+            tags: Vec::new(),
             sidebar: false,
             _watch: watch,
+            tagging: None,
         }
     }
 
@@ -253,6 +264,7 @@ impl Workspace {
             let root = self.editor.read(cx).path()?.parent()?.to_path_buf();
             let files = folder::scan(&root, folder::Depth::Level, folder::SCAN_LIMIT);
             self.folder = Some(Self::watched_folder(root, folder::Depth::Level, files, cx));
+            self.index_tags(cx);
         }
         self.folder.as_mut()
     }
@@ -277,6 +289,7 @@ impl Workspace {
                     if let Some(folder) = &mut this.folder {
                         folder.files = files;
                         this.share_files(cx);
+                        this.index_tags(cx);
                         cx.notify();
                     }
                 });
@@ -285,6 +298,35 @@ impl Workspace {
                 }
             }
         })
+    }
+
+    /// Reads the folder's tags in the background; a tag filter whose tag is
+    /// gone is cleared.
+    fn index_tags(&mut self, cx: &mut Context<Self>) {
+        let Some(folder) = &mut self.folder else {
+            return;
+        };
+        let (root, files) = (folder.root.clone(), folder.files.clone());
+        folder.tagging = Some(cx.spawn(async move |this, cx| {
+            let tags = cx
+                .background_executor()
+                .spawn(async move { folder::tags(&root, &files) })
+                .await;
+            this.update(cx, |this, cx| {
+                if this
+                    .tag_filter
+                    .as_ref()
+                    .is_some_and(|filter| !tags.iter().any(|(tag, _)| tag == filter))
+                {
+                    this.tag_filter = None;
+                }
+                if let Some(folder) = &mut this.folder {
+                    folder.tags = tags;
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
     }
 
     /// Saves the current file, then opens `path` in its place.
@@ -523,39 +565,22 @@ impl Workspace {
             || folder.root.to_string_lossy().into_owned(),
             |name| name.to_string_lossy().into_owned(),
         );
-        let files = folder.files.iter().enumerate().map(|(ix, file)| {
-            let path = folder.root.join(file);
-            let selected = current.as_ref() == Some(&path);
-            let name = file
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let parent = file
-                .parent()
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let hover = theme.code_background;
-            div()
-                .id(("file", ix))
-                .test_support()
-                .px(px(16.))
-                .py(px(5.))
-                .cursor_pointer()
-                .when(selected, |d| d.bg(theme.selection))
-                .hover(move |style| style.bg(hover))
-                .child(name)
-                .when(!parent.is_empty(), |d| {
-                    d.child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(theme.marker)
-                            .child(parent),
-                    )
-                })
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.open_file(path.clone(), window, cx);
-                }))
+        // With a tag chosen, only the files that carry it.
+        let tagged = self.tag_filter.as_ref().and_then(|filter| {
+            folder
+                .tags
+                .iter()
+                .find(|(tag, _)| tag == filter)
+                .map(|(_, files)| files)
         });
+        let files = folder
+            .files
+            .iter()
+            .enumerate()
+            .filter(|(_, file)| tagged.is_none_or(|tagged| tagged.contains(file)))
+            .map(|(ix, file)| {
+                Self::file_row(ix, &folder.root, file, current.as_deref(), theme, cx)
+            });
         Some(
             div()
                 .id("sidebar")
@@ -597,6 +622,7 @@ impl Workspace {
                         .id("sidebar-files")
                         .flex_1()
                         .overflow_y_scroll()
+                        .children(self.render_tags(folder, theme, cx))
                         .children(files)
                         .when(folder.files.is_empty(), |d| {
                             d.child(
@@ -608,6 +634,136 @@ impl Workspace {
                             )
                         }),
                 )
+                .into_any_element(),
+        )
+    }
+
+    /// One file in the sidebar: its name, its subfolder below, the open one
+    /// marked.
+    fn file_row(
+        ix: usize,
+        root: &std::path::Path,
+        file: &std::path::Path,
+        current: Option<&std::path::Path>,
+        theme: &Theme,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let path = root.join(file);
+        let selected = current == Some(path.as_path());
+        let name = file
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let parent = file
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let hover = theme.code_background;
+        div()
+            .id(("file", ix))
+            .test_support()
+            .px(px(16.))
+            .py(px(5.))
+            .cursor_pointer()
+            .when(selected, |d| d.bg(theme.selection))
+            .hover(move |style| style.bg(hover))
+            .child(name)
+            .when(!parent.is_empty(), |d| {
+                d.child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(theme.marker)
+                        .child(parent),
+                )
+            })
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.open_file(path.clone(), window, cx);
+            }))
+    }
+
+    /// The folder's tags, Bear's way: each with how many files carry it,
+    /// nested ones indented under their parents; choosing one shows only
+    /// its files, choosing it again shows all.
+    fn render_tags(
+        &self,
+        folder: &Folder,
+        theme: &Theme,
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
+        if folder.tags.is_empty() {
+            return None;
+        }
+        let hover = theme.code_background;
+        let rows = folder.tags.iter().enumerate().map(|(ix, (tag, files))| {
+            let selected = self.tag_filter.as_ref() == Some(tag);
+            let depth = tag.matches('/').count();
+            let name = tag.rsplit('/').next().unwrap_or(tag).to_owned();
+            let chosen = tag.clone();
+            div()
+                .id(("tag", ix))
+                .test_support()
+                .pl(px(
+                    16. + 12. * f32::from(u8::try_from(depth).unwrap_or(u8::MAX))
+                ))
+                .pr(px(16.))
+                .py(px(4.))
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .cursor_pointer()
+                .when(selected, |d| d.bg(theme.selection))
+                .when(!selected, |d| d.hover(move |style| style.bg(hover)))
+                .child(
+                    crate::icons::Icon::Hash
+                        .element(12.)
+                        .text_color(theme.marker),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .child(name),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(theme.marker)
+                        .child(files.len().to_string()),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.tag_filter = if this.tag_filter.as_ref() == Some(&chosen) {
+                        None
+                    } else {
+                        Some(chosen.clone())
+                    };
+                    cx.notify();
+                }))
+        });
+        let heading = |text: &'static str| {
+            div()
+                .px(px(16.))
+                .pt(px(8.))
+                .pb(px(4.))
+                .text_size(px(11.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme.marker)
+                .child(text)
+        };
+        Some(
+            div()
+                .id("sidebar-tags")
+                .test_support()
+                .flex()
+                .flex_col()
+                .child(heading("Tags"))
+                .children(rows)
+                .child(heading(if self.tag_filter.is_some() {
+                    "Tagged files"
+                } else {
+                    "Files"
+                }))
                 .into_any_element(),
         )
     }

@@ -2209,3 +2209,35 @@ fn a_word_goal_is_set_from_the_panel_and_from_colon(cx: &mut TestAppContext) {
     act(cx, window, |window, cx| window.press("enter", cx));
     cx.update(|cx| assert_eq!(crate::goals::goal(Some(&path), cx), Some(500)));
 }
+
+#[gpui_kit::test]
+fn sidebar_tags_filter_the_files(cx: &mut TestAppContext) {
+    let root = crate::folder::tests::temp_folder("sidebar-tags");
+    std::fs::write(root.join("a.md"), "An #idea").unwrap();
+    std::fs::write(root.join("b.md"), "Nothing tagged").unwrap();
+    let (window, _) = open_folder(cx, &root);
+    cx.run_until_parked();
+    act(cx, window, |window, cx| window.press("ctrl-cmd-s", cx));
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find(("tag", 0usize)).is_some(),
+            "#idea is listed"
+        );
+        assert!(window.try_find(("file", 1usize)).is_some());
+    });
+    act(cx, window, |window, cx| window.click(("tag", 0usize), cx));
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find(("file", 0usize)).is_some(),
+            "a.md has the tag"
+        );
+        assert!(window.try_find(("file", 1usize)).is_none(), "b.md does not");
+    });
+    act(cx, window, |window, cx| window.click(("tag", 0usize), cx));
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find(("file", 1usize)).is_some(),
+            "all files again"
+        );
+    });
+}
