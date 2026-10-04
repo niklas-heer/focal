@@ -84,7 +84,7 @@ Code blocks with a diagram language draw in place, in Focal's colors, light or d
 
 <img src="docs/images/folder-mode.png" alt="Folder mode: a sidebar lists the folder's Markdown files, and a wiki link points to another note" width="880">
 
-Open a folder to get a sidebar of its Markdown files (⌃⌘S), a quick switcher (⌘P), and `[[wiki links]]` between notes. ⌘-click a link to follow it and ⌘[ to come back.
+Open a folder to get a sidebar of its Markdown files (⌃⌘S), a quick switcher (⌘P), and `[[wiki links]]` between notes. ⌘-click a link to follow it and ⌘[ to come back. A single file gets the sidebar and switcher too, listing the Markdown files beside it.
 
 ### Every Markdown dialect
 
@@ -110,8 +110,8 @@ Whatever wrote the file, it should look right. Focal reads GitHub-flavored Markd
 | ⌘-click, ⌘↩ | Follow a link, wiki link or footnote |
 | ⌘[ | Go back |
 | ⌘D | Focus mode |
-| ⌘P | Quick switcher (folder mode) |
-| ⌃⌘S | Sidebar (folder mode) |
+| ⌘P | Quick switcher |
+| ⌃⌘S | Sidebar |
 | ⇧⌘E, ⌥⇧⌘C | Export as HTML, copy as HTML |
 | ⌥⌘P | Print (File ▸ Export as PDF… writes a PDF) |
 | ⌘, | Settings |

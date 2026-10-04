@@ -689,6 +689,41 @@ fn the_sidebar_opens_files_and_saves_the_current_one(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_single_file_lists_the_markdown_files_beside_it(cx: &mut TestAppContext) {
+    let root = notes_folder("beside", "new text");
+    std::fs::create_dir_all(root.join("sub")).unwrap();
+    std::fs::write(root.join("sub/deep.md"), "deep").unwrap();
+    let (document, text) = Document::open(root.join("new.md")).unwrap();
+    let (window, workspace) = open_document(cx, document, &text);
+    act(cx, window, |window, cx| window.press("ctrl-cmd-s", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("sidebar").is_some(), "the sidebar opens");
+        assert!(window.try_find(("file", 1usize)).is_some());
+        assert!(
+            window.try_find(("file", 2usize)).is_none(),
+            "subfolders are left out"
+        );
+    });
+    act(cx, window, |window, cx| window.click(("file", 1usize), cx));
+    assert_eq!(current_title(cx, &workspace), "old.md");
+    workspace.read_with(cx, |workspace, cx| {
+        assert!(
+            !workspace.shows(&root, cx),
+            "the window does not stand for the folder"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn an_untitled_document_has_no_sidebar(cx: &mut TestAppContext) {
+    let (window, _) = open_workspace(cx, "text");
+    act(cx, window, |window, cx| window.press("ctrl-cmd-s", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("sidebar").is_none());
+    });
+}
+
+#[gpui_kit::test]
 fn switching_files_writes_an_open_cell_into_its_own_file(cx: &mut TestAppContext) {
     let root = notes_folder("cell", "| a |\n|---|\n| 1 |\n");
     let (window, workspace) = open_folder(cx, &root);

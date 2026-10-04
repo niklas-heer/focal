@@ -1,5 +1,5 @@
-//! The window's root: the editor, the bottom bar and, in folder mode, the
-//! sidebar of files.
+//! The window's root: the editor, the bottom bar and the sidebar of files,
+//! for a folder or for the folder around a single file.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -7,8 +7,8 @@ use std::time::Duration;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Animation, AnimationExt as _, AnyElement, App, AppContext as _, Context, Entity,
-    Focusable as _, InteractiveElement as _, IntoElement, KeyBinding, KeyDownEvent, MouseMoveEvent,
-    ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Task,
+    Focusable as _, FontWeight, InteractiveElement as _, IntoElement, KeyBinding, KeyDownEvent,
+    MouseMoveEvent, ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Task,
     TestSupportExt as _, Window, WindowControlArea, actions, div, px,
 };
 
@@ -34,13 +34,28 @@ const SIDEBAR_WIDTH: f32 = 240.;
 /// How long the file list waits for a burst of changes to settle.
 const RESCAN_SETTLE: Duration = Duration::from_millis(200);
 
-/// Folder mode: the folder, its Markdown files and the sidebar listing them.
+/// A folder, its Markdown files and the sidebar listing them: the folder
+/// opened in folder mode, or the one around a single file.
 struct Folder {
     root: PathBuf,
+    /// [`folder::Depth::Tree`] for folder mode, [`folder::Depth::Level`]
+    /// beside a single file.
+    depth: folder::Depth,
     /// Relative to `root`.
     files: Vec<PathBuf>,
     sidebar: bool,
     _watch: Option<(notify::RecommendedWatcher, Task<()>)>,
+}
+
+impl Folder {
+    /// Whether `path` is one of the files this folder lists, so following a
+    /// link to it stays in this window.
+    fn holds(&self, path: &std::path::Path) -> bool {
+        match self.depth {
+            folder::Depth::Tree => path.starts_with(&self.root),
+            folder::Depth::Level => path.parent() == Some(self.root.as_path()),
+        }
+    }
 }
 
 /// How long the bar stays after the pointer leaves it.
@@ -111,7 +126,7 @@ impl Workspace {
                 let in_folder = self
                     .folder
                     .as_ref()
-                    .is_some_and(|folder| path.starts_with(&folder.root));
+                    .is_some_and(|folder| folder.holds(path));
                 if in_folder {
                     self.history.push((here, editor.selection.clone()));
                     self.open_file(path.clone(), window, cx);
@@ -153,7 +168,7 @@ impl Workspace {
     /// Opens `root` in folder mode, with its most recently changed Markdown
     /// file, or a new `Untitled.md` in it.
     pub fn new_folder(root: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let files = folder::scan(&root, folder::SCAN_LIMIT);
+        let files = folder::scan(&root, folder::Depth::Tree, folder::SCAN_LIMIT);
         let untitled = root.join("Untitled.md");
         let newest = folder::newest(&root, &files).map(|file| root.join(file));
         // A file Focal cannot read (not UTF-8) gives way to a new one, with
@@ -172,10 +187,22 @@ impl Workspace {
             this.editor
                 .update(cx, |editor, cx| editor.show_error(failure, cx));
         }
-        let watching = crate::document::WATCH_FILES.then(|| folder::watch(&root));
+        this.folder = Some(Self::watched_folder(root, folder::Depth::Tree, files, cx));
+        this.share_files(cx);
+        this
+    }
+
+    /// A folder whose file list follows changes on disk.
+    fn watched_folder(
+        root: PathBuf,
+        depth: folder::Depth,
+        files: Vec<PathBuf>,
+        cx: &mut Context<Self>,
+    ) -> Folder {
+        let watching = crate::document::WATCH_FILES.then(|| folder::watch(&root, depth));
         let watch = match watching.transpose() {
             Ok(Some((watcher, events))) => {
-                Some((watcher, Self::rescan_on(events, root.clone(), cx)))
+                Some((watcher, Self::rescan_on(events, root.clone(), depth, cx)))
             }
             Ok(None) => None,
             Err(error) => {
@@ -186,20 +213,32 @@ impl Workspace {
                 None
             }
         };
-        this.folder = Some(Folder {
+        Folder {
             root,
+            depth,
             files,
             sidebar: false,
             _watch: watch,
-        });
-        this.share_files(cx);
-        this
+        }
+    }
+
+    /// The window's folder: folder mode's, or else the folder around its
+    /// file, listed the first time it is asked for. An untitled document has
+    /// none.
+    fn folder(&mut self, cx: &mut Context<Self>) -> Option<&mut Folder> {
+        if self.folder.is_none() {
+            let root = self.editor.read(cx).path()?.parent()?.to_path_buf();
+            let files = folder::scan(&root, folder::Depth::Level, folder::SCAN_LIMIT);
+            self.folder = Some(Self::watched_folder(root, folder::Depth::Level, files, cx));
+        }
+        self.folder.as_mut()
     }
 
     /// Rescans the folder after each settled burst of changes.
     fn rescan_on(
         events: async_channel::Receiver<()>,
         root: PathBuf,
+        depth: folder::Depth,
         cx: &mut Context<Self>,
     ) -> Task<()> {
         cx.spawn(async move |this, cx| {
@@ -209,7 +248,7 @@ impl Workspace {
                 let scan_root = root.clone();
                 let files = cx
                     .background_executor()
-                    .spawn(async move { folder::scan(&scan_root, folder::SCAN_LIMIT) })
+                    .spawn(async move { folder::scan(&scan_root, depth, folder::SCAN_LIMIT) })
                     .await;
                 let updated = this.update(cx, |this, cx| {
                     if let Some(folder) = &mut this.folder {
@@ -254,7 +293,9 @@ impl Workspace {
     }
 
     fn quick_open(&mut self, _: &QuickOpen, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(folder) = &self.folder else { return };
+        let Some(folder) = self.folder(cx) else {
+            return;
+        };
         let root = folder.root.clone();
         let mut files = folder.files.clone();
         // The most recently changed first.
@@ -399,7 +440,7 @@ impl Workspace {
     }
 
     fn toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(folder) = &mut self.folder {
+        if let Some(folder) = self.folder(cx) {
             folder.sidebar = !folder.sidebar;
             cx.notify();
         }
@@ -408,6 +449,10 @@ impl Workspace {
     fn render_sidebar(&self, theme: &Theme, cx: &Context<Self>) -> Option<AnyElement> {
         let folder = self.folder.as_ref().filter(|f| f.sidebar)?;
         let current = self.editor.read(cx).path().map(PathBuf::from);
+        let folder_name = folder.root.file_name().map_or_else(
+            || folder.root.to_string_lossy().into_owned(),
+            |name| name.to_string_lossy().into_owned(),
+        );
         let files = folder.files.iter().enumerate().map(|(ix, file)| {
             let path = folder.root.join(file);
             let selected = current.as_ref() == Some(&path);
@@ -464,10 +509,34 @@ impl Workspace {
                 )
                 .child(
                     div()
+                        .id("sidebar-folder")
+                        .test_support()
+                        .flex_none()
+                        .px(px(16.))
+                        .pb(px(8.))
+                        .text_size(px(11.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.marker)
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .child(folder_name),
+                )
+                .child(
+                    div()
                         .id("sidebar-files")
                         .flex_1()
                         .overflow_y_scroll()
-                        .children(files),
+                        .children(files)
+                        .when(folder.files.is_empty(), |d| {
+                            d.child(
+                                div()
+                                    .px(px(16.))
+                                    .py(px(5.))
+                                    .text_color(theme.marker)
+                                    .child("No Markdown files"),
+                            )
+                        }),
                 )
                 .into_any_element(),
         )
@@ -477,13 +546,14 @@ impl Workspace {
         &self.editor
     }
 
-    /// Whether this window shows `path`, as its file or its folder.
+    /// Whether this window shows `path`, as its file or as the folder it
+    /// opened (not the folder around a single file).
     pub fn shows(&self, path: &std::path::Path, cx: &gpui_kit::App) -> bool {
         self.editor.read(cx).path() == Some(path)
             || self
                 .folder
                 .as_ref()
-                .is_some_and(|folder| folder.root == path)
+                .is_some_and(|folder| folder.depth == folder::Depth::Tree && folder.root == path)
     }
 
     /// Gives the editor keyboard focus.

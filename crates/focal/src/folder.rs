@@ -1,5 +1,5 @@
-//! Folder mode's file list: the Markdown files under a folder, kept current
-//! through FSEvents.
+//! The sidebar's file list: the Markdown files under a folder (folder mode)
+//! or beside a single file, kept current through FSEvents.
 
 use std::path::{Path, PathBuf};
 
@@ -10,10 +10,19 @@ const EXTENSIONS: [&str; 4] = ["md", "markdown", "mdown", "mkd"];
 /// Folders that hold dependencies or build output, not notes.
 const SKIPPED: [&str; 2] = ["node_modules", "target"];
 
+/// How far below its root a folder is listed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Depth {
+    /// Every subfolder: a folder opened in folder mode.
+    Tree,
+    /// The root alone: the folder around a single file.
+    Level,
+}
+
 /// The Markdown files under `root`, as paths relative to it, sorted without
 /// regard to case. Hidden entries and dependency or build folders are skipped;
 /// scanning stops after `limit` files.
-pub fn scan(root: &Path, limit: usize) -> Vec<PathBuf> {
+pub fn scan(root: &Path, depth: Depth, limit: usize) -> Vec<PathBuf> {
     let mut files = Vec::new();
     let mut folders = vec![root.to_path_buf()];
     while let Some(folder) = folders.pop() {
@@ -32,7 +41,7 @@ pub fn scan(root: &Path, limit: usize) -> Vec<PathBuf> {
             let Ok(kind) = entry.file_type() else {
                 continue;
             };
-            if kind.is_dir() && !SKIPPED.contains(&name.as_ref()) {
+            if depth == Depth::Tree && kind.is_dir() && !SKIPPED.contains(&name.as_ref()) {
                 folders.push(entry.path());
             }
         }
@@ -71,10 +80,11 @@ pub fn newest(root: &Path, files: &[PathBuf]) -> Option<PathBuf> {
         .cloned()
 }
 
-/// Watches `root` and everything under it; the receiver gets a message per
-/// batch of changes.
+/// Watches `root`, and with [`Depth::Tree`] everything under it; the
+/// receiver gets a message per batch of changes.
 pub fn watch(
     root: &Path,
+    depth: Depth,
 ) -> anyhow::Result<(notify::RecommendedWatcher, async_channel::Receiver<()>)> {
     use notify::{RecursiveMode, Watcher as _};
     let (tx, rx) = async_channel::unbounded();
@@ -83,7 +93,11 @@ pub fn watch(
             let _ = tx.try_send(());
         }
     })?;
-    watcher.watch(root, RecursiveMode::Recursive)?;
+    let mode = match depth {
+        Depth::Tree => RecursiveMode::Recursive,
+        Depth::Level => RecursiveMode::NonRecursive,
+    };
+    watcher.watch(root, mode)?;
     Ok((watcher, rx))
 }
 
@@ -120,7 +134,7 @@ pub mod tests {
         ] {
             touch(&root, path);
         }
-        let files = scan(&root, SCAN_LIMIT);
+        let files = scan(&root, Depth::Tree, SCAN_LIMIT);
         let files: Vec<_> = files
             .iter()
             .map(|p| p.to_string_lossy().into_owned())
@@ -134,6 +148,20 @@ pub mod tests {
         for i in 0..10 {
             touch(&root, &format!("{i}.md"));
         }
-        assert_eq!(scan(&root, 4).len(), 4);
+        assert_eq!(scan(&root, Depth::Tree, 4).len(), 4);
+    }
+
+    #[test]
+    fn a_level_lists_only_the_files_beside_each_other() {
+        let root = temp_folder("level");
+        for path in ["b.md", "a.markdown", "sub/c.md", "notes.txt"] {
+            touch(&root, path);
+        }
+        let files = scan(&root, Depth::Level, SCAN_LIMIT);
+        let files: Vec<_> = files
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(files, ["a.markdown", "b.md"]);
     }
 }
