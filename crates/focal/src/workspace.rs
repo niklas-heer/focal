@@ -21,10 +21,11 @@ use crate::instance::Request;
 use crate::switcher::{GoToHeading, PickItem, QuickOpen, Switcher, SwitcherEvent};
 use crate::theme::Theme;
 
-actions!(focal, [ToggleSidebar, GoBack]);
+actions!(focal, [ToggleSidebar, GoBack, Minimize, Zoom]);
 
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
+        KeyBinding::new("cmd-m", Minimize, None),
         KeyBinding::new("ctrl-cmd-s", ToggleSidebar, None),
         KeyBinding::new("cmd-[", GoBack, None),
     ]);
@@ -679,6 +680,8 @@ impl Render for Workspace {
             // Entering or leaving focus mode starts from a quiet page, from
             // the keys, the menu or the bar's own button.
             .capture_action(cx.listener(|this, _: &ToggleFocusMode, _, cx| this.hide_bar(cx)))
+            .on_action(|_: &Minimize, window, _| window.minimize_window())
+            .on_action(|_: &Zoom, window, _| window.zoom_window())
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::go_back))
             .on_action(cx.listener(Self::quick_open))

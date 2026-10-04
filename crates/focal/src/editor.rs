@@ -109,6 +109,8 @@ actions!(
         ExportPdf,
         Print,
         CopyHtml,
+        Highlight,
+        ShowInFinder,
     ]
 );
 
@@ -226,6 +228,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-s", Save, context),
         KeyBinding::new("cmd-b", Bold, context),
         KeyBinding::new("cmd-i", Italic, context),
+        KeyBinding::new("cmd-shift-h", Highlight, context),
+        KeyBinding::new("cmd-alt-r", ShowInFinder, context),
         KeyBinding::new("cmd-shift-x", Strikethrough, context),
         KeyBinding::new("cmd-e", InlineCode, context),
         KeyBinding::new("cmd-k", InsertLink, context),
@@ -1794,6 +1798,26 @@ impl Editor {
     fn bold(&mut self, _: &Bold, _: &mut Window, cx: &mut Context<Self>) {
         let change = editing::toggle_wrap(self.text(), &self.selection, "**");
         self.apply(change, cx);
+    }
+
+    fn highlight(&mut self, _: &Highlight, _: &mut Window, cx: &mut Context<Self>) {
+        let change = editing::toggle_wrap(self.text(), &self.selection, "==");
+        self.apply(change, cx);
+    }
+
+    /// Shows the file in a Finder window, selected.
+    fn show_in_finder(&mut self, _: &ShowInFinder, _: &mut Window, _: &mut Context<Self>) {
+        if let Some(path) = self.path()
+            && let Err(error) = std::process::Command::new("open")
+                .arg("-R")
+                .arg(path)
+                .spawn()
+        {
+            eprintln!(
+                "focal: could not show {} in Finder: {error}",
+                path.display()
+            );
+        }
     }
 
     fn italic(&mut self, _: &Italic, _: &mut Window, cx: &mut Context<Self>) {
@@ -3982,6 +4006,8 @@ impl Render for Editor {
             .font_family(self.typography.prose)
             .cursor(CursorStyle::IBeam)
             .on_action(cx.listener(Self::backspace))
+            .on_action(cx.listener(Self::highlight))
+            .on_action(cx.listener(Self::show_in_finder))
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::delete_word_back))
             .on_action(cx.listener(Self::delete_to_line_start))

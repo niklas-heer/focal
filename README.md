@@ -105,12 +105,14 @@ Whatever wrote the file, it should look right. Focal reads GitHub-flavored Markd
 | ⌘F, ⌥⌘F | Find, find and replace |
 | ⌘G, ⇧⌘G | Next match, previous match |
 | ⇧⌘O | Go to a heading |
-| ⌘B, ⌘I, ⇧⌘X, ⌘E | Bold, italic, strikethrough, inline code |
+| ⌘B, ⌘I, ⇧⌘X, ⇧⌘H, ⌘E | Bold, italic, strikethrough, highlight, inline code |
 | ⌘K | Insert a link |
 | ⌘1 to ⌘6, ⌘0 | Heading level, back to a paragraph |
 | ⌘-click, ⌘↩ | Follow a link, wiki link or footnote |
 | ⌘[ | Go back |
 | ⌘D | Focus mode |
+| ⌘=, ⌘− | Bigger or smaller text |
+| ⌥⌘R | Show the file in Finder |
 | ⌘P | Quick switcher |
 | ⌃⌘S | Sidebar |
 | ⇧⌘E, ⌥⇧⌘C | Export as HTML, copy as HTML |
@@ -140,7 +142,7 @@ Focal has no accounts and sends no analytics. It goes online only to check for u
 
 ## Status
 
-Focal is young: version 0.3.0, used daily by its author. Expect rough edges, and please [open an issue](https://github.com/niklas-heer/focal/issues) when you find one. The [design document](docs/design.md) describes where it is going.
+Focal is young and used daily by its author. Expect rough edges, and please [open an issue](https://github.com/niklas-heer/focal/issues) when you find one. The [design document](docs/design.md) describes where it is going.
 
 ## Building from source
 

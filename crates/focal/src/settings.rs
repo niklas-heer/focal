@@ -24,7 +24,10 @@ actions!(
         CloseSettings,
         NextPane,
         PreviousPane,
-        ToggleVimMode
+        ToggleVimMode,
+        BiggerText,
+        SmallerText,
+        DefaultTextSize,
     ]
 );
 
@@ -104,6 +107,21 @@ pub struct Settings {
     pub correct_spelling: bool,
     /// Edit with Vim's modes, motions and operators.
     pub vim_mode: bool,
+}
+
+impl TextSize {
+    const ALL: [Self; 4] = [Self::Small, Self::Medium, Self::Large, Self::Huge];
+
+    /// The next size up or down, staying at the ends.
+    fn step(self, up: bool) -> Self {
+        let ix = Self::ALL.iter().position(|&size| size == self).unwrap_or(1);
+        let ix = if up {
+            (ix + 1).min(Self::ALL.len() - 1)
+        } else {
+            ix.saturating_sub(1)
+        };
+        Self::ALL[ix]
+    }
 }
 
 impl Default for Settings {
@@ -194,6 +212,14 @@ pub fn init(cx: &mut App) {
     ]);
     cx.on_action(|_: &OpenSettings, cx| open_window(cx));
     cx.on_action(|_: &ToggleVimMode, cx| update(cx, |s| s.vim_mode = !s.vim_mode));
+    cx.on_action(|_: &BiggerText, cx| update(cx, |s| s.text_size = s.text_size.step(true)));
+    cx.on_action(|_: &SmallerText, cx| update(cx, |s| s.text_size = s.text_size.step(false)));
+    cx.on_action(|_: &DefaultTextSize, cx| update(cx, |s| s.text_size = TextSize::default()));
+    cx.bind_keys([
+        KeyBinding::new("cmd-=", BiggerText, None),
+        KeyBinding::new("cmd-+", BiggerText, None),
+        KeyBinding::new("cmd--", SmallerText, None),
+    ]);
 }
 
 /// Keeps GPUI Kit's controls and tooltips in the system appearance, like
@@ -1006,6 +1032,13 @@ mod tests {
         };
         settings.save_to(&path).unwrap();
         assert_eq!(Settings::load_from(&path), settings);
+    }
+
+    #[test]
+    fn text_size_steps_stop_at_the_ends() {
+        assert_eq!(TextSize::Medium.step(true), TextSize::Large);
+        assert_eq!(TextSize::Huge.step(true), TextSize::Huge);
+        assert_eq!(TextSize::Small.step(false), TextSize::Small);
     }
 
     #[test]

@@ -5,19 +5,23 @@ use gpui_kit::{App, Menu, MenuItem, OsAction, actions};
 
 use crate::cli_install::{InstallCommand, UninstallCommand};
 use crate::editor::{
-    Bold, CloseWindow, Copy, CopyHtml, Cut, ExportHtml, ExportPdf, InlineCode, InsertCodeBlock,
-    InsertLink, InsertMath, InsertTable, Italic, OpenLink, Paste, Print, Quit, Redo, Save,
-    SelectAll, SetHeading, Strikethrough, ToggleBullets, ToggleFocusMode, ToggleNumbers,
-    ToggleQuote, ToggleTask, Undo,
+    Bold, CloseWindow, Copy, CopyHtml, Cut, ExportHtml, ExportPdf, Highlight, InlineCode,
+    InsertCodeBlock, InsertLink, InsertMath, InsertTable, Italic, OpenLink, Paste, Print, Quit,
+    Redo, Save, SelectAll, SetHeading, ShowInFinder, Strikethrough, ToggleBullets, ToggleFocusMode,
+    ToggleNumbers, ToggleQuote, ToggleTask, Undo,
 };
 use crate::find_bar::{Find, FindAndReplace, FindNext, FindPrevious};
-use crate::settings::{OpenSettings, Settings, ToggleVimMode};
+use crate::settings::{
+    BiggerText, DefaultTextSize, OpenSettings, Settings, SmallerText, ToggleVimMode,
+};
 use crate::switcher::{GoToHeading, QuickOpen};
 use crate::updates::{CheckForUpdates, OpenReleases};
 use crate::windows::{NewWindow, OpenFiles};
-use crate::workspace::{GoBack, ToggleSidebar};
+use crate::workspace::{GoBack, Minimize, ToggleSidebar, Zoom};
 
-actions!(focal, [AboutFocal]);
+actions!(focal, [AboutFocal, OpenHelp, OpenShortcuts, ReportIssue]);
+
+const REPOSITORY: &str = "https://github.com/niklas-heer/focal";
 
 /// "Check for Updates…" when this Focal can update itself, otherwise a link
 /// to the releases.
@@ -33,6 +37,11 @@ pub fn update_item(cx: &App) -> (&'static str, MenuItem) {
 
 pub fn init(cx: &mut App) {
     cx.on_action(|_: &AboutFocal, cx| crate::about::open_window(cx));
+    cx.on_action(|_: &OpenHelp, cx| cx.open_url(&format!("{REPOSITORY}#features")));
+    cx.on_action(|_: &OpenShortcuts, cx| {
+        cx.open_url(&format!("{REPOSITORY}#keyboard-shortcuts"));
+    });
+    cx.on_action(|_: &ReportIssue, cx| cx.open_url(&format!("{REPOSITORY}/issues/new")));
     set_menus(cx);
     // Vim Mode's checkmark follows the setting.
     let mut vim_mode = cx.global::<Settings>().vim_mode;
@@ -66,6 +75,7 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::submenu(crate::recent::menu(cx)),
             MenuItem::separator(),
             MenuItem::action("Save", Save),
+            MenuItem::action("Show in Finder", ShowInFinder),
             MenuItem::action("Export as HTML…", ExportHtml),
             MenuItem::action("Export as PDF…", ExportPdf),
             MenuItem::separator(),
@@ -96,6 +106,7 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::action("Bold", Bold),
             MenuItem::action("Italic", Italic),
             MenuItem::action("Strikethrough", Strikethrough),
+            MenuItem::action("Highlight", Highlight),
             MenuItem::action("Inline Code", InlineCode),
             MenuItem::action("Link", InsertLink),
             MenuItem::separator(),
@@ -103,6 +114,9 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::action("Heading 1", SetHeading(1)),
             MenuItem::action("Heading 2", SetHeading(2)),
             MenuItem::action("Heading 3", SetHeading(3)),
+            MenuItem::action("Heading 4", SetHeading(4)),
+            MenuItem::action("Heading 5", SetHeading(5)),
+            MenuItem::action("Heading 6", SetHeading(6)),
             MenuItem::separator(),
             MenuItem::action("Bulleted List", ToggleBullets),
             MenuItem::action("Numbered List", ToggleNumbers),
@@ -119,8 +133,22 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::action("Go to Heading…", GoToHeading),
             MenuItem::action("Focus Mode", ToggleFocusMode),
             MenuItem::separator(),
+            MenuItem::action("Bigger Text", BiggerText),
+            MenuItem::action("Smaller Text", SmallerText),
+            MenuItem::action("Default Text Size", DefaultTextSize),
+            MenuItem::separator(),
             MenuItem::action("Open Link", OpenLink),
             MenuItem::action("Back", GoBack),
+        ]),
+        Menu::new("Window").items([
+            MenuItem::action("Minimize", Minimize),
+            MenuItem::action("Zoom", Zoom),
+        ]),
+        Menu::new("Help").items([
+            MenuItem::action("Focal Help", OpenHelp),
+            MenuItem::action("Keyboard Shortcuts", OpenShortcuts),
+            MenuItem::separator(),
+            MenuItem::action("Report an Issue…", ReportIssue),
         ]),
     ]);
 }

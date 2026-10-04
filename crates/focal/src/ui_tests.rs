@@ -1992,3 +1992,30 @@ fn vim_mode_off_types_normally(cx: &mut TestAppContext) {
     act(cx, window, |window, cx| window.input("dw", cx));
     editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "dw"));
 }
+
+#[gpui_kit::test]
+fn highlight_wraps_the_selection(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "word");
+    act(cx, window, |window, cx| {
+        window.press("cmd-a", cx);
+        window.press("cmd-shift-h", cx);
+    });
+    editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "==word=="));
+}
+
+#[gpui_kit::test]
+fn command_equals_and_minus_step_the_text_size(cx: &mut TestAppContext) {
+    use crate::settings::TextSize;
+    let (window, _) = open_editor(cx, "text");
+    cx.update(|cx| {
+        crate::settings::init(cx);
+        cx.set_global(Settings::default());
+    });
+    act(cx, window, |window, cx| window.press("cmd-=", cx));
+    cx.update(|cx| assert_eq!(cx.global::<Settings>().text_size, TextSize::Large));
+    act(cx, window, |window, cx| {
+        window.press("cmd--", cx);
+        window.press("cmd--", cx);
+    });
+    cx.update(|cx| assert_eq!(cx.global::<Settings>().text_size, TextSize::Small));
+}
