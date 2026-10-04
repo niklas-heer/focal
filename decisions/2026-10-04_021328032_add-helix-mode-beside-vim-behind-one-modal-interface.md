@@ -3,7 +3,7 @@ schema_version = 1
 id = "01M42B02B0CRG6SA9NA8JJ8MFJ"
 title = "Add Helix mode beside Vim behind one modal interface"
 date = "2026-10-04"
-status = "proposed"
+status = "accepted"
 tags = ["editing", "helix"]
 supersedes = []
 superseded_by = []
@@ -16,7 +16,9 @@ Helix mode is a second state machine in `focal-core` (`helix.rs`), beside Vim's,
 
 Helix's selection is kept as an anchor and a head, both on characters and both included, and shown to the editor as an ordinary selection; a selection of one character shows as the block cursor alone. Motions select (`w` the word and its space, `x` the line), `v` extends instead, and actions work on the selection. It reuses Vim's text helpers and text objects.
 
-Proposed on 2026-10-04 while building it, after Niklas asked for Helix mode beside Vim mode; the approach is not yet chosen by him.
+Proposed on 2026-10-04 while building it, after Niklas asked for Helix mode beside Vim mode.
+
+Accepted by Niklas on 2026-10-04: "I like your idea and also the Helix approach, I think."
 
 ## Context
 
