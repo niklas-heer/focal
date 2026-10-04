@@ -1509,13 +1509,14 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         let before = self.selection.clone();
+        let (edited, inserted) = (range.clone(), new.len());
         self.buffer
             .edit(range, new, before, selection.clone(), kind);
         self.selection = selection;
         self.reversed = false;
         self.goal_x = None;
         self.recompute_changes(false);
-        self.anchor_notes();
+        self.anchor_notes_after_edit(&edited, inserted);
         self.refresh();
         if self.grid.is_none() {
             self.reveal_caret();
@@ -3188,8 +3189,23 @@ impl Editor {
                     text
                 }
             }
-            Row::Table(table) => self.render_table(table, &theme, window, cx),
-            Row::Island(island) => self.render_island(island, &theme, cx),
+            Row::Table(table) => {
+                let element = self.render_table(table, &theme, window, cx);
+                match self.snapshot.analysis.tables.get(table) {
+                    Some(source) => {
+                        let (range, key) = (source.range.clone(), source.lines.start);
+                        self.with_margin_marks(element, &range, key, 0., &theme, cx)
+                    }
+                    None => element,
+                }
+            }
+            Row::Island(island) => {
+                let element = self.render_island(island, &theme, cx);
+                let lines = &self.snapshot.analysis.lines;
+                let last = island.end.saturating_sub(1).max(island.start);
+                let range = lines.range(island.start).start..lines.range(last).end;
+                self.with_margin_marks(element, &range, island.start, 0., &theme, cx)
+            }
         };
         div()
             .w_full()
@@ -3362,8 +3378,6 @@ impl Editor {
         let inserted = self.inserted_on(&line_range);
         let deleted = self.deleted_on(&line_range);
         let (inserted_color, deleted_color) = (theme.inserted, theme.deleted);
-        let change_bar = self.change_bar(&line_range, theme);
-        let note_dots = self.note_dots(&line_range);
         let caret_color = theme.caret;
         let _ = (window, cx);
 
@@ -3553,6 +3567,23 @@ impl Editor {
             line_height,
             on_toggle,
         );
+        self.with_margin_marks(row, &line_range, line, top, theme, cx)
+    }
+
+    /// `row` with what the margins show beside the source `range`: a bar
+    /// where it changed, and a dot per review note starting in it. `key` is
+    /// the row's first line, for the marks' ids.
+    fn with_margin_marks(
+        &self,
+        row: gpui_kit::AnyElement,
+        range: &Range<usize>,
+        key: usize,
+        top: f32,
+        theme: &Theme,
+        cx: &Context<Self>,
+    ) -> gpui_kit::AnyElement {
+        let change_bar = self.change_bar(range, theme);
+        let note_dots = self.note_dots(range);
         if change_bar.is_none() && note_dots.is_empty() {
             return row;
         }
@@ -3571,7 +3602,7 @@ impl Editor {
             .when_some(change_bar, |d, color| {
                 d.child(
                     div()
-                        .id(("change-bar", line))
+                        .id(("change-bar", key))
                         .test_support()
                         .absolute()
                         .top(px(top))
@@ -4270,7 +4301,11 @@ impl Render for Editor {
             .key_context({
                 let mut context = gpui_kit::KeyContext::new_with_defaults();
                 context.add(CONTEXT);
-                if self.dismissable_changes() && self.modal.is_none() && self.grid.is_none() {
+                if self.dismissable_changes()
+                    && self.modal.is_none()
+                    && self.grid.is_none()
+                    && self.selection.is_empty()
+                {
                     context.add("changes");
                 }
                 context

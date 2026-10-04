@@ -43,6 +43,7 @@ const MEANINGFUL: [&str; 17] = [
 
 /// Markdown for pasted HTML, or `None` when the plain text should be pasted.
 pub fn html_to_markdown(html: &str, plain: &str) -> Option<String> {
+    let html = &from_google_docs(html);
     let lower = html.to_ascii_lowercase();
     if !MEANINGFUL.iter().any(|tag| lower.contains(tag)) {
         return None;
@@ -59,6 +60,51 @@ pub fn html_to_markdown(html: &str, plain: &str) -> Option<String> {
     let markdown = converter.convert(html).ok()?;
     let markdown = markdown.trim();
     (!markdown.is_empty() && markdown != plain.trim()).then(|| markdown.to_owned())
+}
+
+/// Google Docs wraps its HTML in `<b style="font-weight:normal">` (which
+/// would make all of it bold) and marks bold and italics with styled spans:
+/// the wrapper goes, and the spans become `<strong>` and `<em>`.
+fn from_google_docs(html: &str) -> String {
+    let Some(guid) = html.find("docs-internal-guid") else {
+        return html.to_owned();
+    };
+    let mut html = html.to_owned();
+    if let (Some(open), Some(close)) = (html[..guid].rfind("<b"), html.rfind("</b>"))
+        && let Some(end) = html[open..].find('>')
+    {
+        html.replace_range(close..close + "</b>".len(), "");
+        html.replace_range(open..=open + end, "");
+    }
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html.as_str();
+    while let Some(start) = rest.find("<span") {
+        out.push_str(&rest[..start]);
+        let Some(tag_end) = rest[start..].find('>').map(|at| start + at) else {
+            break;
+        };
+        let Some(close) = rest[tag_end..].find("</span>").map(|at| tag_end + at) else {
+            break;
+        };
+        let style = rest[start..tag_end].replace(' ', "").to_ascii_lowercase();
+        let bold = style.contains("font-weight:700")
+            || style.contains("font-weight:bold")
+            || style.contains("font-weight:600");
+        let italic = style.contains("font-style:italic");
+        let inner = &rest[tag_end + 1..close];
+        let (before, after) = match (bold, italic) {
+            (true, true) => ("<strong><em>", "</em></strong>"),
+            (true, false) => ("<strong>", "</strong>"),
+            (false, true) => ("<em>", "</em>"),
+            (false, false) => ("", ""),
+        };
+        out.push_str(before);
+        out.push_str(inner);
+        out.push_str(after);
+        rest = &rest[close + "</span>".len()..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// A file name for an asset that no file in the folder has yet: the
@@ -179,6 +225,15 @@ mod tests {
         assert_eq!(
             html_to_markdown(html, "Hello bold and link").as_deref(),
             Some("Hello **bold** and [link](https://a.com)")
+        );
+    }
+
+    #[test]
+    fn google_docs_bold_and_italics_survive() {
+        let html = "<meta charset=\"utf-8\"><b style=\"font-weight:normal;\" id=\"docs-internal-guid-1a2b\"><p dir=\"ltr\" style=\"line-height:1.38;\"><span style=\"font-size:11pt;font-weight:400;\">Plain and </span><span style=\"font-size:11pt;font-weight:700;\">bold</span><span style=\"font-weight:400;\"> and </span><span style=\"font-style:italic;font-weight:400;\">slanted</span></p></b>";
+        assert_eq!(
+            html_to_markdown(html, "Plain and bold and slanted").as_deref(),
+            Some("Plain and **bold** and *slanted*")
         );
     }
 

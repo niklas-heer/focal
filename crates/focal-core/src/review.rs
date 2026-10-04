@@ -123,21 +123,46 @@ pub fn write(file_name: &str, notes: &[Note], extra: &str) -> String {
 /// Where `note`'s passage is in `text`: the occurrence nearest the line it
 /// was made on, or its line when the passage is gone.
 pub fn anchor(text: &str, note: &Note) -> Anchor {
-    let line_of = |offset: usize| text[..offset].matches('\n').count() + 1;
-    let found = (!note.quote.is_empty())
-        .then(|| {
-            text.match_indices(note.quote.as_str())
-                .min_by_key(|(start, _)| line_of(*start).abs_diff(note.line))
-        })
-        .flatten();
-    if let Some((start, quote)) = found {
-        return Anchor::Found(start..start + quote.len());
+    anchor_near(text, note, None)
+}
+
+/// [`anchor`], preferring the occurrence nearest `near` (where the passage
+/// was before an edit) over the one nearest the recorded line.
+pub fn anchor_near(text: &str, note: &Note, near: Option<usize>) -> Anchor {
+    if !note.quote.is_empty() {
+        // The sidecar keeps quotes with `\n`; a CRLF file has `\r\n`.
+        let quote = if note.quote.contains('\n') && text.contains("\r\n") {
+            note.quote.replace('\n', "\r\n")
+        } else {
+            note.quote.clone()
+        };
+        // Lines are counted as the matches come, in order, so a quote on a
+        // common word stays cheap.
+        let (mut line, mut counted) = (1, 0);
+        let mut best: Option<(usize, usize)> = None;
+        for (start, _) in text.match_indices(quote.as_str()) {
+            line += text[counted..start].matches('\n').count();
+            counted = start;
+            let distance =
+                near.map_or_else(|| line.abs_diff(note.line), |near| start.abs_diff(near));
+            if best.is_none_or(|(nearest, _)| distance < nearest) {
+                best = Some((distance, start));
+            }
+        }
+        if let Some((_, start)) = best {
+            return Anchor::Found(start..start + quote.len());
+        }
     }
     let starts: Vec<usize> = std::iter::once(0)
         .chain(text.match_indices('\n').map(|(at, _)| at + 1))
         .collect();
     let ix = note.line.saturating_sub(1).min(starts.len() - 1);
     Anchor::Changed(starts[ix])
+}
+
+/// The line (counted from one) that `offset` is on.
+pub fn line_at(text: &str, offset: usize) -> usize {
+    text[..offset.min(text.len())].matches('\n').count() + 1
 }
 
 /// What "Copy for Agent" puts on the pasteboard.
@@ -230,6 +255,29 @@ mod tests {
             text: String::new(),
         };
         assert_eq!(anchor(text, &note), Anchor::Found(9..13));
+    }
+
+    #[test]
+    fn near_an_offset_wins_over_the_line() {
+        let text = "fox\nfox\n";
+        let note = Note {
+            line: 1,
+            quote: "fox".into(),
+            text: String::new(),
+        };
+        assert_eq!(anchor_near(text, &note, Some(5)), Anchor::Found(4..7));
+        assert_eq!(anchor_near(text, &note, None), Anchor::Found(0..3));
+    }
+
+    #[test]
+    fn a_multi_line_quote_is_found_in_a_crlf_file() {
+        let text = "one\r\ntwo\r\nthree\r\n";
+        let note = Note {
+            line: 1,
+            quote: "one\ntwo".into(),
+            text: String::new(),
+        };
+        assert_eq!(anchor(text, &note), Anchor::Found(0..8));
     }
 
     #[test]

@@ -18,10 +18,15 @@ use crate::theme::{PROSE_FONT, Theme};
 
 /// The note being written or edited, in its card.
 pub(crate) struct NoteDraft {
-    /// The passage, or the caret's line.
+    /// The passage, or the caret's line, where the card opened; only for
+    /// placing the card, since the text may change while the note is written.
     range: Range<usize>,
-    /// The note being edited, or `None` for a new one.
-    editing: Option<usize>,
+    /// The passage and its line, kept when the card opened.
+    quote: String,
+    line: usize,
+    /// The note being edited, as it was, or `None` for a new one. Found
+    /// again by its content, since the notes may be read again meanwhile.
+    editing: Option<Note>,
     input: Entity<InputState>,
     _events: Subscription,
 }
@@ -40,7 +45,7 @@ impl Editor {
             .unwrap_or_default();
         self.notes = parsed.notes;
         self.notes_extra = parsed.extra;
-        self.anchor_notes();
+        self.anchor_notes_fresh();
     }
 
     /// Reads the notes again whenever their file changes on disk, as when
@@ -77,7 +82,7 @@ impl Editor {
     /// Writes the notes beside the document, or removes the file with the
     /// last of them.
     fn save_notes(&mut self, cx: &mut Context<Self>) {
-        self.anchor_notes();
+        self.anchor_notes_fresh();
         let Some(path) = self.sidecar() else {
             return;
         };
@@ -112,13 +117,59 @@ impl Editor {
         &self.note_anchors
     }
 
-    /// Finds the notes' passages again, after an edit or a reload.
+    /// Finds the notes' passages again after the text changed (undo, a
+    /// reload), near where they were.
     pub(super) fn anchor_notes(&mut self) {
-        self.note_anchors = self
+        let near = self.anchored_at(|at| at);
+        self.anchor_notes_near(&near);
+    }
+
+    /// Finds the passages again after `edited` was replaced by `inserted`
+    /// bytes, near where the edit moved them.
+    pub(super) fn anchor_notes_after_edit(&mut self, edited: &Range<usize>, inserted: usize) {
+        let near = self.anchored_at(|at| {
+            if at >= edited.end {
+                at - edited.len() + inserted
+            } else {
+                at
+            }
+        });
+        self.anchor_notes_near(&near);
+    }
+
+    /// Finds the passages by their recorded lines, as after the notes
+    /// themselves changed.
+    fn anchor_notes_fresh(&mut self) {
+        self.anchor_notes_near(&[]);
+    }
+
+    /// Where each note's passage was found, moved by `shift`.
+    fn anchored_at(&self, shift: impl Fn(usize) -> usize) -> Vec<Option<usize>> {
+        self.note_anchors
+            .iter()
+            .map(|anchor| match anchor {
+                Anchor::Found(range) => Some(shift(range.start)),
+                Anchor::Changed(_) => None,
+            })
+            .collect()
+    }
+
+    /// Anchors every note, nearest `near` when known, and keeps each found
+    /// note's line in step, so the Notes tab and the next save are right.
+    fn anchor_notes_near(&mut self, near: &[Option<usize>]) {
+        let text = self.buffer.text();
+        let anchors: Vec<Anchor> = self
             .notes
             .iter()
-            .map(|note| review::anchor(self.text(), note))
+            .enumerate()
+            .map(|(ix, note)| review::anchor_near(text, note, near.get(ix).copied().flatten()))
             .collect();
+        for (note, anchor) in self.notes.iter_mut().zip(&anchors) {
+            if let Anchor::Found(range) = anchor {
+                note.line = review::line_at(text, range.start);
+            }
+        }
+        self.note_anchors = anchors;
     }
 
     /// Edit ▸ Add Note…: a note on the selection, or on the caret's line.
@@ -136,7 +187,7 @@ impl Editor {
         } else {
             self.selection.clone()
         };
-        self.open_note_draft(range, None, String::new(), window, cx);
+        self.open_note_draft(range, None, window, cx);
     }
 
     /// Opens the card for note `ix`, to change what it says.
@@ -148,18 +199,25 @@ impl Editor {
             Anchor::Found(range) => range.clone(),
             Anchor::Changed(at) => *at..*at,
         };
-        let text = note.text.clone();
-        self.open_note_draft(range, Some(ix), text, window, cx);
+        let note = note.clone();
+        self.open_note_draft(range, Some(note), window, cx);
     }
 
     fn open_note_draft(
         &mut self,
         range: Range<usize>,
-        editing: Option<usize>,
-        text: String,
+        editing: Option<Note>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let (quote, line, text) = match &editing {
+            Some(note) => (note.quote.clone(), note.line, note.text.clone()),
+            None => (
+                self.text()[range.clone()].trim().to_owned(),
+                self.snapshot.analysis.lines.line_of(range.start) + 1,
+                String::new(),
+            ),
+        };
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("Note for the agent…"));
         input.update(cx, |input, cx| {
             input.set_value(text, window, cx);
@@ -172,6 +230,8 @@ impl Editor {
         });
         self.note_draft = Some(NoteDraft {
             range,
+            quote,
+            line,
             editing,
             input,
             _events: events,
@@ -192,14 +252,19 @@ impl Editor {
             cx.notify();
             return;
         }
-        if let Some(ix) = draft.editing {
-            if let Some(note) = self.notes.get_mut(ix) {
-                note.text = text;
-            }
+        let edited = draft
+            .editing
+            .as_ref()
+            .and_then(|original| self.notes.iter_mut().find(|note| *note == original));
+        if let Some(note) = edited {
+            note.text = text;
         } else {
-            let line = self.snapshot.analysis.lines.line_of(draft.range.start) + 1;
-            let quote = self.text()[draft.range.clone()].trim().to_owned();
-            self.notes.push(Note { line, quote, text });
+            // A new note, or one whose file lost it meanwhile: kept.
+            self.notes.push(Note {
+                line: draft.line,
+                quote: draft.quote,
+                text,
+            });
             self.notes.sort_by_key(|note| note.line);
         }
         self.save_notes(cx);

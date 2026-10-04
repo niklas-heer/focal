@@ -157,7 +157,7 @@ Please revise notes.md according to these review notes. The notes are also saved
 
 **With the change view:** after an agent rewrites the file, its changes show (section 3), and notes whose passage changed say so. Reviewing a round therefore takes one look.
 
-**Sidecars stay out of the way:** `*.review.md` files are left out of the sidebar, the quick switcher, tags and backlinks, and are reached through the Notes tab ("Open Notes File"). This adds a file to the user's folder, so a decision record (proposed) documents the format and location.
+**Sidecars stay out of the way:** `*.review.md` files are left out of the sidebar, the quick switcher, tags and backlinks, and are reached through the Notes tab ("Open Notes File"). This adds a file to the user's folder, so a decision record (accepted: Niklas chose this option) documents the format and location.
 
 ## 6. Making them obvious (discoverability)
 

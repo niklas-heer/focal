@@ -25,6 +25,10 @@ impl Changes {
     }
 }
 
+/// Replaced regions larger than this (old and new together, in bytes) are
+/// marked by whole lines: a word diff of a rewritten file takes too long.
+const WORD_DIFF_LIMIT: usize = 16 * 1024;
+
 /// The changes from `old` to `new`: lines first, then the words within
 /// changed lines. Offsets stay on character boundaries.
 pub fn changes(old: &str, new: &str) -> Changes {
@@ -61,15 +65,13 @@ fn changes_with(old: &str, new: &str, deadline: Option<Instant>) -> Changes {
                 .deleted
                 .push((new_bytes.start, old[old_bytes].to_owned())),
             DiffTag::Replace => {
-                if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                let late = deadline.is_some_and(|deadline| Instant::now() >= deadline);
+                let large = old_bytes.len() + new_bytes.len() > WORD_DIFF_LIMIT;
+                if late || large {
                     out.inserted.push(new_bytes.clone());
                 } else {
-                    words(
-                        &old[old_bytes],
-                        &new[new_bytes.clone()],
-                        new_bytes.start,
-                        &mut out,
-                    );
+                    let (old, new) = (&old[old_bytes], &new[new_bytes.clone()]);
+                    words(old, new, new_bytes.start, deadline, &mut out);
                 }
             }
         }
@@ -97,8 +99,12 @@ fn starts(slices: &[&str]) -> Vec<usize> {
 
 /// The word-level changes inside replaced lines, `base` being where `new`
 /// starts in the whole text.
-fn words(old: &str, new: &str, base: usize, out: &mut Changes) {
-    let diff = TextDiff::configure().diff_unicode_words(old, new);
+fn words(old: &str, new: &str, base: usize, deadline: Option<Instant>, out: &mut Changes) {
+    let mut config = TextDiff::configure();
+    if let Some(deadline) = deadline {
+        config.deadline(deadline);
+    }
+    let diff = config.diff_unicode_words(old, new);
     let mut at = base;
     for change in diff.iter_all_changes() {
         let value = change.value();
@@ -223,6 +229,23 @@ mod tests {
             ["Two, new."],
             "no tint on blank lines or line ends"
         );
+    }
+
+    #[test]
+    fn a_rewrite_of_everything_is_marked_by_lines() {
+        use std::fmt::Write as _;
+        let (mut old, mut new) = (String::new(), String::new());
+        for i in 0..3000 {
+            let _ = writeln!(old, "word a{i}");
+            let _ = writeln!(new, "word b{i}");
+        }
+        let c = changes(&old, &new);
+        assert_eq!(
+            &new[c.inserted[0].clone()],
+            "word b0",
+            "whole lines, not words"
+        );
+        assert_eq!(c.inserted.len(), 3000);
     }
 
     #[test]

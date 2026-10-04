@@ -2924,3 +2924,91 @@ fn the_new_tools_leave_the_file_untouched(cx: &mut TestAppContext) {
     );
     assert!(!root.join("new.review.md").exists());
 }
+
+#[gpui_kit::test]
+fn a_note_survives_the_text_changing_while_it_is_written(cx: &mut TestAppContext) {
+    let root = review_folder("review-stale", None);
+    let (window, workspace) = open_folder(cx, &root);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    editor.update(cx, |e, cx| e.select(8..14, cx));
+    act(cx, window, |window, cx| window.press("cmd-alt-m", cx));
+    act(cx, window, |window, cx| window.input("Shorter.", cx));
+    // An agent rewrites the file while the note is being written.
+    editor.update(cx, |e, cx| e.load_theirs_for_test("Short.\n", cx));
+    act(cx, window, |window, cx| window.press("enter", cx));
+    let sidecar = std::fs::read_to_string(root.join("new.review.md")).unwrap();
+    assert!(sidecar.contains("> jumps.\n\nShorter.\n"), "{sidecar}");
+}
+
+#[gpui_kit::test]
+fn editing_a_note_after_the_notes_file_changed_edits_that_note(cx: &mut TestAppContext) {
+    let two = "# Review notes for new.md\n\n## Line 1\n\n> The\n\nFirst.\n\n## Line 1\n\n> fox\n\nSecond.\n";
+    let root = review_folder("review-edit-stale", Some(two));
+    let (window, workspace) = open_folder(cx, &root);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    act(cx, window, |window, cx| {
+        editor.update(cx, |e, cx| e.edit_note(1, window, cx));
+    });
+    // An agent handled the first note and removed it.
+    std::fs::write(
+        root.join("new.review.md"),
+        "# Review notes for new.md\n\n## Line 1\n\n> fox\n\nSecond.\n",
+    )
+    .unwrap();
+    editor.update(cx, |e, cx| e.reload_notes(cx));
+    act(cx, window, |window, cx| window.input(" Edited.", cx));
+    act(cx, window, |window, cx| window.press("enter", cx));
+    editor.read_with(cx, |e, _| {
+        let texts: Vec<&str> = e.notes().iter().map(|n| n.text.as_str()).collect();
+        assert_eq!(texts, ["Second. Edited."]);
+    });
+}
+
+#[gpui_kit::test]
+fn a_note_follows_its_passage_past_a_repeated_one(cx: &mut TestAppContext) {
+    let root = notes_folder("review-follow", "x\nfox\nfox\n");
+    std::fs::write(
+        root.join("new.review.md"),
+        "# Review notes for new.md\n\n## Line 3\n\n> fox\n\nThe second one.\n",
+    )
+    .unwrap();
+    let (window, workspace) = open_folder(cx, &root);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    editor.update(cx, |e, cx| e.move_to(0, cx));
+    act(cx, window, |window, cx| window.input("new\n", cx));
+    act(cx, window, |window, cx| window.input("more\n", cx));
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.text(), "new\nmore\nx\nfox\nfox\n");
+        assert_eq!(
+            e.note_anchors(),
+            [focal_core::review::Anchor::Found(15..18)],
+            "still the second fox"
+        );
+        assert_eq!(e.notes()[0].line, 5);
+    });
+}
+
+#[gpui_kit::test]
+fn escape_with_a_selection_keeps_the_changes(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "one\n");
+    editor.update(cx, |e, cx| e.load_theirs_for_test("one\ntwo\n", cx));
+    editor.update(cx, |e, cx| e.select(0..3, cx));
+    act(cx, window, |window, cx| window.press("escape", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("changes-count").is_some(), "still showing");
+    });
+}
+
+#[gpui_kit::test]
+fn a_changed_table_is_marked_in_the_margin(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "Intro\n\n| x |\n|---|\n| 1 |\n");
+    editor.update(cx, |e, cx| {
+        e.load_theirs_for_test("Intro\n\n| x |\n|---|\n| 2 |\n", cx);
+    });
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find(("change-bar", 2usize)).is_some(),
+            "the table's bar, beside its first line"
+        );
+    });
+}

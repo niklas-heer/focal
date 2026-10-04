@@ -201,8 +201,9 @@ fn backlink(file: &Path, text: &str, range: std::ops::Range<usize>) -> Backlink 
     Backlink {
         file: file.to_path_buf(),
         offset: range.start,
-        label: (label_start - cut + shift).min(shown.len())
-            ..(label_end - cut + shift).min(shown.len()),
+        // Within the kept text, never inside an ellipsis.
+        label: (label_start - cut + shift).min(shift + kept)
+            ..(label_end - cut + shift).min(shift + kept),
         line: shown,
     }
 }
@@ -243,6 +244,17 @@ pub fn watch(
 #[cfg(test)]
 pub mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_line_keeps_the_link_highlight_on_characters() {
+        let name = "n".repeat(58);
+        let text = format!("{} [[{name}]]{}", "x".repeat(100), "y".repeat(200));
+        let link = text.find("[[").unwrap();
+        let shown = backlink(Path::new("a.md"), &text, link..link + name.len() + 4);
+        assert!(shown.line.is_char_boundary(shown.label.start), "{shown:?}");
+        assert!(shown.line.is_char_boundary(shown.label.end), "{shown:?}");
+        assert!(shown.line[shown.label.clone()].starts_with("[[n"));
+    }
 
     #[test]
     fn review_sidecars_are_not_listed() {
