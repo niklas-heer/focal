@@ -2,3 +2,7 @@
 /build/
 /target/
 /scratch/
+
+# A common global ignore, "Icon?" (macOS folder icons), matches this folder
+# on case-insensitive disks.
+!assets/icons/
