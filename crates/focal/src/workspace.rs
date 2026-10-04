@@ -21,11 +21,18 @@ use crate::instance::Request;
 use crate::switcher::{GoToHeading, PickItem, QuickOpen, Switcher, SwitcherEvent};
 use crate::theme::Theme;
 
+mod panel;
+
+pub use panel::{PanelTab, ToggleDarkMode, ToggleInfo, ToggleOutline};
+
 actions!(focal, [ToggleSidebar, GoBack, Minimize, Zoom]);
 
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-m", Minimize, None),
+        KeyBinding::new("cmd-alt-i", ToggleInfo, None),
+        KeyBinding::new("cmd-alt-o", ToggleOutline, None),
+        KeyBinding::new("cmd-shift-l", ToggleDarkMode, None),
         KeyBinding::new("ctrl-cmd-s", ToggleSidebar, None),
         KeyBinding::new("cmd-[", GoBack, None),
     ]);
@@ -86,6 +93,8 @@ pub struct Workspace {
     find_bar: Option<(Entity<FindBar>, gpui_kit::Subscription)>,
     /// The find bar's query when it closed, for ⌘G.
     last_query: Option<String>,
+    /// The panel at the right edge, when open.
+    panel: Option<PanelTab>,
 }
 
 impl Workspace {
@@ -109,6 +118,7 @@ impl Workspace {
             history: Vec::new(),
             find_bar: None,
             last_query: None,
+            panel: None,
         }
     }
 
@@ -340,6 +350,19 @@ impl Workspace {
             window,
             cx,
         );
+    }
+
+    /// Moves the caret to `at`, which ⌘[ comes back from, and gives the
+    /// editor the keys again.
+    fn jump_to(&mut self, at: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let editor = self.editor.read(cx);
+        self.history
+            .push((editor.path().map(PathBuf::from), editor.selection.clone()));
+        self.editor
+            .update(cx, |editor, cx| editor.select(at..at, cx));
+        let handle = self.editor.read(cx).focus_handle(cx);
+        window.focus(&handle, cx);
+        cx.notify();
     }
 
     /// Lists the document's headings; choosing one moves the caret there,
@@ -613,20 +636,50 @@ impl Workspace {
     }
 }
 
+impl Workspace {
+    /// The bar, fading in or out, while the pointer asks for it. Focus mode
+    /// keeps it out of the way while you write, but the pointer still
+    /// brings it up.
+    fn render_bar(&self, theme: &Theme, cx: &Context<Self>) -> Option<AnyElement> {
+        // The word count reads the whole text; only count while the bar shows.
+        let (n, fading_in) = match self.bar {
+            Bar::Hidden => return None,
+            Bar::Shown(n) => (n, true),
+            Bar::Leaving(n) => (n, false),
+        };
+        let state = self.editor.read(cx).bar_state();
+        let bar = div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .child(bar::render(&state, theme));
+        Some(if fading_in {
+            bar.with_animation(("bar-in", n), Animation::new(BAR_FADE), |el, t| {
+                el.opacity(t)
+            })
+            .into_any_element()
+        } else {
+            bar.with_animation(("bar-out", n), Animation::new(BAR_FADE), |el, t| {
+                el.opacity(1. - t)
+            })
+            .into_any_element()
+        })
+    }
+}
+
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::for_appearance(window.appearance());
         let editor = self.editor.read(cx);
         let focus_mode = editor.focus_mode();
-        // The word count reads the whole text; only count while the bar shows.
-        // Focus mode keeps it out of the way while you write, but the pointer
-        // still brings it up.
-        let bar = (self.bar != Bar::Hidden).then(|| (self.bar, editor.bar_state()));
         let sidebar = if focus_mode {
             None
         } else {
             self.render_sidebar(&theme, cx)
         };
+        let corner = self.render_corner(&theme, focus_mode, cx);
+        let panel = self.render_panel(&theme, cx);
         let main = div()
             .relative()
             .flex_1()
@@ -644,31 +697,7 @@ impl Render for Workspace {
                     .bottom_0()
                     .h(px(bar::SHOW_ZONE)),
             )
-            .when_some(bar, |d, (state, bar_state)| match state {
-                Bar::Hidden => d,
-                Bar::Shown(n) => d.child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .right_0()
-                        .bottom_0()
-                        .child(bar::render(&bar_state, &theme))
-                        .with_animation(("bar-in", n), Animation::new(BAR_FADE), |el, t| {
-                            el.opacity(t)
-                        }),
-                ),
-                Bar::Leaving(n) => d.child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .right_0()
-                        .bottom_0()
-                        .child(bar::render(&bar_state, &theme))
-                        .with_animation(("bar-out", n), Animation::new(BAR_FADE), |el, t| {
-                            el.opacity(1. - t)
-                        }),
-                ),
-            });
+            .children(self.render_bar(&theme, cx));
         div()
             .id("workspace")
             .size_full()
@@ -680,6 +709,13 @@ impl Render for Workspace {
             // Entering or leaving focus mode starts from a quiet page, from
             // the keys, the menu or the bar's own button.
             .capture_action(cx.listener(|this, _: &ToggleFocusMode, _, cx| this.hide_bar(cx)))
+            .on_action(cx.listener(|this, _: &ToggleInfo, _, cx| {
+                this.toggle_panel(PanelTab::Info, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ToggleOutline, _, cx| {
+                this.toggle_panel(PanelTab::Outline, cx);
+            }))
+            .on_action(|_: &ToggleDarkMode, window, cx| Self::toggle_dark_mode(window, cx))
             .on_action(|_: &Minimize, window, _| window.minimize_window())
             .on_action(|_: &Zoom, window, _| window.zoom_window())
             .on_action(cx.listener(Self::toggle_sidebar))
@@ -691,7 +727,8 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &FindNext, _, cx| this.find_step(true, cx)))
             .on_action(cx.listener(|this, _: &FindPrevious, _, cx| this.find_step(false, cx)))
             .children(sidebar)
-            .child(main)
+            .child(main.child(corner))
+            .children(panel)
             .when_some(self.find_bar.as_ref(), |d, (bar, _)| {
                 d.child(
                     div()

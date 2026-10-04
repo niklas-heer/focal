@@ -598,7 +598,7 @@ fn row(
 }
 
 /// A segmented control choosing one of `options`, saved through `set`.
-fn segmented<T: Copy + PartialEq + 'static>(
+pub(crate) fn segmented<T: Copy + PartialEq + 'static>(
     id: &'static str,
     options: &'static [(T, &'static str)],
     current: T,
@@ -645,7 +645,12 @@ fn segmented<T: Copy + PartialEq + 'static>(
 }
 
 /// A switch saved through `set`.
-fn toggle(id: &'static str, checked: bool, set: fn(&mut Settings, bool), theme: &Colors) -> Switch {
+pub(crate) fn toggle(
+    id: &'static str,
+    checked: bool,
+    set: fn(&mut Settings, bool),
+    theme: &Colors,
+) -> Switch {
     Switch::new(id)
         .checked(checked)
         .color(theme.caret)

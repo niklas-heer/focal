@@ -1,4 +1,5 @@
-//! Word counts, reading time and sentences, for the bottom bar and focus mode.
+//! Word counts, reading time and sentences, for the bottom bar, focus mode
+//! and the info panel.
 
 use std::ops::Range;
 
@@ -13,6 +14,60 @@ pub fn word_count(text: &str) -> usize {
 /// Minutes to read `words` at 230 words a minute, rounded up.
 pub fn reading_minutes(words: usize) -> usize {
     words.div_ceil(230)
+}
+
+/// What the info panel counts in a text.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Statistics {
+    pub words: usize,
+    /// Characters as people see them, line endings left out.
+    pub characters: usize,
+    pub characters_without_spaces: usize,
+    pub sentences: usize,
+    /// Runs of lines that are not blank.
+    pub paragraphs: usize,
+    pub reading_minutes: usize,
+}
+
+pub fn statistics(text: &str) -> Statistics {
+    let mut characters = 0;
+    let mut blanks = 0;
+    for grapheme in text.graphemes(true) {
+        if grapheme == "\n" || grapheme == "\r\n" || grapheme == "\r" {
+            continue;
+        }
+        characters += 1;
+        if grapheme.chars().all(char::is_whitespace) {
+            blanks += 1;
+        }
+    }
+    let mut paragraphs = 0;
+    let mut sentences = 0;
+    let mut paragraph = String::new();
+    for line in text.lines().chain(std::iter::once("")) {
+        if line.trim().is_empty() {
+            if !paragraph.is_empty() {
+                paragraphs += 1;
+                sentences += paragraph
+                    .unicode_sentences()
+                    .filter(|sentence| sentence.unicode_words().next().is_some())
+                    .count();
+                paragraph.clear();
+            }
+        } else {
+            paragraph.push_str(line);
+            paragraph.push(' ');
+        }
+    }
+    let words = word_count(text);
+    Statistics {
+        words,
+        characters,
+        characters_without_spaces: characters - blanks,
+        sentences,
+        paragraphs,
+        reading_minutes: reading_minutes(words),
+    }
 }
 
 /// The sentence of the paragraph `range` that contains `offset`, without its
@@ -40,6 +95,17 @@ mod tests {
         assert_eq!(word_count("# A **bold** move\n\n- one\n| x | y |\n"), 6);
         assert_eq!(word_count("don't stop — it's 3.5 km"), 5);
         assert_eq!(word_count(""), 0);
+    }
+
+    #[test]
+    fn statistics_count_what_a_reader_sees() {
+        let stats = statistics("# Title\n\nOne two. Three!\r\nStill one.\n\n- é\n");
+        assert_eq!(stats.words, 7);
+        assert_eq!(stats.paragraphs, 3);
+        assert_eq!(stats.sentences, 5, "the title and the item are one each");
+        assert_eq!(stats.characters, 35, "line endings are not characters");
+        assert_eq!(stats.characters_without_spaces, 30);
+        assert_eq!(statistics(""), Statistics::default());
     }
 
     #[test]

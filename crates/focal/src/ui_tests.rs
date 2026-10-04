@@ -2060,3 +2060,44 @@ fn helix_x_selects_lines_and_c_changes_them(cx: &mut TestAppContext) {
     act(cx, window, |window, cx| window.input("xd", cx));
     editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "second"));
 }
+
+#[gpui_kit::test]
+fn the_info_panel_opens_from_the_corner_and_the_keys(cx: &mut TestAppContext) {
+    let (window, _) = open_workspace(cx, "# Title\n\nSome words here.");
+    act(cx, window, |window, _| {
+        assert!(window.try_find("panel").is_none());
+    });
+    act(cx, window, |window, cx| window.click("corner-info", cx));
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find("panel").is_some(),
+            "the info button opens it"
+        );
+    });
+    act(cx, window, |window, cx| window.press("cmd-alt-i", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("panel").is_none(), "⌥⌘I closes it again");
+    });
+}
+
+#[gpui_kit::test]
+fn the_outline_moves_the_caret_to_a_heading(cx: &mut TestAppContext) {
+    let (window, workspace) = open_workspace(cx, "# One\n\ntext\n\n## Two\n\nmore");
+    act(cx, window, |window, cx| window.press("cmd-alt-o", cx));
+    act(cx, window, |window, cx| {
+        window.click(("outline", 1usize), cx);
+    });
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    editor.read_with(cx, |editor, _| assert_eq!(editor.selection(), 16..16));
+}
+
+#[gpui_kit::test]
+fn the_panel_switches_light_and_dark(cx: &mut TestAppContext) {
+    use crate::settings::Appearance;
+    let (window, _) = open_workspace(cx, "text");
+    act(cx, window, |window, cx| window.click("corner-info", cx));
+    act(cx, window, |window, cx| {
+        window.click("panel-appearance-Dark", cx);
+    });
+    cx.update(|cx| assert_eq!(cx.global::<Settings>().appearance, Appearance::Dark));
+}

@@ -196,6 +196,15 @@ Redesigned 2026-10-04: the window has a toolbar of panes, as macOS preferences d
 
 **About (2026-10-04).** Focal ▸ About Focal opens Focal's own window instead of AppKit's standard panel: the icon, the version and build, the tagline, links to the website, this version's release notes and a new issue, Check for Updates… in builds that update themselves, and the credits (iA Writer typefaces and their license, pulldown-cmark, MathJax, merman, GPUI).
 
+### Corner buttons and the info panel (2026-10-04, after Bear)
+
+Three quiet buttons sit in the title bar's right corner, faded in focus mode: **Outline**, **Info** and **More** (a menu of Go to Heading, Focus Mode, Toggle Dark Mode, copy, export, print, Show in Finder and Settings). Outline and Info open a panel at the window's right edge (⌥⌘O, ⌥⌘I), hidden in focus mode:
+
+- **Info:** statistics (words, characters with and without spaces, sentences, paragraphs, reading time, and the selection's words and characters); the document (name, folder, which shows it in Finder, when it changed, its size and storage); appearance (Light, Dark or Auto, the typeface tiles, text size, line length); writing (focus mode, typewriter scrolling, Mac, Vim or Helix keys); and All Settings….
+- **Outline:** the headings, indented by level, the caret's own marked; clicking one moves there, and ⌘[ comes back.
+
+Toggle Dark Mode (⇧⌘L, View menu) switches Focal's own appearance to the opposite of what it shows.
+
 ### Menus and small conveniences (2026-10-04)
 
 A Window menu (Minimize ⌘M, Zoom) and a Help menu (Focal Help, Keyboard Shortcuts, Report an Issue…) join the menu bar. View has Bigger Text (⌘=), Smaller Text (⌘−) and Default Text Size, which step the text size setting. Format lists all six heading levels and Highlight (⇧⌘H, `==text==`). File ▸ Show in Finder (⌥⌘R) reveals the document.

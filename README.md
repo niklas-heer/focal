@@ -69,6 +69,8 @@ Focal runs as one app: every `focal` call opens a window in it, and an open file
 
 <img src="docs/images/focus-mode.png" alt="Focus mode: only the paragraph with the caret is dark, the rest of the page is faded" width="880">
 
+**The info panel** (ⓘ in the corner, or ⌥⌘I) counts words, characters, sentences and reading time, tells you about the file, and puts light or dark, the typeface, text size, focus mode and your editing keys one click away. Its **Outline** tab (⌥⌘O) lists the headings; click one to go there.
+
 **Focus mode** (⌘D) fades everything but the sentence or paragraph you are writing, and keeps your line in the middle of the window. The page is a single quiet column in the iA Writer typefaces, in light or dark mode as your Mac is set.
 
 ### Diagrams, math and more
@@ -112,6 +114,8 @@ Whatever wrote the file, it should look right. Focal reads GitHub-flavored Markd
 | ⌘[ | Go back |
 | ⌘D | Focus mode |
 | ⌘=, ⌘− | Bigger or smaller text |
+| ⇧⌘L | Switch between light and dark |
+| ⌥⌘I, ⌥⌘O | Info panel, outline |
 | ⌥⌘R | Show the file in Finder |
 | ⌘P | Quick switcher |
 | ⌃⌘S | Sidebar |

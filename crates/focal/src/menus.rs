@@ -17,7 +17,9 @@ use crate::settings::{
 use crate::switcher::{GoToHeading, QuickOpen};
 use crate::updates::{CheckForUpdates, OpenReleases};
 use crate::windows::{NewWindow, OpenFiles};
-use crate::workspace::{GoBack, Minimize, ToggleSidebar, Zoom};
+use crate::workspace::{
+    GoBack, Minimize, ToggleDarkMode, ToggleInfo, ToggleOutline, ToggleSidebar, Zoom,
+};
 
 actions!(focal, [AboutFocal, OpenHelp, OpenShortcuts, ReportIssue]);
 
@@ -134,9 +136,13 @@ pub fn set_menus(cx: &mut App) {
         ]),
         Menu::new("View").items([
             MenuItem::action("Toggle Sidebar", ToggleSidebar),
+            MenuItem::action("Info Panel", ToggleInfo),
+            MenuItem::action("Outline", ToggleOutline),
             MenuItem::action("Quick Open…", QuickOpen),
             MenuItem::action("Go to Heading…", GoToHeading),
             MenuItem::action("Focus Mode", ToggleFocusMode),
+            MenuItem::separator(),
+            MenuItem::action("Toggle Dark Mode", ToggleDarkMode),
             MenuItem::separator(),
             MenuItem::action("Bigger Text", BiggerText),
             MenuItem::action("Smaller Text", SmallerText),
@@ -145,15 +151,23 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::action("Open Link", OpenLink),
             MenuItem::action("Back", GoBack),
         ]),
-        Menu::new("Window").items([
-            MenuItem::action("Minimize", Minimize),
-            MenuItem::action("Zoom", Zoom),
-        ]),
-        Menu::new("Help").items([
-            MenuItem::action("Focal Help", OpenHelp),
-            MenuItem::action("Keyboard Shortcuts", OpenShortcuts),
-            MenuItem::separator(),
-            MenuItem::action("Report an Issue…", ReportIssue),
-        ]),
+        window_menu(),
+        help_menu(),
     ]);
+}
+
+fn window_menu() -> Menu {
+    Menu::new("Window").items([
+        MenuItem::action("Minimize", Minimize),
+        MenuItem::action("Zoom", Zoom),
+    ])
+}
+
+fn help_menu() -> Menu {
+    Menu::new("Help").items([
+        MenuItem::action("Focal Help", OpenHelp),
+        MenuItem::action("Keyboard Shortcuts", OpenShortcuts),
+        MenuItem::separator(),
+        MenuItem::action("Report an Issue…", ReportIssue),
+    ])
 }
