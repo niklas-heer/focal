@@ -15,6 +15,7 @@ use gpui_kit::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::icons::Icon;
 use crate::theme::{BOLD_PROSE_FONT, MONO_FONT, PROSE_FONT, Theme as Colors, Typography};
 
 actions!(
@@ -392,13 +393,13 @@ impl Pane {
     }
 
     /// The toolbar's mark for the pane, drawn in the typefaces Focal has.
-    const fn glyph(self) -> &'static str {
+    const fn icon(self) -> Icon {
         match self {
-            Self::Text => "Aa",
-            Self::Writing => "¶",
-            Self::Focus => "◎",
-            Self::Diagrams => "◇",
-            Self::General => "⚙",
+            Self::Text => Icon::Type,
+            Self::Writing => Icon::PenLine,
+            Self::Focus => Icon::Focus,
+            Self::Diagrams => Icon::Shapes,
+            Self::General => Icon::Settings,
         }
     }
 
@@ -469,15 +470,13 @@ impl SettingsView {
                 .text_color(if selected { theme.caret } else { theme.marker })
                 .when(selected, |d| d.bg(theme.code_background))
                 .when(!selected, |d| d.hover(move |style| style.bg(hover)))
-                .child(
-                    div()
-                        .h(px(20.))
-                        .flex()
-                        .items_center()
-                        .text_size(px(17.))
-                        .font_family(MONO_FONT)
-                        .child(pane.glyph()),
-                )
+                .child(div().h(px(20.)).flex().items_center().child(
+                    pane.icon().element(18.).text_color(if selected {
+                        theme.caret
+                    } else {
+                        theme.marker
+                    }),
+                ))
                 .child(
                     div()
                         .text_size(px(11.))
