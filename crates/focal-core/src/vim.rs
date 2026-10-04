@@ -9,6 +9,8 @@
 
 use std::ops::Range;
 
+use crate::search::{self, Search, Step};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     Normal,
@@ -18,13 +20,13 @@ pub enum Mode {
 }
 
 impl Mode {
-    /// The name Vim shows for the mode, or `None` for normal mode.
-    pub const fn label(self) -> Option<&'static str> {
+    /// The name Vim shows for the mode.
+    pub const fn label(self) -> &'static str {
         match self {
-            Self::Normal => None,
-            Self::Insert => Some("INSERT"),
-            Self::Visual => Some("VISUAL"),
-            Self::VisualLine => Some("VISUAL LINE"),
+            Self::Normal => "NORMAL",
+            Self::Insert => "INSERT",
+            Self::Visual => "VISUAL",
+            Self::VisualLine => "VISUAL LINE",
         }
     }
 
@@ -78,17 +80,8 @@ pub enum Command {
     /// Edits until [`Command::EndGroup`] undo as one step.
     BeginGroup,
     EndGroup,
-    /// Opens the find bar, searching forward or backward.
-    Find {
-        forward: bool,
-    },
-    FindNext {
-        forward: bool,
-    },
-    FindWord {
-        word: String,
-        forward: bool,
-    },
+    /// Highlights the matches of a search, or no longer.
+    ShowMatches(Option<String>),
     /// Replays the last change: these keys, then `text` typed if they end in
     /// insert mode. The editor feeds them back one by one.
     Repeat {
@@ -309,7 +302,7 @@ pub struct Vim {
     /// clipboard was copied since, and `p` pastes that instead.
     clipboard_then: Option<String>,
     last_find: Option<(FindKind, char)>,
-    search_backward: bool,
+    search: Search,
     last_change: Option<Change>,
     recording: Option<Change>,
     replaying: bool,
@@ -337,7 +330,7 @@ impl Vim {
             register: Register::default(),
             clipboard_then: None,
             last_find: None,
-            search_backward: false,
+            search: Search::default(),
             last_change: None,
             recording: None,
             replaying: false,
@@ -355,6 +348,9 @@ impl Vim {
     /// What to show beside the mode: the command line, a message, or the
     /// keys of a command being typed.
     pub fn status(&self) -> Option<String> {
+        if let Some(line) = self.search.status() {
+            return Some(line);
+        }
         if let Some(line) = &self.command_line {
             return Some(format!(":{line}"));
         }
@@ -439,6 +435,9 @@ impl Vim {
     /// insert mode and keys Vim has no use for.
     pub fn key(&mut self, key: Key, cx: &Context) -> Option<Vec<Command>> {
         self.message = None;
+        if self.search.is_open() {
+            return Some(self.search_key(key, cx));
+        }
         if self.command_line.is_some() {
             return Some(self.command_line_key(key, cx));
         }
@@ -530,6 +529,108 @@ impl Vim {
         };
         commands.push(caret(at));
         Some(commands)
+    }
+
+    /// A key on the search line: the matches show and the cursor goes to
+    /// the next as the query grows; Esc goes back.
+    fn search_key(&mut self, key: Key, cx: &Context) -> Vec<Command> {
+        match self.search.key(key, cx.text) {
+            Step::Preview {
+                query,
+                target,
+                origin,
+            } => {
+                let go = match target {
+                    Some(target) => self.go_to_match(target.start, cx.text),
+                    None => self.back_to(origin),
+                };
+                vec![Command::ShowMatches(Some(query)), go]
+            }
+            Step::Accept {
+                query,
+                target,
+                origin,
+            } => {
+                if let Some(target) = target {
+                    vec![
+                        Command::ShowMatches(Some(query)),
+                        self.go_to_match(target.start, cx.text),
+                    ]
+                } else {
+                    self.message = Some(format!("Not found: {query}"));
+                    vec![Command::ShowMatches(None), self.back_to(origin)]
+                }
+            }
+            Step::Cancel { origin } => vec![Command::ShowMatches(None), self.back_to(origin)],
+            Step::Nothing => Vec::new(),
+        }
+    }
+
+    /// Back to the selection a search started from.
+    fn back_to(&mut self, (anchor, head): (usize, usize)) -> Command {
+        self.shown = None;
+        Command::Select { anchor, head }
+    }
+
+    fn open_search(&mut self, forward: bool, cx: &Context) {
+        let at = self.cursor(normal_cursor(cx.text, cx.head));
+        self.search.open(
+            forward,
+            search::Start {
+                anchor: cx.anchor,
+                head: cx.head,
+                after: next_char(cx.text, at),
+                before: at,
+            },
+        );
+    }
+
+    /// The cursor: visual mode's, or the caret.
+    const fn cursor(&self, head: usize) -> usize {
+        if self.mode.visual() {
+            self.visual.1
+        } else {
+            head
+        }
+    }
+
+    /// Moves the cursor, or visual mode's cursor, to a match.
+    fn go_to_match(&mut self, at: usize, text: &str) -> Command {
+        if self.mode.visual() {
+            self.visual.1 = at;
+            self.show_visual(text)
+        } else {
+            caret(at)
+        }
+    }
+
+    /// `n`, `N`, `*` and `#`: the next match of the last search, with where
+    /// it is among them shown below.
+    fn search_again(
+        &mut self,
+        reverse: bool,
+        after: usize,
+        before: usize,
+        text: &str,
+    ) -> Vec<Command> {
+        match self.search.again(text, reverse, after, before) {
+            Ok((query, target, shown)) => {
+                self.message = Some(shown);
+                vec![
+                    Command::ShowMatches(Some(query)),
+                    self.go_to_match(target.start, text),
+                ]
+            }
+            Err(message) => {
+                self.message = Some(message);
+                Vec::new()
+            }
+        }
+    }
+
+    /// A query searched for with the find bar, for `n` to find again.
+    pub fn remember_search(&mut self, query: &str) {
+        self.search.remember(query);
     }
 
     fn command_line_key(&mut self, key: Key, cx: &Context) -> Vec<Command> {
@@ -958,6 +1059,8 @@ impl Vim {
                     self.mode = Mode::Normal;
                     self.shown = None;
                     commands.push(caret(self.visual.1));
+                } else {
+                    commands.push(Command::ShowMatches(None));
                 }
             }
             Action::Insert | Action::Append | Action::InsertAtStart | Action::AppendAtEnd => {
@@ -1131,14 +1234,15 @@ impl Vim {
                 commands.push(self.show_visual(text));
             }
             Action::CommandLine => self.command_line = Some(String::new()),
-            Action::App(command) => commands.push(Command::App(command)),
-            Action::Search { forward } => {
-                self.search_backward = !forward;
-                commands.push(Command::Find { forward });
+            Action::App(crate::keys::AppCommand::Find) | Action::Search { forward: true } => {
+                self.open_search(true, cx);
             }
-            Action::SearchNext { reverse } => commands.push(Command::FindNext {
-                forward: self.search_backward == reverse,
-            }),
+            Action::Search { forward: false } => self.open_search(false, cx),
+            Action::App(command) => commands.push(Command::App(command)),
+            Action::SearchNext { reverse } => {
+                let at = self.cursor(head);
+                return self.search_again(reverse, next_char(text, at), at, text);
+            }
             Action::SearchWord { forward } => {
                 let range = object_range(
                     Object::Word {
@@ -1154,11 +1258,9 @@ impl Vim {
                         .chars()
                         .any(|c| class(c, false) == Class::Word)
                 }) {
-                    self.search_backward = !forward;
-                    commands.push(Command::FindWord {
-                        word: text[range].to_owned(),
-                        forward,
-                    });
+                    self.search
+                        .set_last(text[range.clone()].to_owned(), forward);
+                    return self.search_again(false, range.end, range.start, text);
                 }
             }
         }
@@ -2271,7 +2373,8 @@ mod tests {
         head: usize,
         clipboard: Option<String>,
         undo: Vec<(String, usize)>,
-        found: Vec<String>,
+        /// The query whose matches the editor highlights.
+        matches: Option<String>,
     }
 
     impl Sim {
@@ -2286,7 +2389,7 @@ mod tests {
                 head,
                 clipboard: None,
                 undo: Vec::new(),
-                found: Vec::new(),
+                matches: None,
             }
         }
 
@@ -2412,7 +2515,7 @@ mod tests {
                     }
                 }
                 Command::Copy(text) => self.clipboard = Some(text),
-                Command::FindWord { word, .. } => self.found.push(word),
+                Command::ShowMatches(query) => self.matches = query,
                 Command::Repeat { keys, text } => {
                     self.vim.set_replaying(true);
                     for key in keys {
@@ -2429,8 +2532,6 @@ mod tests {
                 Command::Redo
                 | Command::BeginGroup
                 | Command::EndGroup
-                | Command::Find { .. }
-                | Command::FindNext { .. }
                 | Command::Save
                 | Command::Close
                 | Command::App(_) => {}
@@ -2696,26 +2797,60 @@ mod tests {
     }
 
     #[test]
-    fn searching_asks_the_editor() {
+    fn slash_searches_on_the_modal_line() {
+        let mut sim = Sim::new("|one two two");
+        sim.keys("/tw");
+        assert_eq!(sim.vim.status().as_deref(), Some("/tw  1 of 2"));
+        assert_eq!(sim.head, 4, "the cursor previews the match");
+        assert_eq!(sim.matches.as_deref(), Some("tw"));
+        sim.keys("o<CR>");
+        assert_eq!((sim.head, sim.vim.mode()), (4, Mode::Normal));
+        assert_eq!(sim.vim.status(), None);
+        sim.keys("n");
+        assert_eq!(sim.head, 8);
+        assert_eq!(sim.vim.status().as_deref(), Some("/two  2 of 2"));
+        sim.keys("n");
+        assert_eq!(sim.head, 4, "wraps around");
+        sim.keys("N");
+        assert_eq!(sim.head, 8);
+        sim.keys("<Esc>");
+        assert_eq!(sim.matches, None, "Esc clears the highlights");
+        sim.keys("n");
+        assert_eq!(sim.matches.as_deref(), Some("two"), "n shows them again");
+    }
+
+    #[test]
+    fn escape_leaves_a_search_where_it_started() {
+        let mut sim = Sim::new("o|ne two");
+        sim.keys("/tw");
+        assert_eq!(sim.head, 4);
+        sim.keys("<Esc>");
+        assert_eq!((sim.head, sim.matches.as_deref()), (1, None));
+        sim.keys("/zz<CR>");
+        assert_eq!(sim.head, 1);
+        assert_eq!(sim.vim.status().as_deref(), Some("Not found: zz"));
+    }
+
+    #[test]
+    fn question_mark_and_star_search_from_the_cursor() {
+        let mut sim = Sim::new("a b a b |a");
+        sim.keys("?a<CR>");
+        assert_eq!(sim.head, 4);
+        sim.keys("n");
+        assert_eq!(sim.head, 0, "n keeps going backward");
         let mut sim = Sim::new("one |two two");
         sim.keys("*");
-        assert_eq!(sim.found, ["two"]);
-        let cx = Context {
-            text: "a",
-            anchor: 0,
-            head: 0,
-            clipboard: None,
-        };
-        let mut vim = Vim::new();
-        assert_eq!(
-            vim.key(Key::Char('?'), &cx),
-            Some(vec![Command::Find { forward: false }])
-        );
-        assert_eq!(
-            vim.key(Key::Char('n'), &cx),
-            Some(vec![Command::FindNext { forward: false }]),
-            "n follows the search's direction"
-        );
+        assert_eq!((sim.head, sim.matches.as_deref()), (8, Some("two")));
+        sim.keys("#");
+        assert_eq!(sim.head, 4);
+    }
+
+    #[test]
+    fn a_search_extends_visual_mode() {
+        let mut sim = Sim::new("|one two");
+        sim.keys("v/tw<CR>");
+        assert_eq!(sim.vim.mode(), Mode::Visual);
+        assert_eq!((sim.anchor, sim.head), (0, 5), "through the t");
     }
 
     #[test]

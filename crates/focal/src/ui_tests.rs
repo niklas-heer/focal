@@ -1906,6 +1906,15 @@ fn vim_status(window: &mut Window) -> bool {
     window.try_find("modal-status").is_some()
 }
 
+/// The mode the pill in the bottom corner names.
+fn mode_pill(window: &mut Window) -> String {
+    window
+        .find("modal-mode")
+        .label()
+        .unwrap_or_default()
+        .to_owned()
+}
+
 #[gpui_kit::test]
 fn vim_normal_mode_moves_and_edits_without_typing(cx: &mut TestAppContext) {
     let (window, editor) = open_vim(cx, "one two three");
@@ -1927,7 +1936,7 @@ fn vim_insert_mode_types_and_escape_returns(cx: &mut TestAppContext) {
     editor.update(cx, |editor, cx| editor.move_to(0, cx));
     act(cx, window, |window, cx| window.input("iXY", cx));
     act(cx, window, |window, _| {
-        assert!(vim_status(window), "-- INSERT -- shows");
+        assert_eq!(mode_pill(window), "INSERT mode");
     });
     act(cx, window, |window, cx| window.press("escape", cx));
     act(cx, window, |window, cx| window.input("x", cx));
@@ -1939,7 +1948,56 @@ fn vim_insert_mode_types_and_escape_returns(cx: &mut TestAppContext) {
         );
     });
     act(cx, window, |window, _| {
-        assert!(!vim_status(window), "normal mode shows nothing");
+        assert_eq!(mode_pill(window), "NORMAL mode");
+        assert!(!vim_status(window), "nothing typed");
+        assert!(
+            window.try_find("modal-menu-hint").is_some(),
+            "the key to Focal's menu"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn vim_searches_on_the_modal_line(cx: &mut TestAppContext) {
+    let (window, editor) = open_vim(cx, "one two\nthree two");
+    editor.update(cx, |editor, cx| editor.move_to(0, cx));
+    act(cx, window, |window, cx| window.input("/two", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("find-bar").is_none(), "no find bar");
+        assert_eq!(
+            window.find("modal-status").label(),
+            Some("/two  1 of 2"),
+            "the query and its matches, in the corner"
+        );
+    });
+    act(cx, window, |window, cx| window.press("enter", cx));
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.text(), "one two\nthree two", "nothing typed");
+        assert_eq!(editor.selection(), 4..4);
+        assert_eq!(editor.find_status(), Some((None, 2)), "matches highlighted");
+    });
+    act(cx, window, |window, cx| window.input("n", cx));
+    editor.read_with(cx, |editor, _| assert_eq!(editor.selection(), 14..14));
+    act(cx, window, |window, cx| window.press("escape", cx));
+    editor.read_with(cx, |editor, _| assert_eq!(editor.find_status(), None));
+}
+
+#[gpui_kit::test]
+fn helix_search_selects_the_match(cx: &mut TestAppContext) {
+    let (window, editor) = open_helix(cx, "one two two");
+    act(cx, window, |window, cx| window.input("/two", cx));
+    act(cx, window, |window, cx| window.press("enter", cx));
+    editor.read_with(cx, |editor, _| assert_eq!(editor.selection(), 4..7));
+    act(cx, window, |window, cx| window.input("n", cx));
+    editor.read_with(cx, |editor, _| assert_eq!(editor.selection(), 8..11));
+}
+
+#[gpui_kit::test]
+fn the_mode_pill_opens_the_key_reference(cx: &mut TestAppContext) {
+    let (window, _) = open_vim(cx, "text");
+    act(cx, window, |window, cx| window.click("modal-mode", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("key-reference").is_some());
     });
 }
 
@@ -2053,7 +2111,7 @@ fn helix_x_selects_lines_and_c_changes_them(cx: &mut TestAppContext) {
     let (window, editor) = open_helix(cx, "first\nsecond");
     act(cx, window, |window, cx| window.input("miwcnew", cx));
     act(cx, window, |window, _| {
-        assert!(vim_status(window), "-- INSERT --");
+        assert_eq!(mode_pill(window), "INSERT mode");
     });
     act(cx, window, |window, cx| window.press("escape", cx));
     editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "new\nsecond"));

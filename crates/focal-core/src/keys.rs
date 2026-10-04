@@ -90,6 +90,7 @@ enum Ex {
     Close,
     SaveClose,
     App(AppCommand),
+    ClearMatches,
     Nothing,
 }
 
@@ -154,7 +155,7 @@ const EX: &[(&[&str], Ex, &str)] = &[
     ),
     (
         &["noh", "nohlsearch"],
-        Ex::Nothing,
+        Ex::ClearMatches,
         "clear search highlights",
     ),
 ];
@@ -190,6 +191,7 @@ pub(crate) fn run_ex(line: &str, text: &str) -> Result<Vec<Command>, String> {
         Ex::Close => vec![Command::Close],
         Ex::SaveClose => vec![Command::Save, Command::Close],
         Ex::App(command) => vec![Command::App(command)],
+        Ex::ClearMatches => vec![Command::ShowMatches(None)],
         Ex::Nothing => Vec::new(),
     })
 }

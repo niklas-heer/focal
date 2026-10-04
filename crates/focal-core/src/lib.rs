@@ -25,6 +25,7 @@ mod lines;
 pub mod links;
 pub mod modal;
 pub mod outline;
+pub mod search;
 pub mod shadow;
 pub mod table;
 pub mod tags;

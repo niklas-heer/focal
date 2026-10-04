@@ -7,6 +7,7 @@
 
 use std::ops::Range;
 
+use crate::search::{self, Search, Step};
 use crate::vim::{
     Command, Context, EditorCommand, HALF_PAGE, Key, Register, at_column, caret, class_at, column,
     first_non_blank, join, key_name, line_end, line_end_with_newline, line_ending, line_of,
@@ -23,11 +24,11 @@ pub enum Mode {
 }
 
 impl Mode {
-    pub const fn label(self) -> Option<&'static str> {
+    pub const fn label(self) -> &'static str {
         match self {
-            Self::Normal => None,
-            Self::Insert => Some("INSERT"),
-            Self::Select => Some("SELECT"),
+            Self::Normal => "NORMAL",
+            Self::Insert => "INSERT",
+            Self::Select => "SELECT",
         }
     }
 }
@@ -131,7 +132,7 @@ pub struct Helix {
     shown: Option<(usize, usize)>,
     register: Register,
     clipboard_then: Option<String>,
-    search_backward: bool,
+    search: Search,
     last_change: Option<Change>,
     recording: Option<Change>,
     replaying: bool,
@@ -156,7 +157,7 @@ impl Helix {
             shown: None,
             register: Register::default(),
             clipboard_then: None,
-            search_backward: false,
+            search: Search::default(),
             last_change: None,
             recording: None,
             replaying: false,
@@ -172,6 +173,9 @@ impl Helix {
     }
 
     pub fn status(&self) -> Option<String> {
+        if let Some(line) = self.search.status() {
+            return Some(line);
+        }
         if let Some(line) = &self.command_line {
             return Some(format!(":{line}"));
         }
@@ -241,6 +245,9 @@ impl Helix {
 
     pub fn key(&mut self, key: Key, cx: &Context) -> Option<Vec<Command>> {
         self.message = None;
+        if self.search.is_open() {
+            return Some(self.search_key(key, cx));
+        }
         if self.command_line.is_some() {
             return Some(self.command_line_key(key, cx));
         }
@@ -317,6 +324,90 @@ impl Helix {
         self.selection = (at, at);
         commands.push(self.show(cx.text));
         Some(commands)
+    }
+
+    /// A key on the search line: the matches show and the next is selected
+    /// as the query grows; Esc goes back.
+    fn search_key(&mut self, key: Key, cx: &Context) -> Vec<Command> {
+        match self.search.key(key, cx.text) {
+            Step::Preview {
+                query,
+                target,
+                origin,
+            } => {
+                let go = match target {
+                    Some(target) => self.go_to_match(target, cx.text),
+                    None => self.back_to(origin),
+                };
+                vec![Command::ShowMatches(Some(query)), go]
+            }
+            Step::Accept {
+                query,
+                target,
+                origin,
+            } => {
+                if let Some(target) = target {
+                    vec![
+                        Command::ShowMatches(Some(query)),
+                        self.go_to_match(target, cx.text),
+                    ]
+                } else {
+                    self.message = Some(format!("Not found: {query}"));
+                    vec![Command::ShowMatches(None), self.back_to(origin)]
+                }
+            }
+            Step::Cancel { origin } => vec![Command::ShowMatches(None), self.back_to(origin)],
+            Step::Nothing => Vec::new(),
+        }
+    }
+
+    /// Back to the selection a search started from.
+    fn back_to(&mut self, (anchor, head): (usize, usize)) -> Command {
+        self.shown = None;
+        Command::Select { anchor, head }
+    }
+
+    /// Selects a match; select mode extends to it.
+    fn go_to_match(&mut self, range: Range<usize>, text: &str) -> Command {
+        self.select(range.start, prev_char(text, range.end).max(range.start));
+        self.show(text)
+    }
+
+    fn open_search(&mut self, forward: bool, cx: &Context) {
+        let range = self.range(cx.text);
+        self.search.open(
+            forward,
+            search::Start {
+                anchor: cx.anchor,
+                head: cx.head,
+                after: range.end,
+                before: range.start,
+            },
+        );
+    }
+
+    /// `n` and `N`: the next match of the last search, with where it is
+    /// among them shown below.
+    fn search_again(&mut self, reverse: bool, text: &str) -> Vec<Command> {
+        let range = self.range(text);
+        match self.search.again(text, reverse, range.end, range.start) {
+            Ok((query, target, shown)) => {
+                self.message = Some(shown);
+                vec![
+                    Command::ShowMatches(Some(query)),
+                    self.go_to_match(target, text),
+                ]
+            }
+            Err(message) => {
+                self.message = Some(message);
+                Vec::new()
+            }
+        }
+    }
+
+    /// A query searched for with the find bar, for `n` to find again.
+    pub fn remember_search(&mut self, query: &str) {
+        self.search.remember(query);
     }
 
     fn command_line_key(&mut self, key: Key, cx: &Context) -> Vec<Command> {
@@ -483,6 +574,7 @@ impl Helix {
                     self.mode = Mode::Normal;
                 } else {
                     self.selection = (head, head);
+                    commands.push(Command::ShowMatches(None));
                 }
             }
             Action::Delete | Action::Change => {
@@ -615,28 +707,26 @@ impl Helix {
                 return commands;
             }
             Action::Search { forward } => {
-                self.search_backward = !forward;
-                return vec![Command::Find { forward }];
+                self.open_search(forward, cx);
+                return Vec::new();
             }
-            Action::SearchNext { reverse } => {
-                self.shown = None;
-                return vec![Command::FindNext {
-                    forward: self.search_backward == reverse,
-                }];
+            Action::App(crate::keys::AppCommand::Find) => {
+                self.open_search(true, cx);
+                return Vec::new();
             }
+            Action::SearchNext { reverse } => return self.search_again(reverse, text),
+            // As in Helix, `*` searches for the selection without moving.
             Action::SearchSelection => {
                 let range = self.range(text);
-                let word = text[range].to_owned();
-                if word.trim().is_empty() {
+                let query = text[range].to_owned();
+                if query.trim().is_empty() {
                     return Vec::new();
                 }
-                self.search_backward = false;
-                self.shown = None;
-                return vec![Command::FindWord {
-                    word,
-                    forward: true,
-                }];
+                self.search.set_last(query.clone(), true);
+                self.message = Some(format!("/{query}"));
+                return vec![Command::ShowMatches(Some(query))];
             }
+
             Action::CommandLine => {
                 self.command_line = Some(String::new());
                 return Vec::new();
@@ -1001,6 +1091,8 @@ mod tests {
         head: usize,
         clipboard: Option<String>,
         undo: Vec<String>,
+        /// The query whose matches the editor highlights.
+        matches: Option<String>,
     }
 
     impl Sim {
@@ -1013,6 +1105,7 @@ mod tests {
                 head,
                 clipboard: None,
                 undo: Vec::new(),
+                matches: None,
             }
         }
 
@@ -1085,6 +1178,7 @@ mod tests {
                     self.head = caret;
                 }
                 Command::Copy(text) => self.clipboard = Some(text),
+                Command::ShowMatches(query) => self.matches = query,
                 Command::Undo => {
                     if let Some(text) = self.undo.pop() {
                         self.text = text;
@@ -1219,5 +1313,43 @@ mod tests {
             helix.key(Key::Enter, &cx),
             Some(vec![Command::Save, Command::Close])
         );
+    }
+
+    #[test]
+    fn slash_selects_matches_and_n_goes_on() {
+        let mut sim = Sim::new("|one two two");
+        sim.keys("/two");
+        assert_eq!(sim.helix.status().as_deref(), Some("/two  1 of 2"));
+        assert_eq!(sim.shown(), "one [two] two", "the match previews");
+        sim.keys("<CR>");
+        assert_eq!(sim.helix.status(), None);
+        assert_eq!(sim.matches.as_deref(), Some("two"));
+        sim.keys("n");
+        assert_eq!(sim.shown(), "one two [two]");
+        assert_eq!(sim.helix.status().as_deref(), Some("/two  2 of 2"));
+        sim.keys("N");
+        assert_eq!(sim.shown(), "one [two] two");
+        sim.keys("<Esc>");
+        assert_eq!(sim.matches, None);
+    }
+
+    #[test]
+    fn escape_returns_and_select_mode_extends() {
+        let mut sim = Sim::new("o|ne two");
+        sim.keys("/tw<Esc>");
+        assert_eq!(sim.shown(), "o|ne two");
+        let mut sim = Sim::new("|one two");
+        sim.keys("v/two<CR>");
+        assert_eq!(sim.shown(), "[one two]");
+    }
+
+    #[test]
+    fn star_searches_for_the_selection_without_moving() {
+        let mut sim = Sim::new("|one two one");
+        sim.keys("e*");
+        assert_eq!(sim.shown(), "[one] two one");
+        assert_eq!(sim.matches.as_deref(), Some("one"));
+        sim.keys("n");
+        assert_eq!(sim.shown(), "one two [one]");
     }
 }

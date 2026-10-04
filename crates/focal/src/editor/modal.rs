@@ -12,11 +12,12 @@ use focal_core::vim::{Command, Context as KeyContext, EditorCommand, Key, Vim};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, ClipboardItem, Context, InteractiveElement as _, IntoElement as _, Keystroke,
-    ParentElement as _, Styled as _, Subscription, TestSupportExt as _, Window, div, px,
+    ParentElement as _, StatefulInteractiveElement as _, Styled as _, Subscription,
+    TestSupportExt as _, Window, div, px,
 };
 
-use super::{CloseWindow, Down, EditKind, Editor, EditorEvent, Redo, Save, Undo, Up};
-use crate::find_bar::{Find, FindNext, FindPrevious};
+use super::{CloseWindow, Down, EditKind, Editor, Redo, Save, Undo, Up};
+use crate::find_bar::Find;
 use crate::settings::Keyboard;
 use crate::theme::{MONO_FONT, Theme};
 
@@ -176,18 +177,7 @@ impl Editor {
             Command::Copy(text) => cx.write_to_clipboard(ClipboardItem::new_string(text)),
             Command::BeginGroup => self.buffer.begin_group(),
             Command::EndGroup => self.buffer.end_group(),
-            Command::Find { .. } => window.dispatch_action(Box::new(Find), cx),
-            Command::FindNext { forward } => {
-                if forward {
-                    window.dispatch_action(Box::new(FindNext), cx);
-                } else {
-                    window.dispatch_action(Box::new(FindPrevious), cx);
-                }
-            }
-            Command::FindWord { word, forward } => cx.emit(EditorEvent::Search {
-                query: word,
-                forward,
-            }),
+            Command::ShowMatches(query) => self.show_matches(query, cx),
             Command::Repeat { keys, text } => self.repeat_modal_change(keys, &text, window, cx),
             Command::Save => self.save(&Save, window, cx),
             Command::Close => self.close_window(&CloseWindow, window, cx),
@@ -271,11 +261,12 @@ impl Editor {
         self.move_to(at, cx);
     }
 
-    /// The mode and what is being typed (a count, an operator, `:` and its
-    /// command), quietly in the bottom corner.
+    /// The mode as a pill in the bottom corner, and beside it what is being
+    /// typed: a count, an operator, `:` or `/` and its line, or a message.
+    /// In normal mode with nothing typed, the key to Focal's menu.
     pub(super) fn render_modal_status(&self, theme: &Theme) -> Option<AnyElement> {
         let modal = self.modal.as_ref()?;
-        let label = modal.label().map(|label| format!("-- {label} --"));
+        let label = modal.label();
         let status = modal.status();
         // While a command waits, what can finish it; while `:` is open, the
         // commands that match.
@@ -284,14 +275,14 @@ impl Editor {
             (None, Some(hints)) => Some((hints.title, hints.hints)),
             (None, None) => None,
         };
-        if label.is_none() && status.is_none() && card.is_none() {
-            return None;
-        }
-        let text = [label, status]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
-            .join("  ");
+        let menu = (modal.normal() && status.is_none() && card.is_none()).then(|| modal.menu_key());
+        let (pill, ink) = if modal.inserting() {
+            (theme.caret, theme.background)
+        } else if modal.normal() {
+            (theme.code_background, theme.marker)
+        } else {
+            (theme.selection, theme.text)
+        };
         Some(
             div()
                 .absolute()
@@ -306,19 +297,59 @@ impl Editor {
                 .when_some(card, |d, (title, hints)| {
                     d.child(hint_card(title, &hints, theme))
                 })
-                .when(!text.is_empty(), |d| {
-                    d.child(
-                        div()
-                            .id("modal-status")
-                            .test_support()
-                            .px(px(8.))
-                            .py(px(2.))
-                            .rounded(px(4.))
-                            .bg(theme.background)
-                            .text_color(theme.marker)
-                            .child(text),
-                    )
-                })
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .id("modal-mode")
+                                .test_support()
+                                .aria_label(format!("{label} mode"))
+                                .occlude()
+                                .cursor_pointer()
+                                .px(px(7.))
+                                .py(px(1.))
+                                .rounded(px(5.))
+                                .bg(pill)
+                                .text_color(ink)
+                                .text_size(px(10.))
+                                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                .child(label)
+                                .on_click(|_, window, cx| {
+                                    window.dispatch_action(
+                                        Box::new(crate::workspace::ShowEditingKeys),
+                                        cx,
+                                    );
+                                }),
+                        )
+                        .when_some(status, |d, status| {
+                            d.child(
+                                div()
+                                    .id("modal-status")
+                                    .test_support()
+                                    .aria_label(status.clone())
+                                    .px(px(4.))
+                                    .rounded(px(4.))
+                                    .bg(theme.background)
+                                    .text_color(theme.text)
+                                    .child(status),
+                            )
+                        })
+                        .when_some(menu, |d, key| {
+                            d.child(
+                                div()
+                                    .id("modal-menu-hint")
+                                    .test_support()
+                                    .flex()
+                                    .gap(px(5.))
+                                    .text_color(theme.marker.opacity(0.7))
+                                    .child(div().text_color(theme.marker).child(key))
+                                    .child("menu"),
+                            )
+                        }),
+                )
                 .into_any_element(),
         )
     }

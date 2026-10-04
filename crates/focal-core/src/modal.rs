@@ -20,8 +20,8 @@ impl Modal {
         }
     }
 
-    /// The mode's name to show, or `None` in normal mode.
-    pub const fn label(&self) -> Option<&'static str> {
+    /// The mode's name to show.
+    pub const fn label(&self) -> &'static str {
         match self {
             Self::Vim(vim) => vim.mode().label(),
             Self::Helix(helix) => helix.mode().label(),
@@ -57,6 +57,22 @@ impl Modal {
             return None;
         }
         Some(crate::keys::completions(line))
+    }
+
+    /// The key that opens Focal's menu.
+    pub const fn menu_key(&self) -> &'static str {
+        match self {
+            Self::Vim(_) => "\\",
+            Self::Helix(_) => "space",
+        }
+    }
+
+    /// A query searched for with the find bar, for `n` to find again.
+    pub fn remember_search(&mut self, query: &str) {
+        match self {
+            Self::Vim(vim) => vim.remember_search(query),
+            Self::Helix(helix) => helix.remember_search(query),
+        }
     }
 
     /// Which reference describes these keys.

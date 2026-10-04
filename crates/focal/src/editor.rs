@@ -126,8 +126,9 @@ pub enum EditorEvent {
     /// The caret jumped (to an anchor or a footnote) from this selection,
     /// which "back" returns to.
     Jumped(Range<usize>),
-    /// Search for this text, as the find bar would (Vim's `*` and `#`).
-    Search { query: String, forward: bool },
+    /// Vim or Helix searched for this text, which ⌘G and the find bar go on
+    /// with.
+    Searched(String),
 }
 
 impl EventEmitter<EditorEvent> for Editor {}
@@ -2129,6 +2130,9 @@ impl Editor {
         if query == self.query {
             return;
         }
+        if let (Some(modal), Some(query)) = (&mut self.modal, &query) {
+            modal.remember_search(query);
+        }
         self.query = query;
         self.find_matches(self.buffer.version());
         match find::next_match(&self.found, self.selection.start) {
@@ -2147,6 +2151,21 @@ impl Editor {
         if let Some(ix) = found {
             self.select(self.found[ix].clone(), cx);
         }
+    }
+
+    /// Highlights the matches of `query`, or no longer, leaving the
+    /// selection to Vim or Helix.
+    pub(crate) fn show_matches(&mut self, query: Option<String>, cx: &mut Context<Self>) {
+        let query = query.filter(|query| !query.is_empty());
+        if query == self.query {
+            return;
+        }
+        self.query.clone_from(&query);
+        self.find_matches(self.buffer.version());
+        if let Some(query) = query {
+            cx.emit(EditorEvent::Searched(query));
+        }
+        cx.notify();
     }
 
     /// Selects the next or previous match of `query` without highlighting
