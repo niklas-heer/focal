@@ -202,6 +202,7 @@ Three quiet buttons sit in the title bar's right corner, faded in focus mode: **
 
 - **Info:** statistics (words, characters with and without spaces, sentences, paragraphs, reading time, and the selection's words and characters); the document (name, folder, which shows it in Finder, when it changed, its size and storage); appearance (Light, Dark or Auto, the typeface tiles, text size, line length); writing (focus mode, typewriter scrolling, Mac, Vim or Helix keys); and All Settings….
 - **Outline:** the headings, indented by level, the caret's own marked; clicking one moves there, and ⌘[ comes back.
+- **Recent:** the files and folders opened lately (File ▸ Open Recent's list), the current one marked; clicking one opens it or brings its window forward. View ▸ Recent Files, `space r` or `:recent`.
 
 Toggle Dark Mode (⇧⌘L, View menu) switches Focal's own appearance to the opposite of what it shows.
 

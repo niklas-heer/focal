@@ -25,7 +25,7 @@ mod keys;
 mod panel;
 
 pub use keys::ShowEditingKeys;
-pub use panel::{PanelTab, ToggleDarkMode, ToggleInfo, ToggleOutline};
+pub use panel::{PanelTab, ToggleDarkMode, ToggleInfo, ToggleOutline, ToggleRecent};
 
 actions!(focal, [ToggleSidebar, GoBack, Minimize, Zoom]);
 
@@ -754,6 +754,9 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &ToggleOutline, _, cx| {
                 this.toggle_panel(PanelTab::Outline, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ToggleRecent, _, cx| {
+                this.toggle_panel(PanelTab::Recent, cx);
             }))
             .on_action(|_: &ToggleDarkMode, window, cx| Self::toggle_dark_mode(window, cx))
             .on_action(cx.listener(|this, _: &ShowEditingKeys, window, cx| {

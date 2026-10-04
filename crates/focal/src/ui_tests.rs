@@ -2171,3 +2171,22 @@ fn vim_leader_opens_the_outline(cx: &mut TestAppContext) {
         assert!(window.try_find("panel").is_some());
     });
 }
+
+#[gpui_kit::test]
+fn the_recent_tab_lists_opened_files(cx: &mut TestAppContext) {
+    let root = notes_folder("recent-tab", "text");
+    let (window, _) = open_workspace(cx, "text");
+    cx.update(|cx| {
+        let mut recent = crate::recent::Recent::default();
+        recent.add(root.join("old.md"));
+        recent.add(root.join("new.md"));
+        cx.set_global(recent);
+    });
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::workspace::ToggleRecent), cx);
+    });
+    act(cx, window, |window, _| {
+        assert!(window.try_find(("recent", 0usize)).is_some());
+        assert!(window.try_find(("recent", 1usize)).is_some());
+    });
+}

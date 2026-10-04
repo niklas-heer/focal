@@ -138,6 +138,7 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::action("Toggle Sidebar", ToggleSidebar),
             MenuItem::action("Info Panel", ToggleInfo),
             MenuItem::action("Outline", ToggleOutline),
+            MenuItem::action("Recent Files", crate::workspace::ToggleRecent),
             MenuItem::action("Quick Open…", QuickOpen),
             MenuItem::action("Go to Heading…", GoToHeading),
             MenuItem::action("Focus Mode", ToggleFocusMode),

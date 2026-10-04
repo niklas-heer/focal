@@ -23,7 +23,10 @@ use crate::settings::{
 use crate::switcher::GoToHeading;
 use crate::theme::{DIMMED, MONO_FONT, Theme};
 
-actions!(focal, [ToggleInfo, ToggleOutline, ToggleDarkMode]);
+actions!(
+    focal,
+    [ToggleInfo, ToggleOutline, ToggleRecent, ToggleDarkMode]
+);
 
 pub const PANEL_WIDTH: f32 = 300.;
 
@@ -32,6 +35,7 @@ pub const PANEL_WIDTH: f32 = 300.;
 pub enum PanelTab {
     Info,
     Outline,
+    Recent,
 }
 
 impl Workspace {
@@ -129,6 +133,7 @@ impl Workspace {
         let body = match tab {
             PanelTab::Info => self.render_info(theme, cx),
             PanelTab::Outline => self.render_outline(theme, cx),
+            PanelTab::Recent => render_recent(self.editor.read(cx).path(), theme, cx),
         };
         let tab_button = |id: &'static str, label: &'static str, which: PanelTab| {
             let selected = tab == which;
@@ -186,7 +191,8 @@ impl Workspace {
                                     "panel-tab-outline",
                                     "Outline",
                                     PanelTab::Outline,
-                                )),
+                                ))
+                                .child(tab_button("panel-tab-recent", "Recent", PanelTab::Recent)),
                         )
                         .child(
                             div()
@@ -508,6 +514,85 @@ fn writing_section(settings: &Settings, focus_mode: bool, theme: &Theme) -> impl
             |s, v| s.keyboard = v,
             theme,
         )))
+}
+
+/// The files and folders opened lately, the current one marked; a click
+/// opens one, or brings its window forward.
+fn render_recent(current: Option<&std::path::Path>, theme: &Theme, cx: &App) -> AnyElement {
+    let paths = cx
+        .try_global::<crate::recent::Recent>()
+        .map(crate::recent::Recent::existing)
+        .unwrap_or_default();
+    if paths.is_empty() {
+        return div()
+            .pt(px(8.))
+            .text_color(theme.marker)
+            .child("Files you open show here.")
+            .into_any_element();
+    }
+    let labels = crate::recent::labels(&paths);
+    let hover = theme.code_background;
+    let rows = paths
+        .into_iter()
+        .zip(labels)
+        .enumerate()
+        .map(|(ix, (path, label))| {
+            let selected = current == Some(path.as_path());
+            let icon = if path.is_dir() {
+                Icon::Folder
+            } else {
+                Icon::FileText
+            };
+            let folder = path
+                .parent()
+                .map(|folder| folder.to_string_lossy().replace(&home(), "~"))
+                .unwrap_or_default();
+            div()
+                .id(("recent", ix))
+                .test_support()
+                .px(px(8.))
+                .py(px(5.))
+                .rounded(px(6.))
+                .cursor_pointer()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .when(selected, |d| d.bg(theme.selection))
+                .when(!selected, |d| d.hover(move |style| style.bg(hover)))
+                .child(icon.element(14.).text_color(theme.marker))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap()
+                                .child(label),
+                        )
+                        .child(
+                            div()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap()
+                                .text_size(px(11.))
+                                .text_color(theme.marker)
+                                .child(folder),
+                        ),
+                )
+                .on_click(move |_, window, cx| {
+                    window.dispatch_action(Box::new(crate::recent::OpenRecent(path.clone())), cx);
+                })
+        });
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(1.))
+        .children(rows)
+        .into_any_element()
 }
 
 /// The corner's "more" menu: what the File and View menus hold for this
