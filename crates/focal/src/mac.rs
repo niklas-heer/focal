@@ -5,7 +5,9 @@ use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSAlertStyle, NSAppearance,
     NSApplication, NSPasteboard,
 };
-use objc2_foundation::{NSBundle, NSString};
+use objc2_foundation::{
+    NSBundle, NSFileManager, NSFileManagerItemReplacementOptions, NSString, NSURL,
+};
 
 use crate::settings::Appearance;
 
@@ -225,4 +227,26 @@ pub fn bundle_build() -> Option<String> {
     let build = value.downcast::<NSString>().ok()?.to_string();
     // A development binary has no bundle of its own.
     (!build.is_empty() && crate::cli_install::bundled_binary().is_some()).then_some(build)
+}
+
+/// Puts the file at `replacement` in place of `original` in one step, as
+/// macOS's own document saving does: the original's permissions, Finder
+/// tags and other metadata carry over, and a reader sees either the old
+/// file or the new one, never a half-written one.
+pub fn replace_file(
+    original: &std::path::Path,
+    replacement: &std::path::Path,
+) -> Result<(), String> {
+    let url = |path: &std::path::Path| {
+        NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()))
+    };
+    NSFileManager::defaultManager()
+        .replaceItemAtURL_withItemAtURL_backupItemName_options_resultingItemURL_error(
+            &url(original),
+            &url(replacement),
+            None,
+            NSFileManagerItemReplacementOptions::empty(),
+            None,
+        )
+        .map_err(|error| error.localizedDescription().to_string())
 }

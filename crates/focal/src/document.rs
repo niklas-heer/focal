@@ -99,11 +99,52 @@ impl Document {
             };
             encoding::encode(text, &self.format).unwrap_or_else(|| text.as_bytes().to_vec())
         };
-        fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))?;
+        write_replacing(path, &bytes).with_context(|| format!("writing {}", path.display()))?;
         self.stamp = Stamp::of(path);
         self.saved_version = version;
         Ok(())
     }
+}
+
+/// Writes `bytes` to `path` so that the file is never left half-written:
+/// into a file beside it first, flushed to disk, which then takes the
+/// original's place (keeping its permissions and metadata). A symbolic link
+/// stays a link, and the file it names is replaced. Where no file can be
+/// made beside it, the file is written in place.
+pub fn write_replacing(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let is_link = fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink());
+    let target = if is_link {
+        fs::canonicalize(path)?
+    } else {
+        path.to_path_buf()
+    };
+    let (Some(dir), Some(name)) = (target.parent(), target.file_name()) else {
+        return fs::write(&target, bytes);
+    };
+    let temporary = dir.join(format!(".{}.focal-save", name.to_string_lossy()));
+    let written = fs::File::create(&temporary).and_then(|mut file| {
+        file.write_all(bytes)?;
+        file.sync_all()
+    });
+    if let Err(error) = written {
+        let _ = fs::remove_file(&temporary);
+        // A folder Focal may not create files in, but a file it may write.
+        return if error.kind() == ErrorKind::PermissionDenied {
+            fs::write(&target, bytes)
+        } else {
+            Err(error)
+        };
+    }
+    let replaced = if target.exists() {
+        crate::mac::replace_file(&target, &temporary).map_err(std::io::Error::other)
+    } else {
+        fs::rename(&temporary, &target)
+    };
+    if replaced.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    replaced
 }
 
 /// Whether windows watch their files and folders. UI tests do not: FSEvents
@@ -155,6 +196,64 @@ fn is_not_found(error: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saving_replaces_the_file_and_keeps_its_metadata() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = crate::folder::tests::temp_folder("atomic-save");
+        let path = dir.join("note.md");
+        fs::write(&path, "old").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let tagged = std::process::Command::new("xattr")
+            .args(["-w", "com.focal.test", "kept"])
+            .arg(&path)
+            .status()
+            .is_ok_and(|s| s.success());
+        write_replacing(&path, b"new").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        if tagged {
+            let out = std::process::Command::new("xattr")
+                .args(["-p", "com.focal.test"])
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "kept");
+        }
+        let names: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["note.md"], "no temporary file is left");
+    }
+
+    #[test]
+    fn saving_through_a_link_keeps_the_link() {
+        let dir = crate::folder::tests::temp_folder("atomic-link");
+        let real = dir.join("real.md");
+        let link = dir.join("link.md");
+        fs::write(&real, "old").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        write_replacing(&link, b"new").unwrap();
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read_to_string(&real).unwrap(), "new");
+    }
+
+    #[test]
+    fn saving_creates_a_missing_file() {
+        let dir = crate::folder::tests::temp_folder("atomic-new");
+        let path = dir.join("new.md");
+        write_replacing(&path, b"hello").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "hello");
+    }
 
     fn next_event(rx: &async_channel::Receiver<()>) -> bool {
         let rx = rx.clone();
