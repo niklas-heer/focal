@@ -160,6 +160,31 @@ pub struct LineInfo {
     pub centered: bool,
 }
 
+impl LineInfo {
+    /// Hashes how the line is drawn, with its byte offsets taken from
+    /// `line_start`, so that an edit above it leaves the hash alone.
+    pub fn hash_from<H: std::hash::Hasher>(&self, line_start: usize, state: &mut H) {
+        use std::hash::Hash as _;
+        let local = |range: &Range<usize>| {
+            range.start.saturating_sub(line_start)..range.end.saturating_sub(line_start)
+        };
+        self.kind.hash(state);
+        self.quote_depth.hash(state);
+        self.alert.hash(state);
+        self.code_block.hash(state);
+        self.prefix.levels.hash(state);
+        self.prefix
+            .content_start
+            .saturating_sub(line_start)
+            .hash(state);
+        self.prefix.marker.as_ref().map(local).hash(state);
+        for quote in &self.prefix.quotes {
+            local(quote).hash(state);
+        }
+        self.centered.hash(state);
+    }
+}
+
 /// A list item's marker, drawn in the item's marker column.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ListMarker {
@@ -1700,6 +1725,24 @@ fn bucket<'r>(
 #[allow(clippy::single_range_in_vec_init)] // one marker per line is common here
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_hashes_ignore_edits_above() {
+        use std::hash::{DefaultHasher, Hasher as _};
+        let hash = |text: &str, line: usize| {
+            let analysis = analyze(text);
+            let mut hasher = DefaultHasher::new();
+            analysis
+                .info(line)
+                .hash_from(analysis.lines.range(line).start, &mut hasher);
+            hasher.finish()
+        };
+        let before = "Intro\n\n> - [ ] task\n";
+        let after = "Intro, longer\n\n> - [ ] task\n";
+        assert_eq!(hash(before, 2), hash(after, 2));
+        assert_ne!(hash(before, 2), hash("Intro\n\n> 1. [ ] task\n", 2));
+        assert_ne!(hash(before, 2), hash("Intro\n\n>   - [ ] task\n", 2));
+    }
 
     fn marker_texts<'t>(text: &'t str, analysis: &Analysis) -> Vec<&'t str> {
         analysis

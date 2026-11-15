@@ -3012,3 +3012,41 @@ fn a_changed_table_is_marked_in_the_margin(cx: &mut TestAppContext) {
         );
     });
 }
+
+#[gpui_kit::test]
+fn typing_at_the_end_of_a_long_paragraph_keeps_the_view_still(cx: &mut TestAppContext) {
+    // One paragraph taller than the window: a single row, scrolled into.
+    let paragraph = "Words that wrap across many lines of the column. ".repeat(300);
+    let text = format!("# Title\n\n{paragraph}\n\nAfter.\n");
+    let (window, editor) = open_editor(cx, &text);
+    for _ in 0..3 {
+        act(cx, window, |_, _| {});
+    }
+    let end = text.find("\n\nAfter").unwrap();
+    editor.update(cx, |e, cx| e.move_to(end, cx));
+    for _ in 0..8 {
+        act(cx, window, |_, _| {});
+    }
+    let before = editor.read_with(cx, |e, _| {
+        assert!(e.caret_in_view(), "the caret was revealed");
+        e.scroll_top()
+    });
+    assert!(before.1 > px(0.), "the view is inside the paragraph");
+    for _ in 0..5 {
+        act(cx, window, |window, cx| window.input("x", cx));
+        // Every frame, not only the settled one: a jump and its correction
+        // read as flicker.
+        for _ in 0..3 {
+            act(cx, window, |_, _| {});
+            editor.read_with(cx, |e, _| {
+                let now = e.scroll_top();
+                assert_eq!(now.0, before.0, "the same row stays on top");
+                assert!(
+                    (now.1 - before.1).abs() <= px(40.),
+                    "the view moved from {before:?} to {now:?}"
+                );
+                assert!(e.caret_in_view(), "the caret stays in view");
+            });
+        }
+    }
+}

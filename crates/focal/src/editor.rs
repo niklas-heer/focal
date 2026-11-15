@@ -1282,7 +1282,9 @@ impl Editor {
                     Row::Line(line) => {
                         views[line].text.hash(&mut hasher);
                         views[line].runs.hash(&mut hasher);
-                        analysis.info(line).hash(&mut hasher);
+                        analysis
+                            .info(line)
+                            .hash_from(analysis.lines.range(line).start, &mut hasher);
                         focus
                             .as_ref()
                             .map(|f| f.lines.contains(&line).then_some(&f.sentence))
@@ -1384,24 +1386,79 @@ impl Editor {
     fn reveal_caret(&mut self) {
         self.reveal_frames = 4;
         self.center_frames = 4;
+        if self.caret_in_view_painted() == Some(true) {
+            return;
+        }
         let row = self.head_row();
-        if self.row_in_view(row) != Some(true) {
-            self.list.scroll_to_reveal_item(row);
+        match self.row_in_view(row) {
+            Some(true) => {}
+            // Taller than the window: scrolling to the row's top would hide a
+            // caret near its end, so `keep_revealing` scrolls to the caret's
+            // line instead once it is drawn.
+            Some(false) if !self.row_fits(row) => {}
+            // Drawn in the last frame but just edited, so not measured yet:
+            // `keep_revealing` looks again once it is laid out where it is.
+            None if self.was_painted(row) => {}
+            _ => self.list.scroll_to_reveal_item(row),
         }
     }
 
     /// Whether row `row`'s text was in view in the last frame, leaving out
     /// the room below the last row; `None` when it was not laid out.
     fn row_in_view(&self, row: usize) -> Option<bool> {
-        let bounds = self.list.bounds_for_item(row)?;
+        let bounds = self.text_bounds(row)?;
         let viewport = self.list.viewport_bounds();
-        let last = row + 1 == self.snapshot.rows.len();
-        let bottom = if last && !self.typewriter_active() {
-            bounds.bottom() - END_PADDING
-        } else {
-            bounds.bottom()
-        };
-        Some(bounds.top() >= viewport.top() && bottom <= viewport.bottom())
+        Some(bounds.top() >= viewport.top() && bounds.bottom() <= viewport.bottom())
+    }
+
+    /// Row `row`'s bounds as laid out in the last frame, leaving out the room
+    /// below the last row.
+    fn text_bounds(&self, row: usize) -> Option<Bounds<Pixels>> {
+        let mut bounds = self.list.bounds_for_item(row)?;
+        if row + 1 == self.snapshot.rows.len() && !self.typewriter_active() {
+            bounds.size.height = (bounds.size.height - END_PADDING).max(px(0.));
+        }
+        Some(bounds)
+    }
+
+    /// Whether row `row` fits in the window, so that revealing it whole also
+    /// reveals the caret; true when it was not laid out.
+    fn row_fits(&self, row: usize) -> bool {
+        self.text_bounds(row)
+            .is_none_or(|bounds| bounds.size.height <= self.list.viewport_bounds().size.height)
+    }
+
+    /// The top and bottom of the caret's line where it was drawn in the last
+    /// frame, if the line still reads as it did then.
+    fn painted_caret_line(&self) -> Option<(Pixels, Pixels)> {
+        let head = self.head();
+        let line = self.snapshot.analysis.lines.line_of(head);
+        let current = self.snapshot.views.get(line)?;
+        self.painted.borrow().iter().find_map(|painted| {
+            if painted.row != Row::Line(line) {
+                return None;
+            }
+            let (layout, view) = (painted.layout.as_ref()?, painted.view.as_ref()?);
+            if **view != **current {
+                return None;
+            }
+            let position = layout.position_for_index(view.map.to_display(head))?;
+            Some((position.y, position.y + layout.line_height()))
+        })
+    }
+
+    /// Whether the caret's line was in view in the last frame; `None` when
+    /// it was not drawn as it reads now.
+    fn caret_in_view_painted(&self) -> Option<bool> {
+        let (top, bottom) = self.painted_caret_line()?;
+        let viewport = self.list.viewport_bounds();
+        Some(top >= viewport.top() && bottom <= viewport.bottom())
+    }
+
+    /// Whether the caret's line was in view in the last frame.
+    #[cfg(test)]
+    pub(crate) fn caret_in_view(&self) -> bool {
+        self.caret_in_view_painted() == Some(true)
     }
 
     /// Reveals the caret again once the rows the last reveal scrolled to
@@ -1412,10 +1469,28 @@ impl Editor {
         }
         self.reveal_frames -= 1;
         let row = self.head_row();
+        if self.caret_in_view_painted() == Some(true) {
+            self.reveal_frames = 0;
+            return;
+        }
         match self.row_in_view(row) {
             Some(true) => {
                 self.reveal_frames = 0;
                 return;
+            }
+            // A row taller than the window: bring the caret's line into view
+            // by the least scrolling, with a line to spare.
+            Some(false) if !self.row_fits(row) => {
+                if let Some((top, bottom)) = self.painted_caret_line() {
+                    let viewport = self.list.viewport_bounds();
+                    let spare = bottom - top;
+                    let delta = if bottom > viewport.bottom() {
+                        bottom - viewport.bottom() + spare
+                    } else {
+                        top - viewport.top() - spare
+                    };
+                    self.list.scroll_by(delta);
+                }
             }
             Some(false) => self.list.scroll_to_reveal_item(row),
             // In view in the last frame, but changed since (its syntax was
@@ -2046,16 +2121,9 @@ impl Editor {
             return;
         }
         self.center_frames -= 1;
-        let head = self.head();
-        let line = self.snapshot.analysis.lines.line_of(head);
-        let caret = self.painted.borrow().iter().find_map(|painted| {
-            if painted.row != Row::Line(line) {
-                return None;
-            }
-            let (layout, view) = (painted.layout.as_ref()?, painted.view.as_ref()?);
-            let position = layout.position_for_index(view.map.to_display(head))?;
-            Some(position.y + layout.line_height() / 2.)
-        });
+        let caret = self
+            .painted_caret_line()
+            .map(|(top, bottom)| (top + bottom) / 2.);
         let Some(caret) = caret else {
             window.request_animation_frame();
             return;
@@ -4024,7 +4092,19 @@ fn splice_changed_rows(list: &ListState, old: &[u64], new: &[u64]) -> usize {
         .take_while(|(a, b)| a == b)
         .count();
     if old.len() != new.len() || prefix != old.len() {
-        list.splice(prefix..old.len() - suffix, new.len() - prefix - suffix);
+        let changed = prefix..old.len() - suffix;
+        let count = new.len() - prefix - suffix;
+        let top = list.logical_scroll_top();
+        list.splice(changed.clone(), count);
+        // `splice` moves the view to the top of a replaced row it was inside;
+        // in a paragraph taller than the window that is a jump on every key.
+        // Stay at the same depth in the row that replaces it.
+        if changed.contains(&top.item_ix) && count > 0 {
+            list.scroll_to(gpui_kit::ListOffset {
+                item_ix: top.item_ix.min(prefix + count - 1),
+                offset_in_item: top.offset_in_item,
+            });
+        }
     }
     new.len() - prefix - suffix
 }
