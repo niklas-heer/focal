@@ -125,6 +125,7 @@ actions!(
         CopyHtml,
         Highlight,
         ShowInFinder,
+        ViewImage,
     ]
 );
 
@@ -145,6 +146,8 @@ pub enum EditorEvent {
     Searched(String),
     /// The review notes changed, or were copied.
     NotesChanged,
+    /// Show these images in the image viewer, starting with this one.
+    ViewImages(Vec<crate::viewer::ViewedImage>, usize),
 }
 
 impl EventEmitter<EditorEvent> for Editor {}
@@ -279,6 +282,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-alt-p", Print, context),
         KeyBinding::new("cmd-alt-shift-c", CopyHtml, context),
         KeyBinding::new("cmd-enter", OpenLink, context),
+        KeyBinding::new("cmd-y", ViewImage, context),
         KeyBinding::new("cmd-0", SetHeading(0), context),
         KeyBinding::new("cmd-1", SetHeading(1), context),
         KeyBinding::new("cmd-2", SetHeading(2), context),
@@ -1097,6 +1101,12 @@ impl Editor {
     fn open_link(&mut self, _: &OpenLink, _: &mut Window, cx: &mut Context<Self>) {
         let head = self.head();
         self.follow_link(head, cx);
+    }
+
+    /// Opens the image viewer on the image at the caret, or on its line.
+    fn view_image(&mut self, _: &ViewImage, _: &mut Window, cx: &mut Context<Self>) {
+        let head = self.head();
+        self.view_image_at(head, cx);
     }
 
     /// Selects `range`, clamped to the text, as "back" does.
@@ -4449,6 +4459,7 @@ impl Render for Editor {
             .on_action(cx.listener(Self::inline_code))
             .on_action(cx.listener(Self::insert_link))
             .on_action(cx.listener(Self::open_link))
+            .on_action(cx.listener(Self::view_image))
             .on_action(cx.listener(Self::export_html))
             .on_action(cx.listener(Self::export_pdf))
             .on_action(cx.listener(Self::print))

@@ -16,12 +16,14 @@ use focal_core::links;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, Context, Image, ImageFormat, InteractiveElement as _, IntoElement, ObjectFit,
-    ParentElement as _, StatefulInteractiveElement as _, Styled as _, StyledImage as _,
-    TestSupportExt as _, canvas, div, img, px,
+    ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _,
+    StyledImage as _, TestSupportExt as _, canvas, div, img, px,
 };
 
-use crate::editor::{Editor, Island, IslandKind, PaintedRow, Row};
+use crate::editor::{Editor, EditorEvent, Island, IslandKind, PaintedRow, Row};
+use crate::icons::Icon;
 use crate::theme::Theme;
+use crate::viewer::ViewedImage;
 use crate::{diagram, math};
 
 /// A drawn diagram's language, source and palette.
@@ -455,37 +457,48 @@ impl Editor {
             Picture::Ready(path) => {
                 let missing = format!("Image not found: {}", image.destination);
                 let marker = theme.marker;
+                let group = SharedString::from(format!("{id}-{line}"));
+                let expand = self.view_image_button(id, line, group.clone(), theme, cx);
                 div()
                     .id((id, line))
                     .test_support()
                     .aria_label(image.alt.clone())
                     .py(px(6.))
-                    .when(image.centered, |d| d.flex().justify_center())
+                    // A row, so the image's frame is as wide as the image.
+                    .flex()
+                    .when(image.centered, |d| d.justify_center())
                     .child(
-                        img(path.clone())
-                            .map(|image| {
-                                // GPUI sizes an image to its pixels; size it to fit instead.
-                                match imagesize::size(&path) {
-                                    Ok(size) => {
-                                        let (width, height) = fit(
-                                            size.width as f32,
-                                            size.height as f32,
-                                            column,
-                                            MAX_IMAGE_HEIGHT,
-                                        );
-                                        image.w(px(width)).h(px(height))
-                                    }
-                                    Err(_) => image.max_w_full(),
-                                }
-                            })
-                            .rounded(px(6.))
-                            .object_fit(ObjectFit::Contain)
-                            .with_fallback(move || {
-                                div()
-                                    .text_color(marker)
-                                    .child(missing.clone())
-                                    .into_any_element()
-                            }),
+                        div()
+                            .group(group)
+                            .relative()
+                            .flex_none()
+                            .child(
+                                img(path.clone())
+                                    .map(|image| {
+                                        // GPUI sizes an image to its pixels; size it to fit instead.
+                                        match imagesize::size(&path) {
+                                            Ok(size) => {
+                                                let (width, height) = fit(
+                                                    size.width as f32,
+                                                    size.height as f32,
+                                                    column,
+                                                    MAX_IMAGE_HEIGHT,
+                                                );
+                                                image.w(px(width)).h(px(height))
+                                            }
+                                            Err(_) => image.max_w_full(),
+                                        }
+                                    })
+                                    .rounded(px(6.))
+                                    .object_fit(ObjectFit::Contain)
+                                    .with_fallback(move || {
+                                        div()
+                                            .text_color(marker)
+                                            .child(missing.clone())
+                                            .into_any_element()
+                                    }),
+                            )
+                            .child(expand),
                     )
                     .into_any_element()
             }
@@ -495,6 +508,56 @@ impl Editor {
                 format!("Image not found: {}", image.destination),
             ),
         }
+    }
+
+    /// The button over an image, shown while the pointer is on it, that
+    /// opens the image viewer.
+    fn view_image_button(
+        &self,
+        id: &'static str,
+        line: usize,
+        group: SharedString,
+        theme: &Theme,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let offset = self.snapshot.analysis.lines.range(line).start;
+        let button_id = if id == "image-island" {
+            "view-image"
+        } else {
+            "view-image-preview"
+        };
+        div()
+            .id((button_id, line))
+            .test_support()
+            .aria_label("View image")
+            .tooltip(|window, cx| {
+                gpui_kit::component::tooltip::Tooltip::new("View image")
+                    .action(&crate::editor::ViewImage, Some(crate::editor::CONTEXT))
+                    .build(window, cx)
+            })
+            .absolute()
+            .top(px(8.))
+            .right(px(8.))
+            .size(px(28.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(7.))
+            .bg(theme.surface)
+            .border_1()
+            .border_color(theme.rule)
+            .text_color(theme.text)
+            .cursor_pointer()
+            .opacity(0.)
+            .group_hover(group, |style| style.opacity(0.92))
+            .child(Icon::Maximize.element(14.).text_color(theme.text))
+            .on_mouse_down(
+                gpui_kit::MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.view_image_at(offset, cx);
+                }),
+            )
     }
 
     /// Finds an image's file: next to the document for a relative path, in
@@ -545,6 +608,13 @@ impl Editor {
             }
             return Picture::Loading;
         }
+        self.local_picture(destination, wiki)
+            .map_or(Picture::Missing, Picture::Ready)
+    }
+
+    /// The file of an image on disk: next to the document for a relative
+    /// path, anywhere in the folder for an Obsidian embed.
+    fn local_picture(&self, destination: &str, wiki: bool) -> Option<PathBuf> {
         let local = destination.strip_prefix("file://").unwrap_or(destination);
         let path = if Path::new(local).is_absolute() {
             Some(PathBuf::from(links::percent_decode(local)))
@@ -554,13 +624,50 @@ impl Editor {
                 .and_then(|dir| links::relative_target(local, dir))
         };
         match path {
-            Some(path) if path.is_file() => Picture::Ready(path),
+            Some(path) if path.is_file() => Some(path),
             // Obsidian finds an embed anywhere in the vault.
-            _ if wiki => self
-                .found_file(local)
-                .map_or(Picture::Missing, Picture::Ready),
-            _ => Picture::Missing,
+            _ if wiki => self.found_file(local),
+            _ => None,
         }
+    }
+
+    /// The document's images that are at hand (on disk, or downloaded),
+    /// in order, and which of them is at `offset` or else on its line.
+    pub(crate) fn viewable_images(&self, offset: usize) -> (Vec<ViewedImage>, Option<usize>) {
+        let analysis = &self.snapshot.analysis;
+        let line = analysis.lines.line_of(offset);
+        let (mut images, mut at, mut on_line) = (Vec::new(), None, None);
+        for image in &analysis.images {
+            let remote = image.destination.starts_with("http://")
+                || image.destination.starts_with("https://");
+            let path = if remote {
+                cached_path(&image.destination).filter(|path| path.is_file())
+            } else {
+                self.local_picture(&image.destination, image.wiki)
+            };
+            let Some(path) = path else {
+                continue;
+            };
+            if image.range.start <= offset && offset <= image.range.end {
+                at.get_or_insert(images.len());
+            }
+            if analysis.lines.line_of(image.range.start) == line {
+                on_line.get_or_insert(images.len());
+            }
+            let title = crate::viewer::title(&image.alt, &path);
+            images.push(ViewedImage { path, title });
+        }
+        (images, at.or(on_line))
+    }
+
+    /// Opens the image viewer on the image at `offset`, if there is one.
+    pub(crate) fn view_image_at(&mut self, offset: usize, cx: &mut Context<Self>) -> bool {
+        let (images, index) = self.viewable_images(offset);
+        let Some(index) = index else {
+            return false;
+        };
+        cx.emit(EditorEvent::ViewImages(images, index));
+        true
     }
 
     /// The file named `name` anywhere in the folder links resolve in; a

@@ -191,6 +191,7 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::action("Default Text Size", DefaultTextSize),
             MenuItem::separator(),
             MenuItem::action("Open Link", OpenLink),
+            MenuItem::action("View Image", crate::editor::ViewImage),
             MenuItem::action("Back", GoBack),
         ]),
         window_menu(),

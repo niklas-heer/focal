@@ -35,9 +35,12 @@ macro_rules! icons {
 icons! {
     Bold => "bold",
     ChevronDown => "chevron-down",
+    ChevronLeft => "chevron-left",
+    ChevronRight => "chevron-right",
     Clock => "clock",
     Code => "code",
     Ellipsis => "ellipsis",
+    ExternalLink => "external-link",
     FileText => "file-text",
     Focus => "focus",
     Folder => "folder",
@@ -52,9 +55,11 @@ icons! {
     ListOrdered => "list-ordered",
     ListTree => "list-tree",
     List => "list",
+    Maximize => "maximize-2",
     Moon => "moon",
     PanelRight => "panel-right",
     PenLine => "pen-line",
+    Scan => "scan",
     Search => "search",
     Settings => "settings",
     Shapes => "shapes",
@@ -67,6 +72,8 @@ icons! {
     TextQuote => "text-quote",
     Type => "type",
     X => "x",
+    ZoomIn => "zoom-in",
+    ZoomOut => "zoom-out",
 }
 
 impl Icon {

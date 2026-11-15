@@ -26,7 +26,7 @@ pub const BAR_REACH: f32 = BAR_HEIGHT + 2. * BAR_MARGIN;
 
 /// A bar button with a tooltip that names it and, for an action with a
 /// shortcut, shows the keys.
-fn button(
+pub(crate) fn button(
     id: &'static str,
     label: impl IntoElement,
     tooltip: &'static str,
@@ -89,7 +89,7 @@ fn heading_menu(event: &ClickEvent, window: &mut Window, cx: &mut App) {
     menu.show(event.position(), window, cx);
 }
 
-fn separator(theme: &Theme) -> impl IntoElement {
+pub(crate) fn separator(theme: &Theme) -> impl IntoElement {
     div().w(px(1.)).h(px(18.)).mx(px(4.)).bg(theme.rule)
 }
 

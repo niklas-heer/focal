@@ -85,7 +85,8 @@ Code blocks with a diagram language draw in place, in Focal's colors, light or d
 
 - **Diagrams:** Mermaid (all 22 diagram types), Graphviz, Svgbob, Pikchr, WaveDrom, Vega and Vega-Lite, GeoJSON and TopoJSON maps, and STL models, all drawn by Focal itself. D2 and PlantUML work when their tools are installed (see [below](#optional-diagram-tools)).
 - **Math:** `$…$`, `$$…$$` and the other common notations, typeset with MathJax.
-- **Images**, front matter, footnotes with previews, callouts and alerts, foldable sections, `[[wiki links]]`, tags, emoji shortcodes and tables of contents.
+- **Images**, which open full-window (⌘Y, or the button on an image) to zoom with a pinch, ⌘-scroll or ⌘+, pan by dragging, step through with the arrow keys, or open in Preview.
+- Front matter, footnotes with previews, callouts and alerts, foldable sections, `[[wiki links]]`, tags, emoji shortcodes and tables of contents.
 
 ### Folders
 
@@ -118,6 +119,7 @@ Whatever wrote the file, it should look right. Focal reads GitHub-flavored Markd
 | ⌘K | Insert a link |
 | ⌘1 to ⌘6, ⌘0 | Heading level, back to a paragraph |
 | ⌘-click, ⌘↩ | Follow a link, wiki link or footnote |
+| ⌘Y | View the image at the caret (Esc closes) |
 | ⌘[ | Go back |
 | ⌘D | Focus mode |
 | ⌘=, ⌘− | Bigger or smaller text |

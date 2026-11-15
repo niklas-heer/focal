@@ -39,6 +39,7 @@ mod tools;
 mod ui_tests;
 mod updates;
 mod vega;
+mod viewer;
 mod windows;
 mod workspace;
 mod writing_tools;
@@ -219,6 +220,7 @@ fn run_app(launch: Launch) {
         workspace::bind_keys(cx);
         switcher::bind_keys(cx);
         find_bar::bind_keys(cx);
+        viewer::bind_keys(cx);
         windows::bind_keys(cx);
         settings::init(cx);
         about::init(cx);

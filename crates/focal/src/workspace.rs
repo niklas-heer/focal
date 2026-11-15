@@ -20,6 +20,7 @@ use crate::folder;
 use crate::instance::Request;
 use crate::switcher::{GoToHeading, PickItem, QuickOpen, Switcher, SwitcherEvent};
 use crate::theme::Theme;
+use crate::viewer::{ImageViewer, ViewedImage, ViewerEvent};
 
 mod keys;
 mod notes_tab;
@@ -113,6 +114,8 @@ pub struct Workspace {
     key_reference: Option<gpui_kit::FocusHandle>,
     /// The sidebar shows only files with this tag.
     tag_filter: Option<String>,
+    /// The image viewer, while it is open.
+    viewer: Option<(Entity<ImageViewer>, gpui_kit::Subscription)>,
 }
 
 impl Workspace {
@@ -139,6 +142,7 @@ impl Workspace {
             panel: None,
             key_reference: None,
             tag_filter: None,
+            viewer: None,
         }
     }
 
@@ -155,6 +159,9 @@ impl Workspace {
             EditorEvent::Jumped(from) => self.history.push((here, from.clone())),
             EditorEvent::Searched(query) => self.last_query = Some(query.clone()),
             EditorEvent::NotesChanged => cx.notify(),
+            EditorEvent::ViewImages(images, index) => {
+                self.open_viewer(images.clone(), *index, window, cx);
+            }
             EditorEvent::Open(path) => {
                 let in_folder = self
                     .folder
@@ -498,6 +505,32 @@ impl Workspace {
                 .update(cx, |editor, cx| editor.select(at..at, cx));
         };
         self.open_picker(items, "Go to a heading…", empty, on_pick, window, cx);
+    }
+
+    fn open_viewer(
+        &mut self,
+        images: Vec<ViewedImage>,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let viewer = cx.new(|cx| ImageViewer::new(images, index, window, cx));
+        let subscription = cx.subscribe_in(&viewer, window, |this, _, event, window, cx| {
+            let ViewerEvent::Dismiss = event;
+            this.viewer = None;
+            let handle = this.editor.read(cx).focus_handle(cx);
+            window.focus(&handle, cx);
+            cx.notify();
+        });
+        window.focus(&viewer.focus_handle(cx), cx);
+        self.viewer = Some((viewer, subscription));
+        cx.notify();
+    }
+
+    /// The image viewer, while it is open.
+    #[cfg(test)]
+    pub(crate) fn viewer(&self) -> Option<&Entity<ImageViewer>> {
+        self.viewer.as_ref().map(|(viewer, _)| viewer)
     }
 
     fn open_picker(
@@ -1001,5 +1034,8 @@ impl Render for Workspace {
                 )
             })
             .children(self.render_key_reference(&theme, cx))
+            .when_some(self.viewer.as_ref(), |d, (viewer, _)| {
+                d.child(viewer.clone())
+            })
     }
 }

@@ -29,6 +29,7 @@ pub fn open_document(
         editor::bind_keys(cx);
         crate::workspace::bind_keys(cx);
         crate::find_bar::bind_keys(cx);
+        crate::viewer::bind_keys(cx);
         // Tests never read or write the user's settings file.
         cx.set_global(Settings::default());
         let bounds = Bounds {
@@ -617,6 +618,7 @@ fn open_folder(
         editor::bind_keys(cx);
         crate::workspace::bind_keys(cx);
         crate::switcher::bind_keys(cx);
+        crate::viewer::bind_keys(cx);
         cx.set_global(Settings::default());
         let bounds = Bounds {
             origin: point(px(0.), px(0.)),
@@ -3049,4 +3051,89 @@ fn typing_at_the_end_of_a_long_paragraph_keeps_the_view_still(cx: &mut TestAppCo
             });
         }
     }
+}
+
+/// A 4000×1000 PNG's header: enough for its size, which is all the viewer
+/// reads before drawing.
+fn wide_png() -> Vec<u8> {
+    let mut png = PIXEL.to_vec();
+    png[16..20].copy_from_slice(&4000u32.to_be_bytes());
+    png[20..24].copy_from_slice(&1000u32.to_be_bytes());
+    png
+}
+
+#[gpui_kit::test]
+fn the_image_viewer_zooms_steps_and_closes(cx: &mut TestAppContext) {
+    let root = image_folder("viewer", "![A pixel](pixel.png)\n\nText\n\n![](wide.png)\n");
+    std::fs::write(root.join("wide.png"), wide_png()).unwrap();
+    let (window, workspace) = open_folder(cx, &root);
+    act(cx, window, |_, _| {});
+    // From the second image's line.
+    let editor = editor_of(cx, &workspace);
+    editor.update(cx, |e, cx| e.move_to(29, cx));
+    act(cx, window, |window, cx| window.press("cmd-y", cx));
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find("image-viewer").is_some(),
+            "the viewer opened"
+        );
+    });
+    let viewer = workspace.read_with(cx, |w, _| w.viewer().cloned().expect("open"));
+    let fitted = viewer.read_with(cx, |v, _| {
+        assert!(v.current().unwrap().path.ends_with("wide.png"));
+        assert_eq!(v.current().unwrap().title, "wide.png");
+        v.scale()
+    });
+    assert!(fitted < 1., "a wide image is shrunk to fit: {fitted}");
+    act(cx, window, |window, cx| window.press("=", cx));
+    let zoomed = viewer.read_with(cx, |v, _| v.scale());
+    assert!(zoomed > fitted);
+    act(cx, window, |window, cx| window.press("0", cx));
+    viewer.read_with(cx, |v, _| assert!((v.scale() - fitted).abs() < 0.001));
+    act(cx, window, |window, cx| window.press("right", cx));
+    viewer.read_with(cx, |v, _| {
+        assert_eq!(
+            v.current().unwrap().title,
+            "A pixel",
+            "the next image, round"
+        );
+    });
+    act(cx, window, |window, cx| window.press("escape", cx));
+    act(cx, window, |window, cx| {
+        assert!(window.try_find("image-viewer").is_none(), "closed");
+        window.input("x", cx);
+    });
+    editor.read_with(cx, |e, _| {
+        assert!(
+            e.text().contains("x![](wide.png)"),
+            "the editor has the keys again"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn an_images_button_opens_the_viewer_without_moving_the_caret(cx: &mut TestAppContext) {
+    let root = image_folder("viewer-button", "Above\n\n![A strip](wide.png)\n");
+    std::fs::write(root.join("wide.png"), wide_png()).unwrap();
+    let (window, workspace) = open_folder(cx, &root);
+    act(cx, window, |_, _| {});
+    let before = editor_of(cx, &workspace).read_with(cx, |e, _| e.selection());
+    act(cx, window, |window, _| {
+        assert!(
+            !window.find(("view-image", 2usize)).visible(),
+            "hidden until hovered"
+        );
+    });
+    act(cx, window, |window, cx| {
+        window.hover(("image-island", 2usize), cx);
+    });
+    act(cx, window, |window, cx| {
+        window.click(("view-image", 2usize), cx);
+    });
+    act(cx, window, |_, _| {});
+    workspace.read_with(cx, |w, cx| {
+        let viewer = w.viewer().expect("the viewer opened");
+        assert_eq!(viewer.read(cx).current().unwrap().title, "A strip");
+    });
+    editor_of(cx, &workspace).read_with(cx, |e, _| assert_eq!(e.selection(), before));
 }
