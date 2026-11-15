@@ -3137,3 +3137,136 @@ fn an_images_button_opens_the_viewer_without_moving_the_caret(cx: &mut TestAppCo
     });
     editor_of(cx, &workspace).read_with(cx, |e, _| assert_eq!(e.selection(), before));
 }
+
+/// A file `name` with `text` in a new temporary folder, opened in a window.
+fn open_temp_file(
+    cx: &mut TestAppContext,
+    folder: &str,
+    text: &str,
+) -> (AnyWindowHandle, Entity<Editor>, std::path::PathBuf) {
+    let dir = crate::folder::tests::temp_folder(folder);
+    let path = dir.join("note.md");
+    std::fs::write(&path, text).unwrap();
+    let (document, text) = Document::open(path.clone()).unwrap();
+    let (window, workspace) = open_document(cx, document, &text);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    (window, editor, path)
+}
+
+#[gpui_kit::test]
+fn piped_text_is_unsaved_from_the_start(cx: &mut TestAppContext) {
+    let (_, workspace) = open_document(cx, Document::unsaved(), "from a pipe");
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    editor.read_with(cx, |e, _| {
+        assert!(e.asks_before_closing(), "closing asks before losing it");
+    });
+}
+
+#[gpui_kit::test]
+fn a_save_never_overwrites_a_file_changed_on_disk(cx: &mut TestAppContext) {
+    let (window, editor, path) = open_temp_file(cx, "save-conflict", "mine");
+    act(cx, window, |window, cx| {
+        window.press("cmd-down", cx);
+        window.input(" and more", cx);
+    });
+    // Another program writes the file before Focal noticed (no watcher in
+    // tests), then the user saves.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(&path, "theirs").unwrap();
+    act(cx, window, |window, cx| window.press("cmd-s", cx));
+    cx.run_until_parked();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "theirs");
+    editor.read_with(cx, |e, _| assert!(e.asks_before_closing(), "a conflict"));
+    // Saving again still leaves the choice to the banner.
+    act(cx, window, |window, cx| window.press("cmd-s", cx));
+    cx.run_until_parked();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "theirs");
+    act(cx, window, |window, cx| window.click("keep-mine", cx));
+    cx.run_until_parked();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "mine and more");
+}
+
+#[gpui_kit::test]
+fn the_same_text_written_elsewhere_is_no_conflict(cx: &mut TestAppContext) {
+    let (window, editor, path) = open_temp_file(cx, "save-same", "mine");
+    act(cx, window, |window, cx| {
+        window.press("cmd-down", cx);
+        window.input("!", cx);
+    });
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(&path, "mine!").unwrap();
+    act(cx, window, |window, cx| window.press("cmd-s", cx));
+    cx.run_until_parked();
+    editor.read_with(cx, |e, _| assert!(!e.asks_before_closing()));
+}
+
+#[gpui_kit::test]
+fn a_failed_save_keeps_the_window_open(cx: &mut TestAppContext) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let (window, editor, path) = open_temp_file(cx, "save-fails", "text");
+    let dir = path.parent().unwrap().to_path_buf();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    act(cx, window, |window, cx| {
+        window.press("cmd-down", cx);
+        window.input(" more", cx);
+    });
+    act(cx, window, |window, cx| window.press("cmd-s", cx));
+    act(cx, window, |window, cx| window.press("cmd-w", cx));
+    cx.run_until_parked();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(cx.update(|cx| cx.windows().len()), 1, "the window stays");
+    editor.read_with(cx, |e, _| {
+        assert!(e.asks_before_closing());
+        assert_eq!(e.text(), "text more");
+    });
+    act(cx, window, |window, _| {
+        let banner = window.find("error-banner");
+        assert!(banner.label().unwrap().starts_with("Could not save"));
+    });
+}
+
+#[gpui_kit::test]
+fn opening_another_file_keeps_edits_that_conflict(cx: &mut TestAppContext) {
+    let root = crate::folder::tests::temp_folder("switch-conflict");
+    std::fs::write(root.join("a.md"), "a").unwrap();
+    std::fs::write(root.join("b.md"), "b").unwrap();
+    let (window, workspace) = open_folder(cx, &root);
+    let a = root.join("a.md");
+    act(cx, window, |window, cx| {
+        workspace.update(cx, |w, cx| w.open_file(a.clone(), window, cx));
+    });
+    act(cx, window, |window, cx| {
+        window.press("cmd-down", cx);
+        window.input(" edited", cx);
+    });
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(&a, "theirs").unwrap();
+    let b = root.join("b.md");
+    act(cx, window, |window, cx| {
+        workspace.update(cx, |w, cx| w.open_file(b.clone(), window, cx));
+    });
+    cx.run_until_parked();
+    let editor = editor_of(cx, &workspace);
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.path(), Some(a.as_path()), "still on a, asking");
+        assert_eq!(e.text(), "a edited");
+    });
+    assert_eq!(std::fs::read_to_string(&a).unwrap(), "theirs");
+}
+
+#[gpui_kit::test]
+fn a_reload_keeps_the_caret_on_a_character(cx: &mut TestAppContext) {
+    let (window, editor, path) = open_temp_file(cx, "reload-caret", "abc");
+    editor.update(cx, |e, cx| e.move_to(1, cx));
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(&path, "ébc").unwrap();
+    editor.update(cx, |e, cx| e.check_disk(cx));
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.text(), "ébc");
+        assert_eq!(e.selection(), 2..2, "after é, before b, as it was");
+    });
+    act(cx, window, |window, cx| window.press("left", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 0..0));
+}

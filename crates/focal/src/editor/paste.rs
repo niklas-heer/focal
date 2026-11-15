@@ -122,7 +122,7 @@ impl Editor {
                 "Save the document first: images and links are kept beside it.".to_owned(),
                 cx,
             );
-            self.save_as(false, window, cx);
+            self.save_as(super::AfterSave::Stay, window, cx);
             return None;
         };
         let folder = cx.global::<Settings>().images_folder.clone();

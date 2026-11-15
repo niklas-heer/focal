@@ -152,6 +152,15 @@ pub enum EditorEvent {
 
 impl EventEmitter<EditorEvent> for Editor {}
 
+/// What follows a save, once the text is on disk.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum AfterSave {
+    Stay,
+    Close,
+    /// Open this file in the document's place.
+    Open(PathBuf),
+}
+
 /// What the bottom bar shows about the document and the caret.
 pub(crate) struct BarState {
     /// How the file is stored, when it is not plain UTF-8.
@@ -439,6 +448,8 @@ pub struct Editor {
     /// The word count of a text version, for the bottom bar.
     word_count: Cell<Option<(u64, usize)>>,
     conflict: bool,
+    /// The last save could not write the file.
+    save_failed: bool,
     error: Option<String>,
     trace: bool,
     spell: RefCell<SpellChecker>,
@@ -572,6 +583,7 @@ impl Editor {
             remeasured: false,
             word_count: Cell::new(None),
             conflict: false,
+            save_failed: false,
             error: None,
             trace: std::env::var_os("FOCAL_TRACE").is_some(),
             spell: RefCell::new(SpellChecker::new()),
@@ -649,6 +661,10 @@ impl Editor {
             editor.refresh();
         }
         editor.watch_document(cx);
+        // Unsaved text from the start (piped in) is kept as a draft at once.
+        if editor.document.path.is_none() && editor.dirty() {
+            editor.schedule_save(cx);
+        }
         editor
     }
 
@@ -1111,8 +1127,11 @@ impl Editor {
 
     /// Selects `range`, clamped to the text, as "back" does.
     pub(crate) fn select(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
-        let len = self.text().len();
-        self.selection = range.start.min(len)..range.end.min(len);
+        // A position kept from before the file changed may fall inside a
+        // character now.
+        let text = self.text();
+        self.selection =
+            floor_char_boundary(text, range.start)..floor_char_boundary(text, range.end);
         self.reversed = false;
         self.after_selection(cx);
     }
@@ -1126,11 +1145,12 @@ impl Editor {
         self.document.path.as_deref()
     }
 
-    /// Writes an open table cell into the text and saves, before the editor is
-    /// replaced by another file's.
-    pub(crate) fn flush(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Writes an open table cell into the text and saves, as leaving the
+    /// document does. Tells whether the file now holds the text.
+    #[cfg(test)]
+    pub(crate) fn flush(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         self.close_cell(window, cx);
-        self.save_now(cx);
+        self.save_now(cx)
     }
 
     #[cfg(test)]
@@ -2166,35 +2186,66 @@ impl Editor {
     }
 
     fn save(&mut self, _: &Save, window: &mut Window, cx: &mut Context<Self>) {
-        self.save_as(false, window, cx);
+        self.save_as(AfterSave::Stay, window, cx);
     }
 
-    /// Saves, asking where for an untitled document, then closes the window
-    /// when `close`.
-    fn save_as(&mut self, close: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.document.path.is_some() {
-            self.conflict = false;
-            self.save_now(cx);
-            if close {
-                window.remove_window();
-            }
+    /// Saves, asking where for an untitled document, then does `after`
+    /// once the text is safely on disk. While the file changed on disk
+    /// meanwhile, nothing is written: the banner asks which version to keep.
+    fn save_as(&mut self, after: AfterSave, window: &mut Window, cx: &mut Context<Self>) {
+        if self.document.path.is_none() {
+            self.save_to_chosen_path(after, window, cx);
             return;
         }
-        let directory = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let chosen = cx.prompt_for_new_path(&directory, Some("Untitled.md"));
+        if self.save_now(cx) {
+            Self::then(after, window, cx);
+        }
+    }
+
+    /// Asks where to save, saves there, then does `after`. If the file
+    /// cannot be written, the document stays as it was, draft and all.
+    fn save_to_chosen_path(
+        &mut self,
+        after: AfterSave,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let directory = self
+            .document
+            .path
+            .as_deref()
+            .and_then(std::path::Path::parent)
+            .map(PathBuf::from)
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."));
+        let name = self
+            .document
+            .path
+            .as_deref()
+            .and_then(std::path::Path::file_name)
+            .map_or_else(
+                || "Untitled.md".to_owned(),
+                |n| n.to_string_lossy().into_owned(),
+            );
+        let chosen = cx.prompt_for_new_path(&directory, Some(&name));
         cx.spawn_in(window, async move |this, cx| {
             if let Ok(Ok(Some(path))) = chosen.await {
                 this.update_in(cx, |this, window, cx| {
+                    let before = (this.document.path.clone(), this.document.stamp);
                     this.document.path = Some(path.clone());
+                    this.document.stamp = None;
+                    // The save panel asked before replacing a file there.
+                    if !this.write_now(false, cx) {
+                        (this.document.path, this.document.stamp) = before;
+                        return;
+                    }
+                    this.conflict = false;
                     this.watch_document(cx);
                     this.load_notes();
-                    this.save_now(cx);
                     this.discard_draft();
                     window.set_window_title(&this.title());
                     crate::recent::note(&path, cx);
-                    if close {
-                        window.remove_window();
-                    }
+                    Self::then(after, window, cx);
                 })
                 .ok();
             }
@@ -2202,16 +2253,27 @@ impl Editor {
         .detach();
     }
 
+    fn then(after: AfterSave, window: &mut Window, cx: &mut Context<Self>) {
+        match after {
+            AfterSave::Stay => {}
+            AfterSave::Close => window.remove_window(),
+            AfterSave::Open(path) => cx.emit(EditorEvent::Open(path)),
+        }
+    }
+
     /// Why closing would lose text, if it would: an untitled document with
-    /// unsaved edits that leave some text, or edits made while the file
-    /// changed on disk (which are not saved over it without asking).
+    /// unsaved edits that leave some text, edits made while the file
+    /// changed on disk (which are not saved over it without asking), or
+    /// edits the last save could not write.
     fn close_question(&self) -> Option<CloseQuestion> {
         if !self.dirty() {
             None
         } else if self.conflict {
             Some(CloseQuestion::Conflict)
-        } else if self.document.path.is_none() && !self.text().is_empty() {
-            Some(CloseQuestion::Untitled)
+        } else if self.document.path.is_none() {
+            (!self.text().is_empty()).then_some(CloseQuestion::Untitled)
+        } else if self.save_failed {
+            Some(CloseQuestion::SaveFailed)
         } else {
             None
         }
@@ -2225,28 +2287,52 @@ impl Editor {
     /// be lost (see [`Self::close_question`]) asks first and closes the window
     /// itself once answered.
     fn may_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let Some(question) = self.close_question() else {
-            self.save_now(cx);
+        if self.may_leave(AfterSave::Close, window, cx) {
             self.discard_draft();
+            return true;
+        }
+        false
+    }
+
+    /// Saves, then tells whether this document may be left now (its window
+    /// closed, or another file opened in its place). Text that would be lost
+    /// asks first, and `after` happens once the question is answered.
+    pub(crate) fn may_leave(
+        &mut self,
+        after: AfterSave,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.close_cell(window, cx);
+        if self.document.path.is_some() {
+            self.save_now(cx);
+        }
+        let Some(question) = self.close_question() else {
             return true;
         };
         let title = self.title();
         cx.spawn_in(window, async move |this, cx| {
             match crate::mac::ask_on_close(question, &title) {
                 SaveAnswer::Save => this
-                    .update_in(cx, |this, window, cx| {
-                        if question == CloseQuestion::Conflict {
-                            this.keep_mine(cx);
-                            window.remove_window();
-                        } else {
-                            this.save_as(true, window, cx);
+                    .update_in(cx, |this, window, cx| match question {
+                        CloseQuestion::Conflict => {
+                            if this.keep_mine(cx) {
+                                Self::then(after, window, cx);
+                            }
+                        }
+                        CloseQuestion::Untitled | CloseQuestion::SaveFailed => {
+                            this.save_to_chosen_path(after, window, cx);
                         }
                     })
                     .ok(),
                 SaveAnswer::DontSave => this
-                    .update_in(cx, |this, window, _| {
+                    .update_in(cx, |this, window, cx| {
                         this.discard_draft();
-                        window.remove_window();
+                        // Nothing of it is to be kept: let it go quietly.
+                        this.document.saved_version = this.buffer.version();
+                        this.conflict = false;
+                        this.save_failed = false;
+                        Self::then(after, window, cx);
                     })
                     .ok(),
                 SaveAnswer::Cancel => None,
@@ -2434,18 +2520,71 @@ impl Editor {
         self.document.saved_version = u64::MAX;
     }
 
-    fn save_now(&mut self, cx: &mut Context<Self>) {
+    /// Saves the text if it changed. Tells whether the file now holds it.
+    fn save_now(&mut self, cx: &mut Context<Self>) -> bool {
+        self.write_now(true, cx)
+    }
+
+    /// Writes the text to the file if it changed, after checking, with
+    /// `check_disk`, that nobody else changed the file since Focal last read
+    /// or wrote it; if somebody did, nothing is written and the banner asks
+    /// which version to keep. Tells whether the file now holds the text.
+    fn write_now(&mut self, check_disk: bool, cx: &mut Context<Self>) -> bool {
         self.save_task = None;
-        if !self.dirty() || self.conflict {
-            return;
+        if !self.dirty() {
+            return true;
+        }
+        let Some(path) = self.document.path.clone() else {
+            return false;
+        };
+        if check_disk {
+            if self.conflict {
+                return false;
+            }
+            if self.changed_on_disk(&path) {
+                self.conflict = true;
+                cx.notify();
+                return false;
+            }
+            // The file was found to hold this very text already.
+            if !self.dirty() {
+                return true;
+            }
         }
         let version = self.buffer.version();
-        match self.document.save(self.buffer.text(), version) {
+        let saved = match self.document.save(self.buffer.text(), version) {
             // A notice (saved as UTF-8 after all) shows in the banner.
-            Ok(()) => self.error = self.document.notice.take(),
-            Err(error) => self.error = Some(format!("Could not save: {error:#}")),
-        }
+            Ok(()) => {
+                self.error = self.document.notice.take();
+                true
+            }
+            Err(error) => {
+                self.error = Some(format!("Could not save: {error:#}"));
+                false
+            }
+        };
+        self.save_failed = !saved;
         cx.notify();
+        saved
+    }
+
+    /// Whether the file at `path` changed since Focal last read or wrote it,
+    /// to something other than this text. The same text is taken as saved.
+    fn changed_on_disk(&mut self, path: &std::path::Path) -> bool {
+        let stamp = Stamp::of(path);
+        if stamp.is_none() || stamp == self.document.stamp {
+            return false;
+        }
+        match document::read(path) {
+            Ok((text, _)) if text == self.text() => {
+                self.document.stamp = stamp;
+                self.document.saved_version = self.buffer.version();
+                false
+            }
+            Ok(_) => true,
+            // Unreadable: the write that follows reports what is wrong.
+            Err(_) => false,
+        }
     }
 
     /// Watches the document's file through FSEvents and reloads it on change.
@@ -2509,8 +2648,9 @@ impl Editor {
         self.document.format = format;
         self.grid = None;
         self.keep_baseline();
-        let len = text.len();
-        let selection = self.selection.start.min(len)..self.selection.end.min(len);
+        let old = self.text();
+        let selection = carry_offset(old, text, self.selection.start)
+            ..carry_offset(old, text, self.selection.end);
         self.buffer.replace_all(text, selection.clone());
         self.selection = selection;
         self.document.stamp = stamp;
@@ -2523,9 +2663,10 @@ impl Editor {
         cx.notify();
     }
 
-    fn keep_mine(&mut self, cx: &mut Context<Self>) {
+    /// Writes this version over the file that changed on disk.
+    fn keep_mine(&mut self, cx: &mut Context<Self>) -> bool {
         self.conflict = false;
-        self.save_now(cx);
+        self.write_now(false, cx)
     }
 
     fn reload_from_disk(&mut self, cx: &mut Context<Self>) {
@@ -3840,7 +3981,9 @@ impl Editor {
 
     fn render_banner(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<gpui_kit::AnyElement> {
         if self.conflict {
-            let keep = cx.listener(|this, _, _, cx| this.keep_mine(cx));
+            let keep = cx.listener(|this, _, _, cx| {
+                this.keep_mine(cx);
+            });
             let load = cx.listener(|this, _, _, cx| this.reload_from_disk(cx));
             return Some(
                 banner(theme)
@@ -4117,6 +4260,43 @@ fn splice_changed_rows(list: &ListState, old: &[u64], new: &[u64]) -> usize {
         }
     }
     new.len() - prefix - suffix
+}
+
+/// Where `offset` in `old` lands in `new`, the text that replaced it: kept
+/// in the unchanged start, moved with the unchanged end, otherwise at the
+/// end of what changed; always on a character boundary.
+fn carry_offset(old: &str, new: &str, offset: usize) -> usize {
+    let offset = offset.min(old.len());
+    let prefix = old
+        .bytes()
+        .zip(new.bytes())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let room = old.len().min(new.len()) - prefix;
+    let suffix = old
+        .bytes()
+        .rev()
+        .zip(new.bytes().rev())
+        .take(room)
+        .take_while(|(a, b)| a == b)
+        .count();
+    let carried = if offset <= prefix {
+        offset
+    } else if offset >= old.len() - suffix {
+        offset + new.len() - old.len()
+    } else {
+        new.len() - suffix
+    };
+    floor_char_boundary(new, carried)
+}
+
+/// `offset` clamped to `text`, moved back to a character boundary.
+pub(crate) fn floor_char_boundary(text: &str, offset: usize) -> usize {
+    let mut offset = offset.min(text.len());
+    while !text.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    offset
 }
 
 /// Each table's cells as rendered text, for the accessibility tree.

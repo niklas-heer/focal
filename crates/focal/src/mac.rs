@@ -65,6 +65,8 @@ pub enum CloseQuestion {
     Untitled,
     /// The file changed on disk while it had unsaved edits.
     Conflict,
+    /// The file could not be written.
+    SaveFailed,
 }
 
 /// Asks what to do with the document `name`'s unsaved text before closing
@@ -88,6 +90,12 @@ pub fn ask_on_close(question: CloseQuestion, name: &str) -> SaveAnswer {
             "Keep Mine",
             "Discard Mine",
         ),
+        CloseQuestion::SaveFailed => (
+            format!("Focal could not save “{name}”."),
+            "Save it somewhere else to keep your edits, or discard them.",
+            "Save As…",
+            "Don’t Save",
+        ),
     };
     let alert = NSAlert::new(mtm);
     alert.setMessageText(&NSString::from_str(&message));
@@ -103,7 +111,7 @@ pub fn ask_on_close(question: CloseQuestion, name: &str) -> SaveAnswer {
 }
 
 /// Asks whether to quit although `count` documents have text that could not
-/// be saved (untitled, or changed on disk meanwhile). Like [`ask_on_close`],
+/// be saved (untitled, changed on disk meanwhile, or not writable). Like [`ask_on_close`],
 /// without AppKit's main thread the answer is no.
 pub fn confirm_discard(count: usize) -> bool {
     let Some(mtm) = MainThreadMarker::new() else {
@@ -112,12 +120,12 @@ pub fn confirm_discard(count: usize) -> bool {
     let (message, detail) = if count == 1 {
         (
             "Quit and discard unsaved changes in 1 document?".to_owned(),
-            "It is untitled or changed on disk meanwhile. Cancel to save it first.",
+            "It is untitled, changed on disk meanwhile, or could not be saved. Cancel to save it first.",
         )
     } else {
         (
             format!("Quit and discard unsaved changes in {count} documents?"),
-            "They are untitled or changed on disk meanwhile. Cancel to save them first.",
+            "They are untitled, changed on disk meanwhile, or could not be saved. Cancel to save them first.",
         )
     };
     let alert = NSAlert::new(mtm);

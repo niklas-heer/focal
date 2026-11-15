@@ -193,7 +193,11 @@ fn open_window(
             let (document, text) = Document::open(path)?;
             Content::File(document, text)
         }
-        None => Content::File(Document::untitled(), untitled.unwrap_or_default()),
+        // Piped text is in no file yet: it is unsaved from the start.
+        None => match untitled.filter(|text| !text.is_empty()) {
+            Some(text) => Content::File(Document::unsaved(), text),
+            None => Content::File(Document::untitled(), String::new()),
+        },
     };
     let title = match &content {
         Content::Folder(root) => root.file_name().map_or_else(

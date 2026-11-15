@@ -14,6 +14,7 @@ use gpui_kit::{
 
 use crate::bar;
 use crate::document::Document;
+use crate::editor::AfterSave;
 use crate::editor::{Editor, EditorEvent, ToggleFocusMode};
 use crate::find_bar::{Find, FindAndReplace, FindBar, FindBarEvent, FindNext, FindPrevious};
 use crate::folder;
@@ -364,12 +365,21 @@ impl Workspace {
         if self.editor.read(cx).path() == Some(path.as_path()) {
             return;
         }
-        self.editor
-            .update(cx, |editor, cx| editor.flush(window, cx));
+        // Unsaved text that cannot be saved asks first, and opens the file
+        // itself once answered.
+        let after = AfterSave::Open(path.clone());
+        if !self
+            .editor
+            .update(cx, |editor, cx| editor.may_leave(after, window, cx))
+        {
+            return;
+        }
         let (document, text) = match Document::open(path) {
             Ok(opened) => opened,
             Err(error) => {
-                eprintln!("focal: {error:#}");
+                self.editor.update(cx, |editor, cx| {
+                    editor.show_error(format!("Could not open the file: {error:#}"), cx);
+                });
                 return;
             }
         };

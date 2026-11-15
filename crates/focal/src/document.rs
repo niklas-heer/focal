@@ -75,6 +75,14 @@ impl Document {
         }
     }
 
+    /// An untitled document whose text is in no file yet, such as text
+    /// piped into `focal`: unsaved from the start.
+    pub const fn unsaved() -> Self {
+        let mut document = Self::untitled();
+        document.saved_version = u64::MAX;
+        document
+    }
+
     pub fn title(&self) -> String {
         self.path.as_deref().and_then(Path::file_name).map_or_else(
             || "Untitled".to_owned(),
