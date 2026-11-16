@@ -171,7 +171,10 @@ mod tests {
         let text = "Die große Füchsin 🦊 springt schnell über den Zaun.";
         let tagged = tag(text);
         assert!(tagged.german);
-        assert!(words(text, Part::Noun).contains(&"Füchsin"));
+        // Which words count as nouns is the language model's call, and it
+        // differs between macOS versions (CI's runner tags this sentence
+        // otherwise), so only Focal's part is checked: German is detected
+        // and every range is a valid byte range.
         for (range, _) in &tagged.parts {
             assert!(text.is_char_boundary(range.start) && text.is_char_boundary(range.end));
         }
