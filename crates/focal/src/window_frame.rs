@@ -140,7 +140,8 @@ pub fn save_to(frame: &Frame, path: &Path) -> anyhow::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    std::fs::write(path, serde_json::to_string_pretty(frame)? + "\n")?;
+    let json = serde_json::to_string_pretty(frame)? + "\n";
+    crate::document::write_replacing(path, json.as_bytes())?;
     Ok(())
 }
 
