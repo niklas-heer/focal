@@ -40,6 +40,7 @@ mod ui_tests;
 mod updates;
 mod vega;
 mod viewer;
+mod window_frame;
 mod windows;
 mod workspace;
 mod writing_tools;
