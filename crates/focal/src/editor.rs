@@ -56,7 +56,7 @@ actions!(
         Backspace,
         Delete,
         DeleteWordBack,
-        DeleteToLineStart,
+        DeleteToVisualLineStart,
         Left,
         Right,
         Up,
@@ -71,8 +71,10 @@ actions!(
         SelectWordRight,
         LineStart,
         LineEnd,
-        SelectLineStart,
-        SelectLineEnd,
+        VisualLineStart,
+        VisualLineEnd,
+        SelectVisualLineStart,
+        SelectVisualLineEnd,
         DocStart,
         DocEnd,
         SelectDocStart,
@@ -242,7 +244,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("shift-backspace", Backspace, context),
         KeyBinding::new("delete", Delete, context),
         KeyBinding::new("alt-backspace", DeleteWordBack, context),
-        KeyBinding::new("cmd-backspace", DeleteToLineStart, context),
+        KeyBinding::new("cmd-backspace", DeleteToVisualLineStart, context),
         KeyBinding::new("left", Left, context),
         KeyBinding::new("right", Right, context),
         KeyBinding::new("up", Up, context),
@@ -255,12 +257,12 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("alt-right", WordRight, context),
         KeyBinding::new("alt-shift-left", SelectWordLeft, context),
         KeyBinding::new("alt-shift-right", SelectWordRight, context),
-        KeyBinding::new("cmd-left", LineStart, context),
-        KeyBinding::new("cmd-right", LineEnd, context),
+        KeyBinding::new("cmd-left", VisualLineStart, context),
+        KeyBinding::new("cmd-right", VisualLineEnd, context),
         KeyBinding::new("home", LineStart, context),
         KeyBinding::new("end", LineEnd, context),
-        KeyBinding::new("cmd-shift-left", SelectLineStart, context),
-        KeyBinding::new("cmd-shift-right", SelectLineEnd, context),
+        KeyBinding::new("cmd-shift-left", SelectVisualLineStart, context),
+        KeyBinding::new("cmd-shift-right", SelectVisualLineEnd, context),
         KeyBinding::new("cmd-up", DocStart, context),
         KeyBinding::new("cmd-down", DocEnd, context),
         KeyBinding::new("cmd-shift-up", SelectDocStart, context),
@@ -397,6 +399,14 @@ pub(crate) struct PaintedRow {
     pub(crate) layout: Option<TextLayout>,
     pub(crate) view: Option<Rc<LineView>>,
     pub(crate) bounds: Bounds<Pixels>,
+}
+
+/// The soft-wrapped row of a source line that the caret is on, as source
+/// offsets. `None` is the source line's own edge: a line's first row starts
+/// there and its last row ends there.
+struct VisualLine {
+    start: Option<usize>,
+    end: Option<usize>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1574,6 +1584,55 @@ impl Editor {
         })
     }
 
+    /// The soft-wrapped row the caret is on, from the layout drawn in the last
+    /// frame; `None` when the caret's line was not drawn as it reads now.
+    fn painted_visual_line(&self) -> Option<VisualLine> {
+        let head = self.head();
+        let line = self.snapshot.analysis.lines.line_of(head);
+        let current = self.snapshot.views.get(line)?;
+        self.painted.borrow().iter().find_map(|painted| {
+            if painted.row != Row::Line(line) {
+                return None;
+            }
+            let (layout, view) = (painted.layout.as_ref()?, painted.view.as_ref()?);
+            if **view != **current {
+                return None;
+            }
+            let caret = view.map.to_display(head);
+            let wrapped = layout.line_layout_for_index(caret)?;
+            // A soft wrap starts a row at the display offset of its first glyph.
+            let breaks: Vec<usize> = wrapped
+                .wrap_boundaries()
+                .iter()
+                .filter_map(|boundary| {
+                    let glyph = wrapped
+                        .runs()
+                        .get(boundary.run_ix)?
+                        .glyphs
+                        .get(boundary.glyph_ix)?;
+                    Some(glyph.index)
+                })
+                .collect();
+            // A caret on a wrap belongs to the row it starts, as it is drawn.
+            let row = breaks.iter().take_while(|&&at| at <= caret).count();
+            let first = row.checked_sub(1).and_then(|ix| breaks.get(ix)).copied();
+            let end = breaks.get(row).map(|&next| {
+                // The row ends before the spaces that wrap it, so the caret
+                // stays on this row rather than being drawn at the next.
+                let from = first.unwrap_or(0);
+                let kept = view
+                    .text
+                    .get(from..next)
+                    .map_or(0, |text| text.trim_end().len());
+                from + kept
+            });
+            Some(VisualLine {
+                start: first.map(|at| view.map.to_source(at)),
+                end: end.map(|at| view.map.to_source(at)),
+            })
+        })
+    }
+
     /// Whether the caret's line was in view in the last frame; `None` when
     /// it was not drawn as it reads now.
     fn caret_in_view_painted(&self) -> Option<bool> {
@@ -1838,14 +1897,18 @@ impl Editor {
         self.edit(start..end, "", start..start, EditKind::Other, cx);
     }
 
-    fn delete_to_line_start(
+    fn delete_to_visual_line_start(
         &mut self,
-        _: &DeleteToLineStart,
+        _: &DeleteToVisualLineStart,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let head = self.head();
-        let start = self.line_range_at(head).start;
+        let start = self
+            .painted_visual_line()
+            .and_then(|line| line.start)
+            .unwrap_or_else(|| self.line_range_at(head).start);
+        // At the start of a visual line this is a plain backspace.
         let start = if start == head {
             self.buffer.previous_grapheme(head)
         } else {
@@ -1960,14 +2023,49 @@ impl Editor {
         self.move_to(to, cx);
     }
 
-    fn select_line_start(&mut self, _: &SelectLineStart, _: &mut Window, cx: &mut Context<Self>) {
-        let to = self.content_start_at(self.head());
+    fn visual_line_start(&mut self, _: &VisualLineStart, _: &mut Window, cx: &mut Context<Self>) {
+        let to = self.visual_line_start_at_head();
+        self.move_to(to, cx);
+    }
+
+    fn visual_line_end(&mut self, _: &VisualLineEnd, _: &mut Window, cx: &mut Context<Self>) {
+        let to = self.visual_line_end_at_head();
+        self.move_to(to, cx);
+    }
+
+    fn select_visual_line_start(
+        &mut self,
+        _: &SelectVisualLineStart,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let to = self.visual_line_start_at_head();
         self.select_to(to, cx);
     }
 
-    fn select_line_end(&mut self, _: &SelectLineEnd, _: &mut Window, cx: &mut Context<Self>) {
-        let to = self.line_range_at(self.head()).end;
+    fn select_visual_line_end(
+        &mut self,
+        _: &SelectVisualLineEnd,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let to = self.visual_line_end_at_head();
         self.select_to(to, cx);
+    }
+
+    /// Where the caret's visual line starts. On the source line's first row
+    /// that is after any list or quote prefix, as before soft wrapping.
+    fn visual_line_start_at_head(&self) -> usize {
+        self.painted_visual_line()
+            .and_then(|line| line.start)
+            .unwrap_or_else(|| self.content_start_at(self.head()))
+    }
+
+    /// Where the caret's visual line ends, before its soft wrap.
+    fn visual_line_end_at_head(&self) -> usize {
+        self.painted_visual_line()
+            .and_then(|line| line.end)
+            .unwrap_or_else(|| self.line_range_at(self.head()).end)
     }
 
     fn doc_start(&mut self, _: &DocStart, _: &mut Window, cx: &mut Context<Self>) {
@@ -4803,7 +4901,7 @@ impl Render for Editor {
             .on_action(cx.listener(Self::show_in_finder))
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::delete_word_back))
-            .on_action(cx.listener(Self::delete_to_line_start))
+            .on_action(cx.listener(Self::delete_to_visual_line_start))
             .on_action(cx.listener(Self::left))
             .on_action(cx.listener(Self::right))
             .on_action(cx.listener(Self::up))
@@ -4818,8 +4916,10 @@ impl Render for Editor {
             .on_action(cx.listener(Self::select_word_right))
             .on_action(cx.listener(Self::line_start))
             .on_action(cx.listener(Self::line_end))
-            .on_action(cx.listener(Self::select_line_start))
-            .on_action(cx.listener(Self::select_line_end))
+            .on_action(cx.listener(Self::visual_line_start))
+            .on_action(cx.listener(Self::visual_line_end))
+            .on_action(cx.listener(Self::select_visual_line_start))
+            .on_action(cx.listener(Self::select_visual_line_end))
             .on_action(cx.listener(Self::doc_start))
             .on_action(cx.listener(Self::doc_end))
             .on_action(cx.listener(Self::select_doc_start))

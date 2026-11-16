@@ -132,6 +132,143 @@ fn backspace_at_an_item_start_removes_the_bullet(cx: &mut TestAppContext) {
     editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "item"));
 }
 
+/// One source line that soft-wraps onto several visual lines in the test window.
+fn long_paragraph() -> String {
+    "The quick brown fox jumps over the lazy dog while the editor wraps this sentence onto a line of its own. "
+        .repeat(6)
+        .trim_end()
+        .to_owned()
+}
+
+/// Opens the long paragraph with the caret six letters into its third visual line.
+fn caret_in_third_visual_line(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<Editor>) {
+    let (window, editor) = open_editor(cx, &long_paragraph());
+    act(cx, window, |window, cx| {
+        window.press("cmd-up", cx);
+        window.press("down", cx);
+        window.press("down", cx);
+        for _ in 0..6 {
+            window.press("right", cx);
+        }
+    });
+    (window, editor)
+}
+
+#[gpui_kit::test]
+fn cmd_arrows_act_on_the_visual_line(cx: &mut TestAppContext) {
+    let (window, editor) = caret_in_third_visual_line(cx);
+    let text = long_paragraph();
+    let caret = editor.read_with(cx, |editor, _| editor.selection());
+    let at = caret.start;
+    assert!(caret.is_empty() && at > 0 && at < text.len(), "{caret:?}");
+
+    act(cx, window, |window, cx| window.press("cmd-left", cx));
+    let line_start = editor.read_with(cx, |editor, _| editor.selection().start);
+    assert!(
+        0 < line_start && line_start < at && text[..line_start].ends_with(' '),
+        "⌘← goes to the wrap before the caret's visual line, not the paragraph start: {line_start}"
+    );
+
+    // From that start, ⌘→ reaches the end of the same visual line, which lies
+    // past the caret and before the next wrap.
+    act(cx, window, |window, cx| window.press("cmd-right", cx));
+    let line_end = editor.read_with(cx, |editor, _| editor.selection());
+    assert!(
+        line_end.is_empty()
+            && at < line_end.start
+            && line_end.start < text.len()
+            && text[line_end.start..].starts_with(' '),
+        "⌘→ stops before the soft wrap of the caret's visual line: {line_end:?}"
+    );
+
+    // And ⌘← from the end comes back to the same start.
+    act(cx, window, |window, cx| window.press("cmd-left", cx));
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.selection(), line_start..line_start);
+    });
+}
+
+#[gpui_kit::test]
+fn shift_cmd_arrows_select_the_visual_line(cx: &mut TestAppContext) {
+    let (window, editor) = caret_in_third_visual_line(cx);
+    let text = long_paragraph();
+    let at = editor.read_with(cx, |editor, _| editor.selection().start);
+
+    act(cx, window, |window, cx| window.press("cmd-shift-left", cx));
+    let selected = editor.read_with(cx, |editor, _| editor.selection());
+    assert!(
+        selected.start < at && selected.end == at && text[..selected.start].ends_with(' '),
+        "⇧⌘← selects back to the visual line's start: {selected:?}"
+    );
+
+    // The anchor stays put, so ⇧⌘→ extends the same selection to the line's end.
+    act(cx, window, |window, cx| window.press("cmd-shift-right", cx));
+    let extended = editor.read_with(cx, |editor, _| editor.selection());
+    assert!(
+        extended.start == at && at < extended.end && text[extended.end..].starts_with(' '),
+        "⇧⌘→ extends from the anchor to the line's end: {extended:?}"
+    );
+}
+
+#[gpui_kit::test]
+fn cmd_backspace_deletes_back_to_the_visual_line_start(cx: &mut TestAppContext) {
+    let (window, editor) = caret_in_third_visual_line(cx);
+    let text = long_paragraph();
+    let at = editor.read_with(cx, |editor, _| editor.selection().start);
+
+    act(cx, window, |window, cx| window.press("cmd-backspace", cx));
+    let (after, caret) = editor.read_with(cx, |editor, _| {
+        (editor.text().to_owned(), editor.selection())
+    });
+    let removed = text.len() - after.len();
+    let line_start = at - removed;
+    assert!(
+        0 < line_start && text[..line_start].ends_with(' '),
+        "⌘⌫ removes only back to the wrap: {removed} bytes"
+    );
+    assert_eq!(after, format!("{}{}", &text[..line_start], &text[at..]));
+    assert_eq!(caret, line_start..line_start);
+}
+
+#[gpui_kit::test]
+fn cmd_backspace_at_a_visual_line_start_is_a_backspace(cx: &mut TestAppContext) {
+    let (window, editor) = caret_in_third_visual_line(cx);
+    let text = long_paragraph();
+    act(cx, window, |window, cx| window.press("cmd-left", cx));
+    let line_start = editor.read_with(cx, |editor, _| editor.selection().start);
+
+    act(cx, window, |window, cx| window.press("cmd-backspace", cx));
+    editor.read_with(cx, |editor, _| {
+        // The space that wrapped the line above goes; nothing else does.
+        assert_eq!(
+            editor.text(),
+            format!("{}{}", &text[..line_start - 1], &text[line_start..])
+        );
+        assert_eq!(editor.selection(), line_start - 1..line_start - 1);
+    });
+}
+
+#[gpui_kit::test]
+fn cmd_left_on_a_list_items_first_line_stops_after_the_marker(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, &format!("- {}", long_paragraph()));
+    act(cx, window, |window, cx| {
+        window.press("cmd-up", cx);
+        window.press("cmd-right", cx);
+    });
+    let end = editor.read_with(cx, |editor, _| editor.selection().start);
+    assert!(end > 2, "⌘→ leaves the marker behind: {end}");
+
+    act(cx, window, |window, cx| window.press("cmd-left", cx));
+    editor.read_with(cx, |editor, _| assert_eq!(editor.selection(), 2..2));
+}
+
+#[gpui_kit::test]
+fn home_still_goes_to_the_source_line_start(cx: &mut TestAppContext) {
+    let (window, editor) = caret_in_third_visual_line(cx);
+    act(cx, window, |window, cx| window.press("home", cx));
+    editor.read_with(cx, |editor, _| assert_eq!(editor.selection(), 0..0));
+}
+
 #[gpui_kit::test]
 fn tab_and_shift_tab_change_the_list_level(cx: &mut TestAppContext) {
     let (window, editor) = open_editor(cx, "- a\n- b");
