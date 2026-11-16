@@ -342,6 +342,16 @@ pub struct Settings {
 impl TextSize {
     const ALL: [Self; 4] = [Self::Small, Self::Medium, Self::Large, Self::Huge];
 
+    /// The name the Settings window and the Info panel show.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Small => "Small",
+            Self::Medium => "Medium",
+            Self::Large => "Large",
+            Self::Huge => "Huge",
+        }
+    }
+
     /// The next size up or down, staying at the ends.
     fn step(self, up: bool) -> Self {
         let ix = Self::ALL.iter().position(|&size| size == self).unwrap_or(1);
@@ -1162,10 +1172,10 @@ fn text_pane(settings: &Settings, theme: &Colors) -> impl IntoElement {
                     segmented(
                         "text-size",
                         &[
-                            (TextSize::Small, "S"),
-                            (TextSize::Medium, "M"),
-                            (TextSize::Large, "L"),
-                            (TextSize::Huge, "XL"),
+                            (TextSize::Small, "Small"),
+                            (TextSize::Medium, "Medium"),
+                            (TextSize::Large, "Large"),
+                            (TextSize::Huge, "Huge"),
                         ],
                         settings.text_size,
                         |s, v| s.text_size = v,
