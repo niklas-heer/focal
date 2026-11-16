@@ -41,6 +41,7 @@ mod updates;
 mod vega;
 mod viewer;
 mod welcome;
+mod window_frame;
 mod windows;
 mod workspace;
 mod writing_tools;
