@@ -1142,6 +1142,11 @@ impl Editor {
         self.buffer.text()
     }
 
+    /// Whether the placeholder shows: an empty untitled document.
+    fn shows_placeholder(&self) -> bool {
+        self.document.path.is_none() && self.text().is_empty()
+    }
+
     const fn head(&self) -> usize {
         if self.reversed {
             self.selection.start
@@ -3285,6 +3290,21 @@ impl Editor {
                 self.with_margin_marks(element, &range, island.start, 0., &theme, cx)
             }
         };
+        // An empty untitled document says what to do where its first line
+        // would be. It is drawn over that line, not put in the text, so it is
+        // no part of the text, the file, the accessibility tree or the caret.
+        let placeholder = (ix == 0 && self.shows_placeholder()).then(|| {
+            div()
+                .id("empty-placeholder")
+                .absolute()
+                .top_0()
+                .left_0()
+                .font_family(self.typography.prose.clone())
+                .text_size(px(self.typography.size))
+                .line_height(relative(1.6))
+                .text_color(theme.marker)
+                .child("Write, or ⌘O to open a file")
+        });
         div()
             .w_full()
             .flex()
@@ -3307,9 +3327,11 @@ impl Editor {
             })
             .child(
                 div()
+                    .relative()
                     .w_full()
                     .max_w(px(self.typography.column))
-                    .child(content),
+                    .child(content)
+                    .children(placeholder),
             )
             .into_any_element()
     }

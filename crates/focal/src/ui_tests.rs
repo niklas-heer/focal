@@ -3137,3 +3137,26 @@ fn an_images_button_opens_the_viewer_without_moving_the_caret(cx: &mut TestAppCo
     });
     editor_of(cx, &workspace).read_with(cx, |e, _| assert_eq!(e.selection(), before));
 }
+
+#[gpui_kit::test]
+fn an_empty_untitled_document_shows_a_placeholder_until_typing(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "");
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find("empty-placeholder").is_some(),
+            "an empty untitled document says what to do"
+        );
+    });
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.text(), "", "the placeholder is not text");
+        assert_eq!(editor.selection(), 0..0, "nor does it move the caret");
+    });
+    act(cx, window, |window, cx| window.input("a", cx));
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find("empty-placeholder").is_none(),
+            "any text hides the placeholder"
+        );
+    });
+    editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "a"));
+}
