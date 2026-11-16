@@ -193,8 +193,8 @@ fn channel(value: f32) -> u8 {
 /// Tall images are scaled down to this height, so one never fills the window.
 const MAX_IMAGE_HEIGHT: f32 = 560.;
 
-/// The size to draw an image of `width` × `height` pixels (one pixel a
-/// point): scaled down, keeping its shape, to fit `max_width` × `max_height`.
+/// The size to draw an image of `width` × `height` points: scaled down,
+/// keeping its shape, to fit `max_width` × `max_height`.
 fn fit(width: f32, height: f32, max_width: f32, max_height: f32) -> (f32, f32) {
     let scale = (max_width / width).min(max_height / height).min(1.);
     (width * scale, height * scale)
@@ -475,18 +475,15 @@ impl Editor {
                             .child(
                                 img(path.clone())
                                     .map(|image| {
-                                        // GPUI sizes an image to its pixels; size it to fit instead.
-                                        match imagesize::size(&path) {
-                                            Ok(size) => {
-                                                let (width, height) = fit(
-                                                    size.width as f32,
-                                                    size.height as f32,
-                                                    column,
-                                                    MAX_IMAGE_HEIGHT,
-                                                );
+                                        // GPUI sizes an image to its pixels; size it to
+                                        // fit, in points (a Retina image at half).
+                                        match crate::viewer::size_in_points(&path) {
+                                            Some((width, height)) => {
+                                                let (width, height) =
+                                                    fit(width, height, column, MAX_IMAGE_HEIGHT);
                                                 image.w(px(width)).h(px(height))
                                             }
-                                            Err(_) => image.max_w_full(),
+                                            None => image.max_w_full(),
                                         }
                                     })
                                     .rounded(px(6.))

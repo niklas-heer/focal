@@ -66,7 +66,7 @@ pub fn bind_keys(cx: &mut App) {
 const MARGIN_X: f32 = 48.;
 const MARGIN_TOP: f32 = 56.;
 const MARGIN_BOTTOM: f32 = 84.;
-/// The closest look: sixteen screen points to an image pixel.
+/// The closest look: sixteen times the actual size.
 const MAX_SCALE: f32 = 16.;
 /// One step of ⌘+ or ⌘−.
 const STEP: f32 = 1.25;
@@ -94,9 +94,10 @@ struct Drag {
 pub struct ImageViewer {
     images: Vec<ViewedImage>,
     index: usize,
-    /// The image's size in pixels; drawn one pixel to a point at 100%.
+    /// The image's size in points, as it shows at 100% (a Retina image's
+    /// pixels halved, as in Preview).
     natural: Option<(f32, f32)>,
-    /// Screen points per image pixel.
+    /// Screen points per image point: 1 is the actual size.
     scale: f32,
     /// Whether the scale follows the window's size, as it does until zoomed.
     fitted: bool,
@@ -179,8 +180,7 @@ impl ImageViewer {
         self.natural = self
             .images
             .get(self.index)
-            .and_then(|image| imagesize::size(&image.path).ok())
-            .map(|size| (size.width as f32, size.height as f32));
+            .and_then(|image| size_in_points(&image.path));
         self.fit();
     }
 
@@ -486,6 +486,25 @@ pub fn open_in_preview(path: PathBuf) {
             opened(&[file]);
         }
     });
+}
+
+/// An image's size in screen points: its pixels, halved for a Retina
+/// image (see [`focal_core::density`]).
+pub fn size_in_points(path: &Path) -> Option<(f32, f32)> {
+    use std::io::Read as _;
+    let mut header = Vec::with_capacity(64 * 1024);
+    std::fs::File::open(path)
+        .ok()?
+        .take(64 * 1024)
+        .read_to_end(&mut header)
+        .ok()?;
+    let size = imagesize::blob_size(&header).ok()?;
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy())
+        .unwrap_or_default();
+    let density = focal_core::density::density(&name, &header);
+    Some((size.width as f32 / density, size.height as f32 / density))
 }
 
 /// What to call an image: its alt text, otherwise its file's name.
