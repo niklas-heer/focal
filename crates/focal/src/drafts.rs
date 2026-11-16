@@ -55,7 +55,7 @@ pub fn write(path: &Path, text: &str) -> anyhow::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    std::fs::write(path, text)?;
+    crate::document::write_replacing(path, text.as_bytes())?;
     Ok(())
 }
 

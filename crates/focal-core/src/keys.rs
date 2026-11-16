@@ -35,6 +35,13 @@ pub enum AppCommand {
     Outline,
     Sidebar,
     Recent,
+    /// The files linking to this one, in the info panel.
+    Links,
+    /// The next or previous change, while changes show.
+    NextChange,
+    PreviousChange,
+    /// A review note on the selection, for an agent.
+    AddNote,
     DarkMode,
     FocusMode,
     KeyReference,
@@ -54,6 +61,9 @@ const MENU: &[(char, AppCommand, &str)] = &[
     ('o', AppCommand::Outline, "outline"),
     ('e', AppCommand::Sidebar, "sidebar of files"),
     ('r', AppCommand::Recent, "recent files"),
+    ('l', AppCommand::Links, "files linking here"),
+    ('c', AppCommand::NextChange, "next change"),
+    ('n', AppCommand::AddNote, "add a review note"),
     ('d', AppCommand::DarkMode, "light or dark"),
     ('z', AppCommand::FocusMode, "focus mode"),
     ('?', AppCommand::KeyReference, "all keys"),
@@ -67,6 +77,9 @@ const MENU_HINTS: &[Hint] = &[
     ("o", "outline"),
     ("e", "sidebar of files"),
     ("r", "recent files"),
+    ("l", "files linking here"),
+    ("c", "next change"),
+    ("n", "add a review note"),
     ("d", "light or dark"),
     ("z", "focus mode"),
     ("?", "all keys"),
@@ -126,6 +139,17 @@ const EX: &[(&[&str], Ex, &str)] = &[
         "sidebar of files",
     ),
     (&["recent"], Ex::App(AppCommand::Recent), "recent files"),
+    (&["note"], Ex::App(AppCommand::AddNote), "add a review note"),
+    (
+        &["changes", "change"],
+        Ex::App(AppCommand::NextChange),
+        "go to the next change",
+    ),
+    (
+        &["links", "backlinks"],
+        Ex::App(AppCommand::Links),
+        "files linking here",
+    ),
     (
         &["goal"],
         Ex::Nothing,
@@ -275,6 +299,8 @@ pub(crate) fn vim_hints(pending: &str, operator: Option<&'static str>) -> Option
         (_, 'f' | 't' | 'F' | 'T' | 'r') => Hints::new("character", CHARACTER),
         (None, 'g') => Hints::new("g", VIM_G),
         (None, '\\') => menu_hints(),
+        (None, ']') => Hints::new("next", &[("c", "change")]),
+        (None, '[') => Hints::new("previous", &[("c", "change")]),
         (Some(name), _) => Hints::new(name, VIM_MOTIONS),
         _ => return None,
     })
@@ -288,6 +314,8 @@ pub(crate) fn helix_hints(pending: &str) -> Option<Hints> {
         "mi" => Hints::new("select inside", VIM_OBJECTS),
         "ma" => Hints::new("select around", VIM_OBJECTS),
         " " => menu_hints(),
+        "]" => Hints::new("next", &[("g", "change")]),
+        "[" => Hints::new("previous", &[("g", "change")]),
         _ if pending.ends_with(['f', 't', 'F', 'T', 'r']) => Hints::new("character", CHARACTER),
         _ => return None,
     })
@@ -351,6 +379,7 @@ pub const VIM_REFERENCE: &[Group] = &[
         &[
             ("/ ?", "find forward, backward"),
             ("n N", "next, previous match"),
+            ("]c [c", "next, previous change"),
             ("* #", "the word under the cursor"),
             (":w :q :wq", "save, close, both"),
             (":12", "go to line 12"),
@@ -401,6 +430,7 @@ pub const HELIX_REFERENCE: &[Group] = &[
             ("gg ge", "first, last line"),
             ("gh gl gs", "line start, end, first letter"),
             ("/ ? n N", "find, next, previous"),
+            ("]g [g", "next, previous change"),
             ("*", "find the selection"),
             (":w :q :wq", "save, close, both"),
             ("space", "Focal's menu"),

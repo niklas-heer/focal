@@ -28,6 +28,10 @@ Focal brings together the calm of [iA Writer](https://ia.net/writer) and the liv
 
 It works on plain Markdown files wherever they live: your notes folder, a Git repository, or the file an agent just wrote. Nothing is imported into a library, and Focal never reformats your text.
 
+- **Native.** Written in Rust and drawn on the GPU with [GPUI](https://gpui.rs), using macOS's own spelling, grammar and Writing Tools. No web view, no Electron.
+- **Your files, untouched, and safe.** The file on disk is the document, saved byte for byte as you wrote it, and never written half or over someone else's changes.
+- **At home with agents.** Live reload, word-by-word change marks and review notes make Focal a calm place to read, and steer, what an agent writes.
+
 ## Install
 
 Focal runs on Macs with Apple Silicon and macOS 14 Sonoma or later.
@@ -53,16 +57,24 @@ focal --wait msg.md     # wait until the window closes, so it works as $EDITOR
 
 Focal runs as one app: every `focal` call opens a window in it, and an open file comes to the front instead of opening twice. In Finder, Focal is offered under **Open With** for Markdown files.
 
+The first launch opens a short Welcome document that shows Focal at work; **Help ▸ Focal Help** opens it again, offline. Windows remember their size and place.
+
 ## Features
 
 ### Writing
 
 - **Live rendering.** Bold, italics, links, code, highlights, lists, checkboxes, quotes and headings look finished while you type. Syntax shows only where the caret is.
 - **Your file stays yours.** What is on disk is the document. Focal styles it on screen and saves your bytes untouched, in their encoding and line endings. Edits save automatically.
-- **Live reload.** When Git, an agent or another editor changes the file, Focal reloads it. If you both changed it, it asks which version to keep.
+- **Nothing lost.** Saves are written beside your file and then take its place in one step, keeping its permissions and Finder tags, so a crash or a full disk never leaves half a file. Untitled text is kept as a draft until you save or discard it, and a save that fails keeps the window open and says why.
+- **Live reload.** When Git, an agent or another editor changes the file, Focal reloads it. If you both changed it, Focal never writes over theirs: it asks which version to keep.
+- **See what changed.** After an agent rewrites the file, Focal marks what is new, word by word, with a bar beside each changed line; a pill at the bottom right counts the changes and steps through them (⌥⌘↓, ⌥⌘↑). **View ▸ Changes ▸ Compare with Last Commit** shows the changes since `git`'s last commit instead.
+- **Review notes for agents.** Select a passage and choose **Add Note…** (⌥⌘M, or right-click): the note goes into `NAME.review.md` beside the file, never into the file itself. The **Notes** tab lists them, and **Copy for Agent** hands them to your agent as a prompt.
+- **Paste that knows Markdown.** Pasting a URL over selected text makes a link, rich text from a browser becomes Markdown (⌥⇧⌘V pastes plain text), and pasted or dropped images are saved in `assets/` beside the file.
 - **Tables you edit as tables.** Every table is a grid. Tab and Return move between cells, rows and columns can be added, moved, deleted and aligned, and the Markdown is rewritten neatly aligned.
 - **Spelling, grammar and Apple's Writing Tools.** macOS's own checker underlines misspelled words in red and grammar issues in green, and corrects typos as you finish a word. **Edit ▸ Writing Tools** proofreads, rewrites or summarizes the selection, or the whole document.
-- **Find and replace**, **Go to Heading** (⇧⌘O), undo that understands lists and tables, and formatting shortcuts for everything in the bottom bar.
+- **Style tools, after iA Writer.** **View ▸ Syntax Highlight** colors adjectives, nouns, adverbs, verbs or conjunctions, and **View ▸ Style Check** underlines filler words, clichés and redundancies, in English and German.
+- **A bar that stays out of the way.** Move the pointer to the bottom edge for the formatting bar; its buttons light up for what is in effect at the caret, and it folds into a menu in a narrow window. Typing hides it again.
+- **Find and replace**, **Go to Heading** (⇧⌘O), undo that understands lists and tables, and ⌘←, ⌘→ and ⌘⌫ that work on the line you see, even in a long wrapped paragraph.
 - **Vim and Helix keys**, if your fingers want them: Vim's normal, insert and visual modes with counts, operators, motions, text objects, `.` and `:w`, or Helix's select-then-act editing (`w`, `x`, `mi`, `d`, `c`, `y`). Choose in **Settings ▸ Writing** or **Edit ▸ Editing Keys**; ⌘ shortcuts keep working. A card shows what each waiting key can do, `space` (Helix) or `\` (Vim) opens a menu of Focal's commands, `:` lists commands as you type, and **Help ▸ Editing Keys** shows them all.
 
 ### Focus
@@ -81,13 +93,19 @@ Code blocks with a diagram language draw in place, in Focal's colors, light or d
 
 - **Diagrams:** Mermaid (all 22 diagram types), Graphviz, Svgbob, Pikchr, WaveDrom, Vega and Vega-Lite, GeoJSON and TopoJSON maps, and STL models, all drawn by Focal itself. D2 and PlantUML work when their tools are installed (see [below](#optional-diagram-tools)).
 - **Math:** `$…$`, `$$…$$` and the other common notations, typeset with MathJax.
-- **Images**, front matter, footnotes with previews, callouts and alerts, foldable sections, `[[wiki links]]`, tags, emoji shortcodes and tables of contents.
+- Front matter, footnotes with previews, callouts and alerts, foldable sections, `[[wiki links]]`, tags, emoji shortcodes and tables of contents.
+
+### Images
+
+<img src="docs/images/image-viewer.png" alt="The image viewer: a bar chart fills the window, zoomed in, with controls for the previous and next image, zoom, fit, Open in Preview and close" width="880">
+
+Images show in place, sized to the column; Retina screenshots appear at their true size, as in Preview. To look closer, press **⌘Y** or click the button that appears over an image: it fills the window, a pinch, ⌘-scroll or ⌘+ zooms in where you point, dragging pans, and a double click goes back to fit. ← and → step through the document's images, and **Open in Preview** hands the file on. Images from the web are downloaded once and kept, with their space held while they load.
 
 ### Folders
 
 <img src="docs/images/folder-mode.png" alt="Folder mode: a sidebar lists the folder's Markdown files, and a wiki link points to another note" width="880">
 
-Open a folder to get a sidebar of its Markdown files (⌃⌘S), a quick switcher (⌘P), and `[[wiki links]]` between notes. ⌘-click a link to follow it and ⌘[ to come back. A single file gets the sidebar and switcher too, listing the Markdown files beside it. Like Bear, the sidebar lists your `#tags` (and front matter `tags:`), nested ones under their parents; click one to see only its notes.
+Open a folder to get a sidebar of its Markdown files (⌃⌘S), a quick switcher (⌘P), and `[[wiki links]]` between notes. The info panel lists the files **linking here** (View ▸ Linked From…). ⌘-click a link to follow it and ⌘[ to come back; a link to a heading, such as `[[Design#Goals]]` or `[Goals](design.md#goals)`, lands on it. A single file gets the sidebar and switcher too, listing the Markdown files beside it. Like Bear, the sidebar lists your `#tags` (and front matter `tags:`), nested ones under their parents; click one to see only its notes.
 
 ### Every Markdown dialect
 
@@ -101,33 +119,55 @@ Whatever wrote the file, it should look right. Focal reads GitHub-flavored Markd
 
 ## Keyboard shortcuts
 
+**Files and windows**
+
 | Shortcut | Does |
 | --- | --- |
 | ⌘N, ⌘O | New window, open a file or folder (File ▸ Open Recent lists recent ones) |
-| ⌘F, ⌥⌘F | Find, find and replace |
-| ⌘G, ⇧⌘G | Next match, previous match |
-| ⇧⌘O | Go to a heading |
-| ⌘B, ⌘I, ⇧⌘X, ⇧⌘H, ⌘E | Bold, italic, strikethrough, highlight, inline code |
-| ⌘K | Insert a link |
-| ⌘1 to ⌘6, ⌘0 | Heading level, back to a paragraph |
-| ⌘-click, ⌘↩ | Follow a link, wiki link or footnote |
-| ⌘[ | Go back |
-| ⌘D | Focus mode |
-| ⌘=, ⌘− | Bigger or smaller text |
-| ⇧⌘L | Switch between light and dark |
-| ⌥⌘I, ⌥⌘O | Info panel, outline |
-| ⌥⌘R | Show the file in Finder |
 | ⌘P | Quick switcher |
 | ⌃⌘S | Sidebar |
+| ⌥⌘R | Show the file in Finder |
 | ⇧⌘E, ⌥⇧⌘C | Export as HTML, copy as HTML |
 | ⌥⌘P | Print (File ▸ Export as PDF… writes a PDF) |
 | ⌘, | Settings |
 
-Lists, tasks, quotes, tables, code and math blocks are in the **Format** menu and in the bar that appears when the pointer reaches the bottom of the window.
+**Writing**
+
+| Shortcut | Does |
+| --- | --- |
+| ⌘B, ⌘I, ⇧⌘X, ⇧⌘H, ⌘E | Bold, italic, strikethrough, highlight, inline code |
+| ⌘K | Insert a link |
+| ⌘1 to ⌘6, ⌘0 | Heading level, back to a paragraph |
+| ⌥⇧⌘V | Paste as plain text |
+| ⌘F, ⌥⌘F | Find, find and replace |
+| ⌘G, ⇧⌘G | Next match, previous match |
+| ⌥⌘M | Add a review note |
+
+**Moving around**
+
+| Shortcut | Does |
+| --- | --- |
+| ⇧⌘O | Go to a heading |
+| ⌘-click, ⌘↩ | Follow a link, wiki link or footnote |
+| ⌘[ | Go back |
+| ⌥⌘↓, ⌥⌘↑ | Next change, previous change |
+| ⌘←, ⌘→ | Start or end of the line you see |
+
+**Looking**
+
+| Shortcut | Does |
+| --- | --- |
+| ⌘D | Focus mode |
+| ⌘=, ⌘− | Bigger or smaller text |
+| ⇧⌘L | Switch between light and dark |
+| ⌥⌘I, ⌥⌘O | Info panel, outline |
+| ⌘Y | View the image at the caret; in the viewer, + and − zoom, 0 fits, 1 is actual size, ← and → step, Esc closes |
+
+Lists, tasks, quotes, tables, code and math blocks are in the **Format** menu and in the bar at the bottom of the window.
 
 ## Settings
 
-Focal keeps its settings few (⌘,): light, dark or the system's appearance, the typeface for prose (iA Writer Quattro, Duo or Mono, Charter, Libron, Georgia, Palatino, Avenir Next, Helvetica Neue, SF Pro, Menlo, Commit Mono, JetBrains Mono, or any font you have) and for code (iA Writer Mono, Commit Mono, JetBrains Mono, Menlo, Monaco, PT Mono, or any monospaced font you have) with a live preview, text size, line length, what focus mode keeps bright, typewriter scrolling, grammar checking, automatic spelling correction, Vim or Helix keys, update checks and the `focal` command.
+Focal keeps its settings few (⌘,): light, dark or the system's appearance, the typeface for prose (iA Writer Quattro, Duo or Mono, Charter, Libron, Georgia, Palatino, Avenir Next, Helvetica Neue, SF Pro, Menlo, Commit Mono, JetBrains Mono, or any font you have) and for code (iA Writer Mono, Commit Mono, JetBrains Mono, Menlo, Monaco, PT Mono, or any monospaced font you have) with a live preview, text size, line length, what focus mode keeps bright, typewriter scrolling, grammar checking, automatic spelling correction, syntax highlight and the style check, the folder pasted images go to, Vim or Helix keys, update checks and the `focal` command.
 
 ### Optional diagram tools
 
@@ -146,7 +186,7 @@ Focal has no accounts and sends no analytics. It goes online only to check for u
 
 ## Status
 
-Focal is young and used daily by its author. Expect rough edges, and please [open an issue](https://github.com/niklas-heer/focal/issues) when you find one. The [design document](docs/design.md) describes where it is going.
+Focal is young and used daily by its author; the [releases](https://github.com/niklas-heer/focal/releases) say what each version brought. Expect rough edges, and please [open an issue](https://github.com/niklas-heer/focal/issues) when you find one. The [design document](docs/design.md) describes where it is going.
 
 ## Building from source
 

@@ -42,7 +42,13 @@ use crate::settings::{FocusUnit, Settings};
 use crate::spell::{GrammarIssue, SpellChecker};
 use crate::theme::{BOLD_PROSE_FONT, DIMMED, PROSE_FONT, Theme, Typography};
 
+mod changes;
 mod modal;
+mod notes;
+mod paste;
+mod style_marks;
+#[cfg(test)]
+pub(crate) use paste::drop_hint as paste_drop_hint;
 
 actions!(
     focal,
@@ -50,7 +56,7 @@ actions!(
         Backspace,
         Delete,
         DeleteWordBack,
-        DeleteToLineStart,
+        DeleteToVisualLineStart,
         Left,
         Right,
         Up,
@@ -65,8 +71,10 @@ actions!(
         SelectWordRight,
         LineStart,
         LineEnd,
-        SelectLineStart,
-        SelectLineEnd,
+        VisualLineStart,
+        VisualLineEnd,
+        SelectVisualLineStart,
+        SelectVisualLineEnd,
         DocStart,
         DocEnd,
         SelectDocStart,
@@ -79,6 +87,14 @@ actions!(
         Copy,
         Cut,
         Paste,
+        PasteAsPlainText,
+        NextChange,
+        PreviousChange,
+        DismissChanges,
+        CompareWithLastCommit,
+        AddNote,
+        CancelNote,
+        CopyNotesForAgent,
         Undo,
         Redo,
         Save,
@@ -111,6 +127,7 @@ actions!(
         CopyHtml,
         Highlight,
         ShowInFinder,
+        ViewImage,
     ]
 );
 
@@ -121,17 +138,31 @@ pub struct SetHeading(pub u8);
 
 /// What the editor asks of its window.
 pub enum EditorEvent {
-    /// Open this file, from a followed link.
-    Open(PathBuf),
+    /// Open this file, from a followed link, with the caret at the heading
+    /// the link's fragment names, if the file has one.
+    Open(PathBuf, Option<links::Fragment>),
     /// The caret jumped (to an anchor or a footnote) from this selection,
     /// which "back" returns to.
     Jumped(Range<usize>),
     /// Vim or Helix searched for this text, which ⌘G and the find bar go on
     /// with.
     Searched(String),
+    /// The review notes changed, or were copied.
+    NotesChanged,
+    /// Show these images in the image viewer, starting with this one.
+    ViewImages(Vec<crate::viewer::ViewedImage>, usize),
 }
 
 impl EventEmitter<EditorEvent> for Editor {}
+
+/// What follows a save, once the text is on disk.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum AfterSave {
+    Stay,
+    Close,
+    /// Open this file in the document's place, at this heading.
+    Open(PathBuf, Option<links::Fragment>),
+}
 
 /// What the bottom bar shows about the document and the caret.
 pub(crate) struct BarState {
@@ -142,6 +173,8 @@ pub(crate) struct BarState {
     pub words: usize,
     pub selected_words: usize,
     pub minutes: usize,
+    /// What is in effect at the caret, which the buttons show.
+    pub active: crate::bar::Active,
 }
 
 /// Replaces a misspelled word, chosen from the spelling menu.
@@ -157,6 +190,21 @@ pub struct ReplaceWord {
 #[action(namespace = focal, no_json)]
 pub struct IgnoreSpelling {
     word: String,
+}
+
+/// Removes a filler word the style check found, with a space beside it.
+#[derive(Clone, Debug, PartialEq, gpui_kit::Action)]
+#[action(namespace = focal, no_json)]
+pub struct RemoveStyleWord {
+    pub(crate) range: Range<usize>,
+    pub(crate) word: String,
+}
+
+/// Stops marking a style finding in this document.
+#[derive(Clone, Debug, PartialEq, gpui_kit::Action)]
+#[action(namespace = focal, no_json)]
+pub struct IgnoreStyle {
+    pub(crate) word: String,
 }
 
 #[derive(Clone, Debug, PartialEq, gpui_kit::Action)]
@@ -184,6 +232,8 @@ type HighlightCache = std::collections::HashMap<(&'static str, u64, bool), Rc<Bl
 /// Distinct line texts whose spelling results are kept.
 const SPELL_CACHE_LIMIT: usize = 20_000;
 const AUTOSAVE_DELAY: Duration = Duration::from_millis(400);
+/// How long a notice stays.
+const TOAST_FOR: Duration = Duration::from_millis(2500);
 /// Editors and agents write in bursts; wait this long before reloading.
 const RELOAD_SETTLE: Duration = Duration::from_millis(50);
 
@@ -194,7 +244,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("shift-backspace", Backspace, context),
         KeyBinding::new("delete", Delete, context),
         KeyBinding::new("alt-backspace", DeleteWordBack, context),
-        KeyBinding::new("cmd-backspace", DeleteToLineStart, context),
+        KeyBinding::new("cmd-backspace", DeleteToVisualLineStart, context),
         KeyBinding::new("left", Left, context),
         KeyBinding::new("right", Right, context),
         KeyBinding::new("up", Up, context),
@@ -207,12 +257,12 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("alt-right", WordRight, context),
         KeyBinding::new("alt-shift-left", SelectWordLeft, context),
         KeyBinding::new("alt-shift-right", SelectWordRight, context),
-        KeyBinding::new("cmd-left", LineStart, context),
-        KeyBinding::new("cmd-right", LineEnd, context),
+        KeyBinding::new("cmd-left", VisualLineStart, context),
+        KeyBinding::new("cmd-right", VisualLineEnd, context),
         KeyBinding::new("home", LineStart, context),
         KeyBinding::new("end", LineEnd, context),
-        KeyBinding::new("cmd-shift-left", SelectLineStart, context),
-        KeyBinding::new("cmd-shift-right", SelectLineEnd, context),
+        KeyBinding::new("cmd-shift-left", SelectVisualLineStart, context),
+        KeyBinding::new("cmd-shift-right", SelectVisualLineEnd, context),
         KeyBinding::new("cmd-up", DocStart, context),
         KeyBinding::new("cmd-down", DocEnd, context),
         KeyBinding::new("cmd-shift-up", SelectDocStart, context),
@@ -225,6 +275,14 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-c", Copy, context),
         KeyBinding::new("cmd-x", Cut, context),
         KeyBinding::new("cmd-v", Paste, context),
+        KeyBinding::new("cmd-alt-shift-v", PasteAsPlainText, context),
+        KeyBinding::new("cmd-alt-down", NextChange, context),
+        KeyBinding::new("cmd-alt-up", PreviousChange, context),
+        KeyBinding::new("cmd-alt-m", AddNote, context),
+        KeyBinding::new("escape", CancelNote, Some("FocalNote > Input")),
+        // Only while changes show, with Focal's own keys, and nothing else
+        // (the find bar, a cell, Vim or Helix) wants Esc.
+        KeyBinding::new("escape", DismissChanges, Some("FocalEditor && changes")),
         KeyBinding::new("cmd-z", Undo, context),
         KeyBinding::new("cmd-shift-z", Redo, context),
         KeyBinding::new("cmd-s", Save, context),
@@ -240,6 +298,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-alt-p", Print, context),
         KeyBinding::new("cmd-alt-shift-c", CopyHtml, context),
         KeyBinding::new("cmd-enter", OpenLink, context),
+        KeyBinding::new("cmd-y", ViewImage, context),
         KeyBinding::new("cmd-0", SetHeading(0), context),
         KeyBinding::new("cmd-1", SetHeading(1), context),
         KeyBinding::new("cmd-2", SetHeading(2), context),
@@ -342,6 +401,14 @@ pub(crate) struct PaintedRow {
     pub(crate) bounds: Bounds<Pixels>,
 }
 
+/// The soft-wrapped row of a source line that the caret is on, as source
+/// offsets. `None` is the source line's own edge: a line's first row starts
+/// there and its last row ends there.
+struct VisualLine {
+    start: Option<usize>,
+    end: Option<usize>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Granularity {
     Character,
@@ -396,7 +463,13 @@ pub struct Editor {
     /// The word count of a text version, for the bottom bar.
     word_count: Cell<Option<(u64, usize)>>,
     conflict: bool,
+    /// The last save could not write the file.
+    save_failed: bool,
     error: Option<String>,
+    /// A short notice that something was done, and the timer that clears it.
+    toast: Option<(String, Task<()>)>,
+    /// Whether the bottom bar shows, which the corner pills make room for.
+    bar_shown: bool,
     trace: bool,
     spell: RefCell<SpellChecker>,
     a11y_ids: RunIds,
@@ -422,6 +495,10 @@ pub struct Editor {
     /// Remote images being downloaded, and those that failed, by URL.
     pub(crate) fetching_images: RefCell<std::collections::HashSet<String>>,
     pub(crate) failed_images: RefCell<HashMap<String, Instant>>,
+    /// Remote images downloaded this session, and when, while they fade in.
+    pub(crate) arrived_images: RefCell<HashMap<String, Instant>>,
+    /// The size each diagram source was last drawn at, by its key.
+    pub(crate) diagram_sizes: RefCell<HashMap<u64, (f32, f32)>>,
     /// Image embeds found in the folder, by name, and when they were looked for.
     pub(crate) found_files: RefCell<HashMap<String, (Option<PathBuf>, Instant)>>,
     /// The pointer's last position, where a footnote preview appears.
@@ -461,9 +538,33 @@ pub struct Editor {
     modal: Option<focal_core::modal::Modal>,
     /// Sends keys to Vim or Helix before Focal's bindings see them.
     _modal_keys: gpui_kit::Subscription,
+    /// While files are dragged over: what dropping them does, and where.
+    drop_hint: Option<(String, Point<Pixels>)>,
+    /// Mark filler words, clichés and redundancies; color these parts of
+    /// speech.
+    style_check: bool,
+    syntax_highlight: Vec<crate::style::Part>,
+    /// Parts of speech and language by line text, like the spelling cache.
+    tag_cache: RefCell<std::collections::HashMap<String, Rc<crate::style::Tagged>>>,
+    /// Style findings ignored in this document, lowercase.
+    ignored_style: std::collections::HashSet<String>,
+    /// Review notes beside the document, where their passages are, and
+    /// anything else their file holds.
+    notes: Vec<focal_core::review::Note>,
+    note_anchors: Vec<focal_core::review::Anchor>,
+    notes_extra: String,
+    note_draft: Option<notes::NoteDraft>,
+    /// The notes were just copied for an agent (the Notes tab says so).
+    pub(crate) notes_copied: bool,
+    /// Reads the notes again when their file changes on disk.
+    notes_watch: Option<(notify::RecommendedWatcher, Task<()>)>,
+    /// What changes are shown against, if anything.
+    baseline: Option<changes::Baseline>,
+    changes: Rc<focal_core::diff::Changes>,
 }
 
 impl Editor {
+    #[allow(clippy::too_many_lines)]
     pub fn new(
         document: Document,
         text: String,
@@ -505,6 +606,9 @@ impl Editor {
             remeasured: false,
             word_count: Cell::new(None),
             conflict: false,
+            save_failed: false,
+            toast: None,
+            bar_shown: false,
             error: None,
             trace: std::env::var_os("FOCAL_TRACE").is_some(),
             spell: RefCell::new(SpellChecker::new()),
@@ -523,6 +627,8 @@ impl Editor {
             diagrams: RefCell::default(),
             fetching_images: RefCell::default(),
             failed_images: RefCell::default(),
+            arrived_images: RefCell::default(),
+            diagram_sizes: RefCell::default(),
             found_files: RefCell::default(),
             pointer: Point::default(),
             frame: Rc::default(),
@@ -540,7 +646,21 @@ impl Editor {
             found_for: None,
             modal: modal::for_keyboard(settings.keyboard),
             _modal_keys: Self::intercept_modal_keys(cx),
+            drop_hint: None,
+            style_check: settings.style_check,
+            syntax_highlight: settings.syntax_highlight.clone(),
+            tag_cache: RefCell::default(),
+            ignored_style: std::collections::HashSet::new(),
+            notes: Vec::new(),
+            note_anchors: Vec::new(),
+            notes_extra: String::new(),
+            note_draft: None,
+            notes_copied: false,
+            notes_watch: None,
+            baseline: None,
+            changes: Rc::default(),
         };
+        editor.load_notes();
         // A single file's wiki links resolve among the files beside it.
         if let Some(dir) = editor
             .path()
@@ -568,6 +688,10 @@ impl Editor {
             editor.refresh();
         }
         editor.watch_document(cx);
+        // Unsaved text from the start (piped in) is kept as a draft at once.
+        if editor.document.path.is_none() && editor.dirty() {
+            editor.schedule_save(cx);
+        }
         editor
     }
 
@@ -629,16 +753,19 @@ impl Editor {
             let Ok(Ok(Some(path))) = chosen.await else {
                 return;
             };
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
             let written = cx
                 .background_executor()
                 .spawn(async move { crate::export::write_page(&text, &title, &sources, &path) })
                 .await;
-            if let Err(error) = written {
-                this.update(cx, |this, cx| {
-                    this.show_error(format!("Could not export: {error:#}"), cx);
-                })
-                .ok();
-            }
+            this.update(cx, |this, cx| match written {
+                Ok(()) => this.tell(format!("Exported {name}"), cx),
+                Err(error) => this.show_error(format!("Could not export: {error:#}"), cx),
+            })
+            .ok();
         })
         .detach();
     }
@@ -820,9 +947,15 @@ impl Editor {
         let html = cx
             .background_executor()
             .spawn(async move { crate::export::pasteboard_html(&text, &sources) });
-        cx.spawn(async move |_, cx| {
+        let what = if self.selection.is_empty() {
+            "Copied the document as HTML"
+        } else {
+            "Copied the selection as HTML"
+        };
+        cx.spawn(async move |this, cx| {
             let html = html.await;
             cx.update(|_| crate::mac::copy_html(&html, &plain));
+            this.update(cx, |this, cx| this.tell(what, cx)).ok();
         })
         .detach();
     }
@@ -881,18 +1014,25 @@ impl Editor {
             .and_then(std::path::Path::parent)
             .map(PathBuf::from);
         if link.wiki {
+            let (name, _) = links::wiki_target(&destination);
+            let fragment = links::wiki_fragment(&destination);
+            if name.is_empty() {
+                // `[[#Heading]]` names a heading in this document.
+                if let Some(fragment) = fragment {
+                    self.jump_to_fragment(&fragment, cx);
+                }
+                return true;
+            }
             let target = self.wiki_file(&destination).or_else(|| {
-                let (name, _) = links::wiki_target(&destination);
                 let dir = folder.clone().or_else(|| self.link_root.clone())?;
-                (!name.is_empty()).then(|| dir.join(format!("{name}.md")))
+                Some(dir.join(format!("{name}.md")))
             });
             if let Some(target) = target {
-                cx.emit(EditorEvent::Open(target));
+                cx.emit(EditorEvent::Open(target, fragment));
             }
-        } else if let Some(slug) = destination.strip_prefix('#') {
-            let analysis = self.snapshot.analysis.clone();
-            if let Some(at) = links::find_heading(&analysis, self.text(), slug) {
-                self.jump_to(at, cx);
+        } else if destination.starts_with('#') {
+            if let Some(fragment) = links::markdown_fragment(&destination) {
+                self.jump_to_fragment(&fragment, cx);
             }
         } else if destination.contains("://") || destination.starts_with("mailto:") {
             cx.open_url(&destination);
@@ -905,7 +1045,10 @@ impl Editor {
                     .any(|x| e.eq_ignore_ascii_case(x))
             });
             if markdown {
-                cx.emit(EditorEvent::Open(target));
+                cx.emit(EditorEvent::Open(
+                    target,
+                    links::markdown_fragment(&destination),
+                ));
             } else {
                 cx.open_url(&format!("file://{}", target.display()));
             }
@@ -920,6 +1063,23 @@ impl Editor {
         let from = self.selection.clone();
         self.move_to(offset, cx);
         cx.emit(EditorEvent::Jumped(from));
+    }
+
+    /// Moves the caret to the heading `fragment` names, which "back" returns
+    /// from. Does nothing when no heading matches.
+    fn jump_to_fragment(&mut self, fragment: &links::Fragment, cx: &mut Context<Self>) {
+        if let Some(at) = links::find_fragment(&self.snapshot.analysis, self.text(), fragment) {
+            self.jump_to(at, cx);
+        }
+    }
+
+    /// Puts the caret on the heading `fragment` names, for a document that
+    /// was just opened by a link. "Back" does not return from it: the
+    /// window's history already holds the link's source.
+    pub(crate) fn reveal_fragment(&mut self, fragment: &links::Fragment, cx: &mut Context<Self>) {
+        if let Some(at) = links::find_fragment(&self.snapshot.analysis, self.text(), fragment) {
+            self.select(at..at, cx);
+        }
     }
 
     fn follow_footnote(&mut self, offset: usize, cx: &mut Context<Self>) -> bool {
@@ -971,8 +1131,13 @@ impl Editor {
     /// pointer, or hides the preview.
     pub(crate) fn preview_footnote_at(&mut self, offset: Option<usize>, cx: &mut Context<Self>) {
         let preview = offset.and_then(|offset| {
-            let start = self.snapshot.analysis.footnote_at(offset)?.range.start;
-            Some((start, self.footnote_text(offset)?))
+            let footnote = self
+                .snapshot
+                .analysis
+                .footnote_at(offset)
+                .and_then(|footnote| Some((footnote.range.start, self.footnote_text(offset)?)));
+            // Or the text deleted there, when changes show.
+            footnote.or_else(|| Some((offset, self.deleted_at(offset)?)))
         });
         let unchanged = self.footnote_preview.as_ref().map(|(start, _)| *start)
             == preview.as_ref().map(|(start, _)| *start);
@@ -1017,10 +1182,19 @@ impl Editor {
         self.follow_link(head, cx);
     }
 
+    /// Opens the image viewer on the image at the caret, or on its line.
+    fn view_image(&mut self, _: &ViewImage, _: &mut Window, cx: &mut Context<Self>) {
+        let head = self.head();
+        self.view_image_at(head, cx);
+    }
+
     /// Selects `range`, clamped to the text, as "back" does.
     pub(crate) fn select(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
-        let len = self.text().len();
-        self.selection = range.start.min(len)..range.end.min(len);
+        // A position kept from before the file changed may fall inside a
+        // character now.
+        let text = self.text();
+        self.selection =
+            floor_char_boundary(text, range.start)..floor_char_boundary(text, range.end);
         self.reversed = false;
         self.after_selection(cx);
     }
@@ -1030,15 +1204,55 @@ impl Editor {
         cx.notify();
     }
 
+    /// Says briefly that something was done, or why nothing was; the notice
+    /// leaves by itself.
+    pub(crate) fn tell(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
+        let clear = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(TOAST_FOR).await;
+            this.update(cx, |this, cx| {
+                this.toast = None;
+                cx.notify();
+            })
+            .ok();
+        });
+        self.toast = Some((message.into(), clear));
+        cx.notify();
+    }
+
+    /// The notice shown, if any.
+    #[cfg(test)]
+    pub(crate) fn toast(&self) -> Option<&str> {
+        self.toast.as_ref().map(|(message, _)| message.as_str())
+    }
+
+    /// Makes room for the bottom bar, or gives it back.
+    pub(crate) fn set_bar_shown(&mut self, shown: bool, cx: &mut Context<Self>) {
+        if self.bar_shown != shown {
+            self.bar_shown = shown;
+            cx.notify();
+        }
+    }
+
+    /// How far above the window's bottom edge the corner pills sit: over
+    /// the bottom bar while it shows.
+    pub(crate) fn pill_bottom(&self) -> Pixels {
+        px(if self.bar_shown {
+            crate::bar::BAR_MARGIN + crate::bar::BAR_HEIGHT + 10.
+        } else {
+            12.
+        })
+    }
+
     pub(crate) fn path(&self) -> Option<&std::path::Path> {
         self.document.path.as_deref()
     }
 
-    /// Writes an open table cell into the text and saves, before the editor is
-    /// replaced by another file's.
-    pub(crate) fn flush(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Writes an open table cell into the text and saves, as leaving the
+    /// document does. Tells whether the file now holds the text.
+    #[cfg(test)]
+    pub(crate) fn flush(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         self.close_cell(window, cx);
-        self.save_now(cx);
+        self.save_now(cx)
     }
 
     #[cfg(test)]
@@ -1048,6 +1262,11 @@ impl Editor {
 
     pub(crate) fn text(&self) -> &str {
         self.buffer.text()
+    }
+
+    /// Whether the placeholder shows: an empty untitled document.
+    fn shows_placeholder(&self) -> bool {
+        self.document.path.is_none() && self.text().is_empty()
     }
 
     const fn head(&self) -> usize {
@@ -1200,7 +1419,9 @@ impl Editor {
                     Row::Line(line) => {
                         views[line].text.hash(&mut hasher);
                         views[line].runs.hash(&mut hasher);
-                        analysis.info(line).hash(&mut hasher);
+                        analysis
+                            .info(line)
+                            .hash_from(analysis.lines.range(line).start, &mut hasher);
                         focus
                             .as_ref()
                             .map(|f| f.lines.contains(&line).then_some(&f.sentence))
@@ -1302,24 +1523,128 @@ impl Editor {
     fn reveal_caret(&mut self) {
         self.reveal_frames = 4;
         self.center_frames = 4;
+        if self.caret_in_view_painted() == Some(true) {
+            return;
+        }
         let row = self.head_row();
-        if self.row_in_view(row) != Some(true) {
-            self.list.scroll_to_reveal_item(row);
+        match self.row_in_view(row) {
+            Some(true) => {}
+            // Taller than the window: scrolling to the row's top would hide a
+            // caret near its end, so `keep_revealing` scrolls to the caret's
+            // line instead once it is drawn.
+            Some(false) if !self.row_fits(row) => {}
+            // Drawn in the last frame but just edited, so not measured yet:
+            // `keep_revealing` looks again once it is laid out where it is.
+            None if self.was_painted(row) => {}
+            _ => self.list.scroll_to_reveal_item(row),
         }
     }
 
     /// Whether row `row`'s text was in view in the last frame, leaving out
     /// the room below the last row; `None` when it was not laid out.
     fn row_in_view(&self, row: usize) -> Option<bool> {
-        let bounds = self.list.bounds_for_item(row)?;
+        let bounds = self.text_bounds(row)?;
         let viewport = self.list.viewport_bounds();
-        let last = row + 1 == self.snapshot.rows.len();
-        let bottom = if last && !self.typewriter_active() {
-            bounds.bottom() - END_PADDING
-        } else {
-            bounds.bottom()
-        };
-        Some(bounds.top() >= viewport.top() && bottom <= viewport.bottom())
+        Some(bounds.top() >= viewport.top() && bounds.bottom() <= viewport.bottom())
+    }
+
+    /// Row `row`'s bounds as laid out in the last frame, leaving out the room
+    /// below the last row.
+    fn text_bounds(&self, row: usize) -> Option<Bounds<Pixels>> {
+        let mut bounds = self.list.bounds_for_item(row)?;
+        if row + 1 == self.snapshot.rows.len() && !self.typewriter_active() {
+            bounds.size.height = (bounds.size.height - END_PADDING).max(px(0.));
+        }
+        Some(bounds)
+    }
+
+    /// Whether row `row` fits in the window, so that revealing it whole also
+    /// reveals the caret; true when it was not laid out.
+    fn row_fits(&self, row: usize) -> bool {
+        self.text_bounds(row)
+            .is_none_or(|bounds| bounds.size.height <= self.list.viewport_bounds().size.height)
+    }
+
+    /// The top and bottom of the caret's line where it was drawn in the last
+    /// frame, if the line still reads as it did then.
+    fn painted_caret_line(&self) -> Option<(Pixels, Pixels)> {
+        let head = self.head();
+        let line = self.snapshot.analysis.lines.line_of(head);
+        let current = self.snapshot.views.get(line)?;
+        self.painted.borrow().iter().find_map(|painted| {
+            if painted.row != Row::Line(line) {
+                return None;
+            }
+            let (layout, view) = (painted.layout.as_ref()?, painted.view.as_ref()?);
+            if **view != **current {
+                return None;
+            }
+            let position = layout.position_for_index(view.map.to_display(head))?;
+            Some((position.y, position.y + layout.line_height()))
+        })
+    }
+
+    /// The soft-wrapped row the caret is on, from the layout drawn in the last
+    /// frame; `None` when the caret's line was not drawn as it reads now.
+    fn painted_visual_line(&self) -> Option<VisualLine> {
+        let head = self.head();
+        let line = self.snapshot.analysis.lines.line_of(head);
+        let current = self.snapshot.views.get(line)?;
+        self.painted.borrow().iter().find_map(|painted| {
+            if painted.row != Row::Line(line) {
+                return None;
+            }
+            let (layout, view) = (painted.layout.as_ref()?, painted.view.as_ref()?);
+            if **view != **current {
+                return None;
+            }
+            let caret = view.map.to_display(head);
+            let wrapped = layout.line_layout_for_index(caret)?;
+            // A soft wrap starts a row at the display offset of its first glyph.
+            let breaks: Vec<usize> = wrapped
+                .wrap_boundaries()
+                .iter()
+                .filter_map(|boundary| {
+                    let glyph = wrapped
+                        .runs()
+                        .get(boundary.run_ix)?
+                        .glyphs
+                        .get(boundary.glyph_ix)?;
+                    Some(glyph.index)
+                })
+                .collect();
+            // A caret on a wrap belongs to the row it starts, as it is drawn.
+            let row = breaks.iter().take_while(|&&at| at <= caret).count();
+            let first = row.checked_sub(1).and_then(|ix| breaks.get(ix)).copied();
+            let end = breaks.get(row).map(|&next| {
+                // The row ends before the spaces that wrap it, so the caret
+                // stays on this row rather than being drawn at the next.
+                let from = first.unwrap_or(0);
+                let kept = view
+                    .text
+                    .get(from..next)
+                    .map_or(0, |text| text.trim_end().len());
+                from + kept
+            });
+            Some(VisualLine {
+                start: first.map(|at| view.map.to_source(at)),
+                end: end.map(|at| view.map.to_source(at)),
+            })
+        })
+    }
+
+    /// Whether the caret's line was in view in the last frame; `None` when
+    /// it was not drawn as it reads now.
+    fn caret_in_view_painted(&self) -> Option<bool> {
+        let (top, bottom) = self.painted_caret_line()?;
+        let viewport = self.list.viewport_bounds();
+        Some(top >= viewport.top() && bottom <= viewport.bottom())
+    }
+
+    /// Whether the caret's line was in view in the last frame.
+    #[cfg(test)]
+    pub(crate) fn caret_in_view(&self) -> bool {
+        self.caret_in_view_painted() == Some(true)
     }
 
     /// Reveals the caret again once the rows the last reveal scrolled to
@@ -1330,10 +1655,28 @@ impl Editor {
         }
         self.reveal_frames -= 1;
         let row = self.head_row();
+        if self.caret_in_view_painted() == Some(true) {
+            self.reveal_frames = 0;
+            return;
+        }
         match self.row_in_view(row) {
             Some(true) => {
                 self.reveal_frames = 0;
                 return;
+            }
+            // A row taller than the window: bring the caret's line into view
+            // by the least scrolling, with a line to spare.
+            Some(false) if !self.row_fits(row) => {
+                if let Some((top, bottom)) = self.painted_caret_line() {
+                    let viewport = self.list.viewport_bounds();
+                    let spare = bottom - top;
+                    let delta = if bottom > viewport.bottom() {
+                        bottom - viewport.bottom() + spare
+                    } else {
+                        top - viewport.top() - spare
+                    };
+                    self.list.scroll_by(delta);
+                }
             }
             Some(false) => self.list.scroll_to_reveal_item(row),
             // In view in the last frame, but changed since (its syntax was
@@ -1427,11 +1770,14 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         let before = self.selection.clone();
+        let (edited, inserted) = (range.clone(), new.len());
         self.buffer
             .edit(range, new, before, selection.clone(), kind);
         self.selection = selection;
         self.reversed = false;
         self.goal_x = None;
+        self.recompute_changes(false);
+        self.anchor_notes_after_edit(&edited, inserted);
         self.refresh();
         if self.grid.is_none() {
             self.reveal_caret();
@@ -1551,14 +1897,18 @@ impl Editor {
         self.edit(start..end, "", start..start, EditKind::Other, cx);
     }
 
-    fn delete_to_line_start(
+    fn delete_to_visual_line_start(
         &mut self,
-        _: &DeleteToLineStart,
+        _: &DeleteToVisualLineStart,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let head = self.head();
-        let start = self.line_range_at(head).start;
+        let start = self
+            .painted_visual_line()
+            .and_then(|line| line.start)
+            .unwrap_or_else(|| self.line_range_at(head).start);
+        // At the start of a visual line this is a plain backspace.
         let start = if start == head {
             self.buffer.previous_grapheme(head)
         } else {
@@ -1673,14 +2023,49 @@ impl Editor {
         self.move_to(to, cx);
     }
 
-    fn select_line_start(&mut self, _: &SelectLineStart, _: &mut Window, cx: &mut Context<Self>) {
-        let to = self.content_start_at(self.head());
+    fn visual_line_start(&mut self, _: &VisualLineStart, _: &mut Window, cx: &mut Context<Self>) {
+        let to = self.visual_line_start_at_head();
+        self.move_to(to, cx);
+    }
+
+    fn visual_line_end(&mut self, _: &VisualLineEnd, _: &mut Window, cx: &mut Context<Self>) {
+        let to = self.visual_line_end_at_head();
+        self.move_to(to, cx);
+    }
+
+    fn select_visual_line_start(
+        &mut self,
+        _: &SelectVisualLineStart,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let to = self.visual_line_start_at_head();
         self.select_to(to, cx);
     }
 
-    fn select_line_end(&mut self, _: &SelectLineEnd, _: &mut Window, cx: &mut Context<Self>) {
-        let to = self.line_range_at(self.head()).end;
+    fn select_visual_line_end(
+        &mut self,
+        _: &SelectVisualLineEnd,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let to = self.visual_line_end_at_head();
         self.select_to(to, cx);
+    }
+
+    /// Where the caret's visual line starts. On the source line's first row
+    /// that is after any list or quote prefix, as before soft wrapping.
+    fn visual_line_start_at_head(&self) -> usize {
+        self.painted_visual_line()
+            .and_then(|line| line.start)
+            .unwrap_or_else(|| self.content_start_at(self.head()))
+    }
+
+    /// Where the caret's visual line ends, before its soft wrap.
+    fn visual_line_end_at_head(&self) -> usize {
+        self.painted_visual_line()
+            .and_then(|line| line.end)
+            .unwrap_or_else(|| self.line_range_at(self.head()).end)
     }
 
     fn doc_start(&mut self, _: &DocStart, _: &mut Window, cx: &mut Context<Self>) {
@@ -1766,12 +2151,6 @@ impl Editor {
         }
     }
 
-    fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            self.insert(&text, EditKind::Other, cx);
-        }
-    }
-
     fn undo(&mut self, _: &Undo, window: &mut Window, cx: &mut Context<Self>) {
         self.close_cell(window, cx);
         if let Some(selection) = self.buffer.undo() {
@@ -1791,6 +2170,8 @@ impl Editor {
         let len = self.text().len();
         self.selection = selection.start.min(len)..selection.end.min(len);
         self.reversed = false;
+        self.recompute_changes(false);
+        self.anchor_notes();
         self.refresh();
         self.reveal_caret();
         self.schedule_save(cx);
@@ -1931,7 +2312,37 @@ impl Editor {
             words,
             selected_words: word_count(&self.text()[self.selection.clone()]),
             minutes: reading_minutes(words),
+            active: self.active_at_caret(),
         }
+    }
+
+    /// The inline styles and the block around the caret, and focus mode.
+    fn active_at_caret(&self) -> crate::bar::Active {
+        use focal_core::analysis::{ListMarker, PrefixLevel};
+        let analysis = &self.snapshot.analysis;
+        let info = analysis.info(analysis.lines.line_of(self.head()));
+        let mut active = crate::bar::Active {
+            styles: analysis.styles_at(self.head()),
+            quote: info.quote_depth > 0,
+            focus: self.focus_mode,
+            ..crate::bar::Active::default()
+        };
+        let marker = info
+            .prefix
+            .levels
+            .iter()
+            .rev()
+            .find_map(|level| match level {
+                PrefixLevel::List(marker) => Some(marker),
+                PrefixLevel::Quote(_) | PrefixLevel::Block(_) => None,
+            });
+        active.list = match marker {
+            Some(Some(ListMarker::Bullet)) => Some(crate::bar::ListKind::Bullets),
+            Some(Some(ListMarker::Ordered(_))) => Some(crate::bar::ListKind::Numbers),
+            Some(Some(ListMarker::Task { .. })) => Some(crate::bar::ListKind::Task),
+            Some(None) | None => None,
+        };
+        active
     }
 
     fn toggle_focus_mode(&mut self, _: &ToggleFocusMode, _: &mut Window, cx: &mut Context<Self>) {
@@ -1965,16 +2376,9 @@ impl Editor {
             return;
         }
         self.center_frames -= 1;
-        let head = self.head();
-        let line = self.snapshot.analysis.lines.line_of(head);
-        let caret = self.painted.borrow().iter().find_map(|painted| {
-            if painted.row != Row::Line(line) {
-                return None;
-            }
-            let (layout, view) = (painted.layout.as_ref()?, painted.view.as_ref()?);
-            let position = layout.position_for_index(view.map.to_display(head))?;
-            Some(position.y + layout.line_height() / 2.)
-        });
+        let caret = self
+            .painted_caret_line()
+            .map(|(top, bottom)| (top + bottom) / 2.);
         let Some(caret) = caret else {
             window.request_animation_frame();
             return;
@@ -2007,34 +2411,66 @@ impl Editor {
     }
 
     fn save(&mut self, _: &Save, window: &mut Window, cx: &mut Context<Self>) {
-        self.save_as(false, window, cx);
+        self.save_as(AfterSave::Stay, window, cx);
     }
 
-    /// Saves, asking where for an untitled document, then closes the window
-    /// when `close`.
-    fn save_as(&mut self, close: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.document.path.is_some() {
-            self.conflict = false;
-            self.save_now(cx);
-            if close {
-                window.remove_window();
-            }
+    /// Saves, asking where for an untitled document, then does `after`
+    /// once the text is safely on disk. While the file changed on disk
+    /// meanwhile, nothing is written: the banner asks which version to keep.
+    fn save_as(&mut self, after: AfterSave, window: &mut Window, cx: &mut Context<Self>) {
+        if self.document.path.is_none() {
+            self.save_to_chosen_path(after, window, cx);
             return;
         }
-        let directory = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let chosen = cx.prompt_for_new_path(&directory, Some("Untitled.md"));
+        if self.save_now(cx) {
+            Self::then(after, window, cx);
+        }
+    }
+
+    /// Asks where to save, saves there, then does `after`. If the file
+    /// cannot be written, the document stays as it was, draft and all.
+    fn save_to_chosen_path(
+        &mut self,
+        after: AfterSave,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let directory = self
+            .document
+            .path
+            .as_deref()
+            .and_then(std::path::Path::parent)
+            .map(PathBuf::from)
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."));
+        let name = self
+            .document
+            .path
+            .as_deref()
+            .and_then(std::path::Path::file_name)
+            .map_or_else(
+                || "Untitled.md".to_owned(),
+                |n| n.to_string_lossy().into_owned(),
+            );
+        let chosen = cx.prompt_for_new_path(&directory, Some(&name));
         cx.spawn_in(window, async move |this, cx| {
             if let Ok(Ok(Some(path))) = chosen.await {
                 this.update_in(cx, |this, window, cx| {
+                    let before = (this.document.path.clone(), this.document.stamp);
                     this.document.path = Some(path.clone());
+                    this.document.stamp = None;
+                    // The save panel asked before replacing a file there.
+                    if !this.write_now(false, cx) {
+                        (this.document.path, this.document.stamp) = before;
+                        return;
+                    }
+                    this.conflict = false;
                     this.watch_document(cx);
-                    this.save_now(cx);
+                    this.load_notes();
                     this.discard_draft();
                     window.set_window_title(&this.title());
                     crate::recent::note(&path, cx);
-                    if close {
-                        window.remove_window();
-                    }
+                    Self::then(after, window, cx);
                 })
                 .ok();
             }
@@ -2042,16 +2478,27 @@ impl Editor {
         .detach();
     }
 
+    fn then(after: AfterSave, window: &mut Window, cx: &mut Context<Self>) {
+        match after {
+            AfterSave::Stay => {}
+            AfterSave::Close => window.remove_window(),
+            AfterSave::Open(path, fragment) => cx.emit(EditorEvent::Open(path, fragment)),
+        }
+    }
+
     /// Why closing would lose text, if it would: an untitled document with
-    /// unsaved edits that leave some text, or edits made while the file
-    /// changed on disk (which are not saved over it without asking).
+    /// unsaved edits that leave some text, edits made while the file
+    /// changed on disk (which are not saved over it without asking), or
+    /// edits the last save could not write.
     fn close_question(&self) -> Option<CloseQuestion> {
         if !self.dirty() {
             None
         } else if self.conflict {
             Some(CloseQuestion::Conflict)
-        } else if self.document.path.is_none() && !self.text().is_empty() {
-            Some(CloseQuestion::Untitled)
+        } else if self.document.path.is_none() {
+            (!self.text().is_empty()).then_some(CloseQuestion::Untitled)
+        } else if self.save_failed {
+            Some(CloseQuestion::SaveFailed)
         } else {
             None
         }
@@ -2065,28 +2512,52 @@ impl Editor {
     /// be lost (see [`Self::close_question`]) asks first and closes the window
     /// itself once answered.
     fn may_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let Some(question) = self.close_question() else {
-            self.save_now(cx);
+        if self.may_leave(AfterSave::Close, window, cx) {
             self.discard_draft();
+            return true;
+        }
+        false
+    }
+
+    /// Saves, then tells whether this document may be left now (its window
+    /// closed, or another file opened in its place). Text that would be lost
+    /// asks first, and `after` happens once the question is answered.
+    pub(crate) fn may_leave(
+        &mut self,
+        after: AfterSave,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.close_cell(window, cx);
+        if self.document.path.is_some() {
+            self.save_now(cx);
+        }
+        let Some(question) = self.close_question() else {
             return true;
         };
         let title = self.title();
         cx.spawn_in(window, async move |this, cx| {
             match crate::mac::ask_on_close(question, &title) {
                 SaveAnswer::Save => this
-                    .update_in(cx, |this, window, cx| {
-                        if question == CloseQuestion::Conflict {
-                            this.keep_mine(cx);
-                            window.remove_window();
-                        } else {
-                            this.save_as(true, window, cx);
+                    .update_in(cx, |this, window, cx| match question {
+                        CloseQuestion::Conflict => {
+                            if this.keep_mine(cx) {
+                                Self::then(after, window, cx);
+                            }
+                        }
+                        CloseQuestion::Untitled | CloseQuestion::SaveFailed => {
+                            this.save_to_chosen_path(after, window, cx);
                         }
                     })
                     .ok(),
                 SaveAnswer::DontSave => this
-                    .update_in(cx, |this, window, _| {
+                    .update_in(cx, |this, window, cx| {
                         this.discard_draft();
-                        window.remove_window();
+                        // Nothing of it is to be kept: let it go quietly.
+                        this.document.saved_version = this.buffer.version();
+                        this.conflict = false;
+                        this.save_failed = false;
+                        Self::then(after, window, cx);
                     })
                     .ok(),
                 SaveAnswer::Cancel => None,
@@ -2274,18 +2745,71 @@ impl Editor {
         self.document.saved_version = u64::MAX;
     }
 
-    fn save_now(&mut self, cx: &mut Context<Self>) {
+    /// Saves the text if it changed. Tells whether the file now holds it.
+    fn save_now(&mut self, cx: &mut Context<Self>) -> bool {
+        self.write_now(true, cx)
+    }
+
+    /// Writes the text to the file if it changed, after checking, with
+    /// `check_disk`, that nobody else changed the file since Focal last read
+    /// or wrote it; if somebody did, nothing is written and the banner asks
+    /// which version to keep. Tells whether the file now holds the text.
+    fn write_now(&mut self, check_disk: bool, cx: &mut Context<Self>) -> bool {
         self.save_task = None;
-        if !self.dirty() || self.conflict {
-            return;
+        if !self.dirty() {
+            return true;
+        }
+        let Some(path) = self.document.path.clone() else {
+            return false;
+        };
+        if check_disk {
+            if self.conflict {
+                return false;
+            }
+            if self.changed_on_disk(&path) {
+                self.conflict = true;
+                cx.notify();
+                return false;
+            }
+            // The file was found to hold this very text already.
+            if !self.dirty() {
+                return true;
+            }
         }
         let version = self.buffer.version();
-        match self.document.save(self.buffer.text(), version) {
+        let saved = match self.document.save(self.buffer.text(), version) {
             // A notice (saved as UTF-8 after all) shows in the banner.
-            Ok(()) => self.error = self.document.notice.take(),
-            Err(error) => self.error = Some(format!("Could not save: {error:#}")),
-        }
+            Ok(()) => {
+                self.error = self.document.notice.take();
+                true
+            }
+            Err(error) => {
+                self.error = Some(format!("Could not save: {error:#}"));
+                false
+            }
+        };
+        self.save_failed = !saved;
         cx.notify();
+        saved
+    }
+
+    /// Whether the file at `path` changed since Focal last read or wrote it,
+    /// to something other than this text. The same text is taken as saved.
+    fn changed_on_disk(&mut self, path: &std::path::Path) -> bool {
+        let stamp = Stamp::of(path);
+        if stamp.is_none() || stamp == self.document.stamp {
+            return false;
+        }
+        match document::read(path) {
+            Ok((text, _)) if text == self.text() => {
+                self.document.stamp = stamp;
+                self.document.saved_version = self.buffer.version();
+                false
+            }
+            Ok(_) => true,
+            // Unreadable: the write that follows reports what is wrong.
+            Err(_) => false,
+        }
     }
 
     /// Watches the document's file through FSEvents and reloads it on change.
@@ -2311,6 +2835,7 @@ impl Editor {
             }
         });
         self.watch = Some((watcher, task));
+        self.watch_notes(cx);
     }
 
     /// Reloads the file when it changed on disk. With unsaved local edits,
@@ -2347,21 +2872,26 @@ impl Editor {
     ) {
         self.document.format = format;
         self.grid = None;
-        let len = text.len();
-        let selection = self.selection.start.min(len)..self.selection.end.min(len);
+        self.keep_baseline();
+        let old = self.text();
+        let selection = carry_offset(old, text, self.selection.start)
+            ..carry_offset(old, text, self.selection.end);
         self.buffer.replace_all(text, selection.clone());
         self.selection = selection;
         self.document.stamp = stamp;
         self.document.saved_version = self.buffer.version();
         self.conflict = false;
         self.save_task = None;
+        self.recompute_changes(true);
+        self.anchor_notes();
         self.refresh();
         cx.notify();
     }
 
-    fn keep_mine(&mut self, cx: &mut Context<Self>) {
+    /// Writes this version over the file that changed on disk.
+    fn keep_mine(&mut self, cx: &mut Context<Self>) -> bool {
         self.conflict = false;
-        self.save_now(cx);
+        self.write_now(false, cx)
     }
 
     fn reload_from_disk(&mut self, cx: &mut Context<Self>) {
@@ -2841,6 +3371,25 @@ impl Editor {
                 .find(|issue| issue.range.start <= at && at <= issue.range.end)
             {
                 self.grammar_menu(&view, &issue, event.position, window, cx);
+            } else if let Some(issue) = self
+                .style_issues(line, &view, &kind)
+                .into_iter()
+                .find(|issue| issue.range.start <= at && at <= issue.range.end)
+            {
+                self.style_menu(&view, &issue, event.position, window, cx);
+            } else {
+                // Anywhere else: a review note on the selection, or here.
+                if !(self.selection.start <= offset && offset <= self.selection.end) {
+                    self.move_to(offset, cx);
+                }
+                let label = if self.selection.is_empty() {
+                    "Add Note on This Line…"
+                } else {
+                    "Add Note…"
+                };
+                NativeMenu::new()
+                    .menu(label, Box::new(AddNote))
+                    .show(event.position, window, cx);
             }
             return;
         };
@@ -2884,6 +3433,8 @@ impl Editor {
         self.typography = Typography::new(settings);
         self.typewriter = settings.typewriter;
         self.check_grammar = settings.check_grammar;
+        self.style_check = settings.style_check;
+        self.syntax_highlight.clone_from(&settings.syntax_highlight);
         self.correct_spelling =
             settings.correct_spelling && crate::spell::system_corrects_spelling();
         self.set_keyboard(settings.keyboard, cx);
@@ -3082,9 +3633,40 @@ impl Editor {
                     text
                 }
             }
-            Row::Table(table) => self.render_table(table, &theme, window, cx),
-            Row::Island(island) => self.render_island(island, &theme, cx),
+            Row::Table(table) => {
+                let element = self.render_table(table, &theme, window, cx);
+                match self.snapshot.analysis.tables.get(table) {
+                    Some(source) => {
+                        let (range, key) = (source.range.clone(), source.lines.start);
+                        self.with_margin_marks(element, &range, key, 0., &theme, cx)
+                    }
+                    None => element,
+                }
+            }
+            Row::Island(island) => {
+                let element = self.render_island(island, &theme, cx);
+                let lines = &self.snapshot.analysis.lines;
+                let last = island.end.saturating_sub(1).max(island.start);
+                let range = lines.range(island.start).start..lines.range(last).end;
+                self.with_margin_marks(element, &range, island.start, 0., &theme, cx)
+            }
         };
+        // An empty untitled document says what to do where its first line
+        // would be. It is drawn over that line, not put in the text, so it is
+        // no part of the text, the file, the accessibility tree or the caret.
+        let placeholder = (ix == 0 && self.shows_placeholder()).then(|| {
+            div()
+                .id("empty-placeholder")
+                .test_support()
+                .absolute()
+                .top_0()
+                .left_0()
+                .font_family(self.typography.prose.clone())
+                .text_size(px(self.typography.size))
+                .line_height(relative(1.6))
+                .text_color(theme.marker)
+                .child("Write, or ⌘O to open a file")
+        });
         div()
             .w_full()
             .flex()
@@ -3107,9 +3689,11 @@ impl Editor {
             })
             .child(
                 div()
+                    .relative()
                     .w_full()
                     .max_w(px(self.typography.column))
-                    .child(content),
+                    .child(content)
+                    .children(placeholder),
             )
             .into_any_element()
     }
@@ -3174,6 +3758,29 @@ impl Editor {
             .map(|issue| issue.range)
             .collect();
         let marked = mark_runs(&marked, &grammar, InlineStyle::GRAMMAR);
+        let noted: Vec<Range<usize>> = self
+            .noted_on(&analysis.content_range(line))
+            .into_iter()
+            .map(|range| view.map.to_display(range.start)..view.map.to_display(range.end))
+            .filter(|range| !range.is_empty())
+            .collect();
+        let marked = mark_runs(&marked, &noted, InlineStyle::NOTED);
+        let mut marked = mark_runs(
+            &marked,
+            &self.style_ranges(line, &view, &info.kind),
+            InlineStyle::STYLE,
+        );
+        let parts = self.part_ranges(line, &view, &info.kind);
+        for part in crate::style::Part::ALL {
+            let ranges: Vec<Range<usize>> = parts
+                .iter()
+                .filter(|(_, p)| *p == part)
+                .map(|(range, _)| range.clone())
+                .collect();
+            if !ranges.is_empty() {
+                marked = mark_runs(&marked, &ranges, part.style());
+            }
+        }
         let dark = matches!(
             window.appearance(),
             WindowAppearance::Dark | WindowAppearance::VibrantDark
@@ -3230,6 +3837,9 @@ impl Editor {
         let selection_color = theme.selection;
         let found_color = theme.found;
         let found = self.found_on(&line_range);
+        let inserted = self.inserted_on(&line_range);
+        let deleted = self.deleted_on(&line_range);
+        let (inserted_color, deleted_color) = (theme.inserted, theme.deleted);
         let caret_color = theme.caret;
         let _ = (window, cx);
 
@@ -3267,6 +3877,30 @@ impl Editor {
                     let selection = selection.clone();
                     let line_range = line_range.clone();
                     move |_, (), window, _| {
+                        for inserted in &inserted {
+                            paint_selection(
+                                &layout,
+                                &view,
+                                inserted,
+                                &line_range,
+                                inserted_color,
+                                window,
+                            );
+                        }
+                        // A thin mark where text was deleted.
+                        for at in &deleted {
+                            if let Some(position) =
+                                caret_position(&layout, view.map.to_display(*at))
+                            {
+                                window.paint_quad(fill(
+                                    Bounds::new(
+                                        point(position.x - px(1.), position.y),
+                                        size(px(2.), layout.line_height()),
+                                    ),
+                                    deleted_color,
+                                ));
+                            }
+                        }
                         for found in &found {
                             paint_selection(
                                 &layout,
@@ -3382,7 +4016,7 @@ impl Editor {
             Some(fold) => self.with_fold_toggle(content, line, fold, theme, cx),
             None => content,
         };
-        crate::prefix::wrap(
+        let row = crate::prefix::wrap(
             content,
             &info.prefix,
             line,
@@ -3394,7 +4028,95 @@ impl Editor {
             },
             line_height,
             on_toggle,
-        )
+        );
+        self.with_margin_marks(row, &line_range, line, top, theme, cx)
+    }
+
+    /// `row` with what the margins show beside the source `range`: a bar
+    /// where it changed, and a dot per review note starting in it. `key` is
+    /// the row's first line, for the marks' ids.
+    fn with_margin_marks(
+        &self,
+        row: gpui_kit::AnyElement,
+        range: &Range<usize>,
+        key: usize,
+        top: f32,
+        theme: &Theme,
+        cx: &Context<Self>,
+    ) -> gpui_kit::AnyElement {
+        let change_bar = self.change_bar(range, theme);
+        let note_dots = self.note_dots(range);
+        if change_bar.is_none() && note_dots.is_empty() {
+            return row;
+        }
+        let fade = |color: Hsla| {
+            if self.focus_mode {
+                color.opacity(DIMMED)
+            } else {
+                color
+            }
+        };
+        let note_color = fade(theme.note);
+        div()
+            .relative()
+            .child(row)
+            // Changed lines are marked in the left margin.
+            .when_some(change_bar, |d, color| {
+                d.child(
+                    div()
+                        .id(("change-bar", key))
+                        .test_support()
+                        .absolute()
+                        .top(px(top))
+                        .bottom_0()
+                        .left(px(-14.))
+                        .w(px(3.))
+                        .rounded(px(2.))
+                        .bg(fade(color)),
+                )
+            })
+            // Review notes, by a dot in the right margin: hollow when the
+            // passage changed.
+            .children(
+                note_dots
+                    .into_iter()
+                    .enumerate()
+                    .map(|(nth, (ix, changed))| {
+                        let text: SharedString = self
+                            .notes
+                            .get(ix)
+                            .map(|note| note.text.clone())
+                            .unwrap_or_default()
+                            .into();
+                        let label: SharedString = format!("Review note: {text}").into();
+                        #[allow(clippy::cast_precision_loss)]
+                        let shift = 10. * nth as f32;
+                        div()
+                            .id(("note-dot", ix))
+                            .test_support()
+                            .aria_label(label)
+                            .absolute()
+                            .top(px(top + 8.))
+                            .right(px(-20. - shift))
+                            .size(px(8.))
+                            .rounded_full()
+                            .cursor_pointer()
+                            .when(changed, |d| d.border_1().border_color(note_color))
+                            .when(!changed, |d| d.bg(note_color))
+                            .tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(text.clone())
+                                    .build(window, cx)
+                            })
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.edit_note(ix, window, cx);
+                                }),
+                            )
+                    }),
+            )
+            .into_any_element()
     }
 
     /// The find matches inside a table `cell`, as ranges of its displayed
@@ -3502,7 +4224,9 @@ impl Editor {
 
     fn render_banner(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<gpui_kit::AnyElement> {
         if self.conflict {
-            let keep = cx.listener(|this, _, _, cx| this.keep_mine(cx));
+            let keep = cx.listener(|this, _, _, cx| {
+                this.keep_mine(cx);
+            });
             let load = cx.listener(|this, _, _, cx| this.reload_from_disk(cx));
             return Some(
                 banner(theme)
@@ -3521,21 +4245,85 @@ impl Editor {
                     .into_any_element(),
             );
         }
+        let hover = theme.code_background;
         self.error.as_ref().map(|error| {
             banner(theme)
                 .id("error-banner")
                 .test_support()
                 .aria_label(error.clone())
-                .child(error.clone())
+                .child(div().flex_1().child(error.clone()))
+                .child(
+                    div()
+                        .id("error-dismiss")
+                        .test_support()
+                        .aria_label("Dismiss")
+                        .flex_none()
+                        .p(px(4.))
+                        .rounded(px(6.))
+                        .cursor_pointer()
+                        .hover(move |style| style.bg(hover))
+                        .child(crate::icons::Icon::X.element(14.).text_color(theme.text))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.error = None;
+                            cx.notify();
+                        })),
+                )
                 .into_any_element()
         })
     }
 }
 
+impl Editor {
+    /// The notice, centered under the title bar (or the banner).
+    fn render_toast(&self, below_banner: bool, theme: &Theme) -> Option<gpui_kit::AnyElement> {
+        use gpui_kit::AnimationExt as _;
+        let (message, _) = self.toast.as_ref()?;
+        Some(
+            div()
+                .absolute()
+                .top(px(if below_banner {
+                    BANNER_TOP + 56.
+                } else {
+                    BANNER_TOP
+                }))
+                .left_0()
+                .right_0()
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .id("toast")
+                        .test_support()
+                        .aria_label(message.clone())
+                        .px(px(12.))
+                        .py(px(6.))
+                        .rounded(px(10.))
+                        .bg(theme.surface)
+                        .border_1()
+                        .border_color(theme.rule)
+                        .shadow_md()
+                        .font_family(PROSE_FONT)
+                        .text_size(px(12.))
+                        .text_color(theme.text)
+                        .child(message.clone())
+                        .with_animation(
+                            ("toast-in", message.len()),
+                            gpui_kit::Animation::new(Duration::from_millis(150)),
+                            |el, t| el.opacity(t),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+}
+
+/// Where the banner and notices stand: under the title bar.
+const BANNER_TOP: f32 = 44.;
+
 fn banner(theme: &Theme) -> gpui_kit::Div {
     div()
         .absolute()
-        .bottom(px(16.))
+        .top(px(BANNER_TOP))
         .left(px(16.))
         .right(px(16.))
         .flex()
@@ -3690,6 +4478,11 @@ pub(crate) fn text_runs(
                 theme.link
             } else if style.contains(InlineStyle::CODE) {
                 theme.code_text
+            } else if let Some(part) = crate::style::Part::ALL
+                .into_iter()
+                .find(|part| style.contains(part.style()))
+            {
+                theme.part(part)
             } else {
                 base
             };
@@ -3715,6 +4508,18 @@ pub(crate) fn text_runs(
                     Some(UnderlineStyle {
                         color: Some(theme.grammar),
                         thickness: px(1.5),
+                        wavy: false,
+                    })
+                } else if style.contains(InlineStyle::STYLE) {
+                    Some(UnderlineStyle {
+                        color: Some(theme.style_issue),
+                        thickness: px(1.),
+                        wavy: false,
+                    })
+                } else if style.contains(InlineStyle::NOTED) {
+                    Some(UnderlineStyle {
+                        color: Some(theme.note),
+                        thickness: px(2.),
                         wavy: false,
                     })
                 } else {
@@ -3747,9 +4552,58 @@ fn splice_changed_rows(list: &ListState, old: &[u64], new: &[u64]) -> usize {
         .take_while(|(a, b)| a == b)
         .count();
     if old.len() != new.len() || prefix != old.len() {
-        list.splice(prefix..old.len() - suffix, new.len() - prefix - suffix);
+        let changed = prefix..old.len() - suffix;
+        let count = new.len() - prefix - suffix;
+        let top = list.logical_scroll_top();
+        list.splice(changed.clone(), count);
+        // `splice` moves the view to the top of a replaced row it was inside;
+        // in a paragraph taller than the window that is a jump on every key.
+        // Stay at the same depth in the row that replaces it.
+        if changed.contains(&top.item_ix) && count > 0 {
+            list.scroll_to(gpui_kit::ListOffset {
+                item_ix: top.item_ix.min(prefix + count - 1),
+                offset_in_item: top.offset_in_item,
+            });
+        }
     }
     new.len() - prefix - suffix
+}
+
+/// Where `offset` in `old` lands in `new`, the text that replaced it: kept
+/// in the unchanged start, moved with the unchanged end, otherwise at the
+/// end of what changed; always on a character boundary.
+fn carry_offset(old: &str, new: &str, offset: usize) -> usize {
+    let offset = offset.min(old.len());
+    let prefix = old
+        .bytes()
+        .zip(new.bytes())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let room = old.len().min(new.len()) - prefix;
+    let suffix = old
+        .bytes()
+        .rev()
+        .zip(new.bytes().rev())
+        .take(room)
+        .take_while(|(a, b)| a == b)
+        .count();
+    let carried = if offset <= prefix {
+        offset
+    } else if offset >= old.len() - suffix {
+        offset + new.len() - old.len()
+    } else {
+        new.len() - suffix
+    };
+    floor_char_boundary(new, carried)
+}
+
+/// `offset` clamped to `text`, moved back to a character boundary.
+pub(crate) fn floor_char_boundary(text: &str, offset: usize) -> usize {
+    let mut offset = offset.min(text.len());
+    while !text.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    offset
 }
 
 /// Each table's cells as rendered text, for the accessibility tree.
@@ -3999,6 +4853,7 @@ impl Render for Editor {
         let frame = self.frame.clone();
         let preview = self.render_footnote_preview(&theme);
         let banner = self.render_banner(&theme, cx);
+        let has_banner = banner.is_some();
         let title = self.title();
         let a11y = self.a11y_source();
         let a11y_ids = self.a11y_ids.clone();
@@ -4021,7 +4876,18 @@ impl Render for Editor {
                         .ok();
                 }
             })
-            .key_context(CONTEXT)
+            .key_context({
+                let mut context = gpui_kit::KeyContext::new_with_defaults();
+                context.add(CONTEXT);
+                if self.dismissable_changes()
+                    && self.modal.is_none()
+                    && self.grid.is_none()
+                    && self.selection.is_empty()
+                {
+                    context.add("changes");
+                }
+                context
+            })
             .test_support()
             .track_focus(&self.focus_handle)
             .relative()
@@ -4035,7 +4901,7 @@ impl Render for Editor {
             .on_action(cx.listener(Self::show_in_finder))
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::delete_word_back))
-            .on_action(cx.listener(Self::delete_to_line_start))
+            .on_action(cx.listener(Self::delete_to_visual_line_start))
             .on_action(cx.listener(Self::left))
             .on_action(cx.listener(Self::right))
             .on_action(cx.listener(Self::up))
@@ -4050,8 +4916,10 @@ impl Render for Editor {
             .on_action(cx.listener(Self::select_word_right))
             .on_action(cx.listener(Self::line_start))
             .on_action(cx.listener(Self::line_end))
-            .on_action(cx.listener(Self::select_line_start))
-            .on_action(cx.listener(Self::select_line_end))
+            .on_action(cx.listener(Self::visual_line_start))
+            .on_action(cx.listener(Self::visual_line_end))
+            .on_action(cx.listener(Self::select_visual_line_start))
+            .on_action(cx.listener(Self::select_visual_line_end))
             .on_action(cx.listener(Self::doc_start))
             .on_action(cx.listener(Self::doc_end))
             .on_action(cx.listener(Self::select_doc_start))
@@ -4064,6 +4932,14 @@ impl Render for Editor {
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::paste))
+            .on_action(cx.listener(Self::paste_plain))
+            .on_action(cx.listener(Self::next_change))
+            .on_action(cx.listener(Self::previous_change))
+            .on_action(cx.listener(Self::dismiss_changes))
+            .on_action(cx.listener(Self::compare_with_last_commit))
+            .on_action(cx.listener(Self::add_note))
+            .on_action(cx.listener(Self::cancel_note))
+            .on_action(cx.listener(Self::copy_notes_for_agent))
             .on_action(cx.listener(Self::undo))
             .on_action(cx.listener(Self::redo))
             .on_action(cx.listener(Self::save))
@@ -4073,6 +4949,7 @@ impl Render for Editor {
             .on_action(cx.listener(Self::inline_code))
             .on_action(cx.listener(Self::insert_link))
             .on_action(cx.listener(Self::open_link))
+            .on_action(cx.listener(Self::view_image))
             .on_action(cx.listener(Self::export_html))
             .on_action(cx.listener(Self::export_pdf))
             .on_action(cx.listener(Self::print))
@@ -4090,6 +4967,8 @@ impl Render for Editor {
             .on_action(cx.listener(Self::close_window))
             .on_action(cx.listener(Self::replace_word))
             .on_action(cx.listener(Self::ignore_spelling))
+            .on_action(cx.listener(Self::remove_style_word))
+            .on_action(cx.listener(Self::ignore_style))
             .on_action(cx.listener(Self::learn_spelling))
             .on_action(cx.listener(Self::cell_exit))
             .on_action(cx.listener(Self::table_op))
@@ -4103,6 +4982,8 @@ impl Render for Editor {
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
+            .on_drag_move(cx.listener(Self::drag_files))
+            .on_drop(cx.listener(Self::drop_files))
             .child(
                 canvas(
                     |_, _, _| {},
@@ -4149,7 +5030,10 @@ impl Render for Editor {
                     .child(title),
             )
             .children(banner)
+            .children(self.render_toast(has_banner, &theme))
             .children(preview)
             .children(self.render_modal_status(&theme))
+            .children(self.render_changes_pill(&theme, cx))
+            .children(self.render_drop_hint(&theme, cx))
     }
 }

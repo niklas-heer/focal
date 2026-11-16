@@ -9,12 +9,13 @@ use gpui_kit::component::native_menu::NativeMenu;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, App, ClickEvent, Context, FontWeight, InteractiveElement as _, IntoElement,
+    Action, AnyElement, App, ClickEvent, Context, FontWeight, InteractiveElement as _, IntoElement,
     ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _,
     TestSupportExt as _, Window, actions, div, px,
 };
 
 use super::Workspace;
+use crate::bar::tooltip_for;
 use crate::editor::{CopyHtml, ExportHtml, ExportPdf, Print, ShowInFinder, ToggleFocusMode};
 use crate::icons::Icon;
 use crate::settings::{
@@ -25,7 +26,15 @@ use crate::theme::{DIMMED, MONO_FONT, Theme};
 
 actions!(
     focal,
-    [ToggleInfo, ToggleOutline, ToggleRecent, ToggleDarkMode]
+    [
+        ToggleInfo,
+        ToggleOutline,
+        ToggleRecent,
+        ToggleDarkMode,
+        ShowLinkedFrom,
+        ShowNotes,
+        OpenNotesFile
+    ]
 );
 
 pub const PANEL_WIDTH: f32 = 300.;
@@ -36,6 +45,8 @@ pub enum PanelTab {
     Info,
     Outline,
     Recent,
+    /// Review notes for agents.
+    Notes,
 }
 
 impl Workspace {
@@ -46,7 +57,109 @@ impl Workspace {
         } else {
             Some(tab)
         };
+        // The info panel lists the files linking here, so it needs the
+        // files beside a single file too.
+        if self.panel == Some(PanelTab::Info) {
+            self.folder(cx);
+        }
         cx.notify();
+    }
+
+    /// View ▸ Linked From…: the info panel, where the links to this file
+    /// are listed.
+    pub(super) fn show_linked_from(
+        &mut self,
+        _: &ShowLinkedFrom,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.panel != Some(PanelTab::Info) {
+            self.toggle_panel(PanelTab::Info, cx);
+        }
+    }
+
+    /// Opens a file linking here, on its link, remembering this place for
+    /// ⌘[.
+    fn open_backlink(
+        &mut self,
+        file: PathBuf,
+        offset: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(root) = self.folder_root().map(std::path::Path::to_path_buf) else {
+            return;
+        };
+        let editor = self.editor.read(cx);
+        let here = editor.path().map(PathBuf::from);
+        let selection = editor.selection.clone();
+        self.history.push((here, selection));
+        self.open_file(root.join(file), window, cx);
+        self.editor
+            .update(cx, |editor, cx| editor.move_to(offset, cx));
+    }
+
+    /// The files linking to this one, with the line of each link; `None`
+    /// when the window lists no files.
+    fn render_backlinks(&self, theme: &Theme, cx: &Context<Self>) -> Option<AnyElement> {
+        let path = self.editor.read(cx).path()?;
+        let backlinks = self.backlinks_for(path)?;
+        let title: SharedString = format!("LINKED FROM · {}", backlinks.len()).into();
+        let mut section = div().flex().flex_col().gap(px(8.)).child(
+            div()
+                .text_size(px(11.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme.marker)
+                .child(title),
+        );
+        if backlinks.is_empty() {
+            section = section.child(
+                div()
+                    .id("backlinks-empty")
+                    .test_support()
+                    .aria_label("No other file links here.")
+                    .text_size(px(12.))
+                    .text_color(theme.marker)
+                    .child("No other file links here."),
+            );
+        }
+        let hover = theme.code_background;
+        for (ix, backlink) in backlinks.iter().enumerate() {
+            let name = backlink.file.to_string_lossy().into_owned();
+            let line = gpui_kit::StyledText::new(backlink.line.clone()).with_highlights([(
+                backlink.label.clone(),
+                gpui_kit::HighlightStyle {
+                    color: Some(theme.link),
+                    ..Default::default()
+                },
+            )]);
+            let (file, offset) = (backlink.file.clone(), backlink.offset);
+            section = section.child(
+                div()
+                    .id(("backlink", ix))
+                    .test_support()
+                    .aria_label(format!("{name}: {}", backlink.line))
+                    .px(px(8.))
+                    .py(px(5.))
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(hover))
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(div().text_size(px(12.)).text_color(theme.text).child(name))
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme.marker)
+                            .child(line),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.open_backlink(file.clone(), offset, window, cx);
+                    })),
+            );
+        }
+        Some(section.id("panel-backlinks").into_any_element())
     }
 
     /// Light when Focal looks dark, dark when it looks light.
@@ -73,11 +186,16 @@ impl Workspace {
         cx: &Context<Self>,
     ) -> AnyElement {
         let hover = theme.code_background;
-        let button = |id: &'static str, icon: Icon, label: &'static str, active: bool| {
+        let button = |id: &'static str,
+                      icon: Icon,
+                      label: &'static str,
+                      action: Option<Box<dyn Action>>,
+                      active: bool| {
             div()
                 .id(id)
                 .test_support()
                 .aria_label(label)
+                .tooltip(tooltip_for(label, action))
                 .size(px(26.))
                 .flex()
                 .items_center()
@@ -107,6 +225,7 @@ impl Workspace {
                     "corner-outline",
                     Icon::ListTree,
                     "Outline",
+                    Some(Box::new(ToggleOutline)),
                     self.panel == Some(PanelTab::Outline),
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_panel(PanelTab::Outline, cx))),
@@ -116,15 +235,17 @@ impl Workspace {
                     "corner-info",
                     Icon::Info,
                     "Info",
+                    Some(Box::new(ToggleInfo)),
                     self.panel == Some(PanelTab::Info),
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_panel(PanelTab::Info, cx))),
             )
-            .child(button("corner-more", Icon::Ellipsis, "More", false).on_click(more_menu))
+            .child(button("corner-more", Icon::Ellipsis, "More", None, false).on_click(more_menu))
             .into_any_element()
     }
 
     /// The panel at the right edge, when it is open and focus mode is off.
+    #[allow(clippy::too_many_lines)]
     pub(super) fn render_panel(&self, theme: &Theme, cx: &Context<Self>) -> Option<AnyElement> {
         let tab = self.panel?;
         if self.editor.read(cx).focus_mode() {
@@ -134,13 +255,20 @@ impl Workspace {
             PanelTab::Info => self.render_info(theme, cx),
             PanelTab::Outline => self.render_outline(theme, cx),
             PanelTab::Recent => render_recent(self.editor.read(cx).path(), theme, cx),
+            PanelTab::Notes => self.render_notes(theme, cx),
         };
-        let tab_button = |id: &'static str, label: &'static str, which: PanelTab| {
+        let note_count = self.editor.read(cx).notes().len();
+        let notes_label: SharedString = if note_count > 0 {
+            format!("Notes {note_count}").into()
+        } else {
+            "Notes".into()
+        };
+        let tab_button = |id: &'static str, label: SharedString, which: PanelTab| {
             let selected = tab == which;
             div()
                 .id(id)
                 .test_support()
-                .aria_label(label)
+                .aria_label(label.clone())
                 .flex_1()
                 .py(px(3.))
                 .flex()
@@ -186,13 +314,18 @@ impl Workspace {
                                 .p(px(2.))
                                 .rounded(px(8.))
                                 .bg(theme.code_background)
-                                .child(tab_button("panel-tab-info", "Info", PanelTab::Info))
+                                .child(tab_button("panel-tab-info", "Info".into(), PanelTab::Info))
                                 .child(tab_button(
                                     "panel-tab-outline",
-                                    "Outline",
+                                    "Outline".into(),
                                     PanelTab::Outline,
                                 ))
-                                .child(tab_button("panel-tab-recent", "Recent", PanelTab::Recent)),
+                                .child(tab_button(
+                                    "panel-tab-recent",
+                                    "Recent".into(),
+                                    PanelTab::Recent,
+                                ))
+                                .child(tab_button("panel-tab-notes", notes_label, PanelTab::Notes)),
                         )
                         .child(
                             div()
@@ -242,6 +375,7 @@ impl Workspace {
                 theme,
             ))
             .child(document_section(editor, theme))
+            .children(self.render_backlinks(theme, cx))
             .child(appearance_section(settings, theme))
             .child(writing_section(settings, editor.focus_mode(), theme))
             .child(
@@ -494,12 +628,12 @@ fn document_section(editor: &crate::editor::Editor, theme: &Theme) -> impl IntoE
     section("Document", theme).child(details)
 }
 
-/// Light, dark or automatic, the typeface, the size and the line length.
+/// System, light or dark, the typeface, the size and the line length.
 fn appearance_section(settings: &Settings, theme: &Theme) -> impl IntoElement {
     let appearance = [
+        (Appearance::System, Icon::SunMoon, "System"),
         (Appearance::Light, Icon::Sun, "Light"),
         (Appearance::Dark, Icon::Moon, "Dark"),
-        (Appearance::System, Icon::SunMoon, "Auto"),
     ]
     .into_iter()
     .map(|(value, icon, label)| {
@@ -556,12 +690,13 @@ fn appearance_section(settings: &Settings, theme: &Theme) -> impl IntoElement {
                     }))
                     .child(
                         div()
-                            .w(px(44.))
+                            .min_w(px(44.))
                             .flex()
                             .justify_center()
+                            .whitespace_nowrap()
                             .font_family(MONO_FONT)
                             .text_size(px(12.))
-                            .child(format!("{size} pt")),
+                            .child(format!("{} · {size} pt", settings.text_size.name())),
                     )
                     .child(step_button("panel-bigger", "A+", theme, || {
                         Box::new(BiggerText)
@@ -572,9 +707,9 @@ fn appearance_section(settings: &Settings, theme: &Theme) -> impl IntoElement {
             quick_row("Line length", theme).child(crate::settings::segmented(
                 "panel-column",
                 &[
-                    (ColumnWidth::Narrow, "S"),
-                    (ColumnWidth::Medium, "M"),
-                    (ColumnWidth::Wide, "L"),
+                    (ColumnWidth::Narrow, "Narrow"),
+                    (ColumnWidth::Medium, "Medium"),
+                    (ColumnWidth::Wide, "Wide"),
                 ],
                 settings.column_width,
                 |s, v| s.column_width = v,
@@ -604,10 +739,26 @@ fn writing_section(settings: &Settings, focus_mode: bool, theme: &Theme) -> impl
                 theme,
             )),
         )
+        .child(
+            quick_row("Style check", theme).child(crate::settings::toggle(
+                "panel-style-check",
+                settings.style_check,
+                |s, v| s.style_check = v,
+                theme,
+            )),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(4.))
+                .child(div().text_size(px(12.)).child("Syntax highlight"))
+                .child(crate::settings::part_chips(settings, theme)),
+        )
         .child(quick_row("Keys", theme).child(crate::settings::segmented(
             "panel-keys",
             &[
-                (Keyboard::Standard, "Mac"),
+                (Keyboard::Standard, "Standard"),
                 (Keyboard::Vim, "Vim"),
                 (Keyboard::Helix, "Helix"),
             ],

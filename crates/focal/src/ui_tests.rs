@@ -29,6 +29,7 @@ pub fn open_document(
         editor::bind_keys(cx);
         crate::workspace::bind_keys(cx);
         crate::find_bar::bind_keys(cx);
+        crate::viewer::bind_keys(cx);
         // Tests never read or write the user's settings file.
         cx.set_global(Settings::default());
         let bounds = Bounds {
@@ -129,6 +130,143 @@ fn backspace_at_an_item_start_removes_the_bullet(cx: &mut TestAppContext) {
         window.press("backspace", cx);
     });
     editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "item"));
+}
+
+/// One source line that soft-wraps onto several visual lines in the test window.
+fn long_paragraph() -> String {
+    "The quick brown fox jumps over the lazy dog while the editor wraps this sentence onto a line of its own. "
+        .repeat(6)
+        .trim_end()
+        .to_owned()
+}
+
+/// Opens the long paragraph with the caret six letters into its third visual line.
+fn caret_in_third_visual_line(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<Editor>) {
+    let (window, editor) = open_editor(cx, &long_paragraph());
+    act(cx, window, |window, cx| {
+        window.press("cmd-up", cx);
+        window.press("down", cx);
+        window.press("down", cx);
+        for _ in 0..6 {
+            window.press("right", cx);
+        }
+    });
+    (window, editor)
+}
+
+#[gpui_kit::test]
+fn cmd_arrows_act_on_the_visual_line(cx: &mut TestAppContext) {
+    let (window, editor) = caret_in_third_visual_line(cx);
+    let text = long_paragraph();
+    let caret = editor.read_with(cx, |editor, _| editor.selection());
+    let at = caret.start;
+    assert!(caret.is_empty() && at > 0 && at < text.len(), "{caret:?}");
+
+    act(cx, window, |window, cx| window.press("cmd-left", cx));
+    let line_start = editor.read_with(cx, |editor, _| editor.selection().start);
+    assert!(
+        0 < line_start && line_start < at && text[..line_start].ends_with(' '),
+        "⌘← goes to the wrap before the caret's visual line, not the paragraph start: {line_start}"
+    );
+
+    // From that start, ⌘→ reaches the end of the same visual line, which lies
+    // past the caret and before the next wrap.
+    act(cx, window, |window, cx| window.press("cmd-right", cx));
+    let line_end = editor.read_with(cx, |editor, _| editor.selection());
+    assert!(
+        line_end.is_empty()
+            && at < line_end.start
+            && line_end.start < text.len()
+            && text[line_end.start..].starts_with(' '),
+        "⌘→ stops before the soft wrap of the caret's visual line: {line_end:?}"
+    );
+
+    // And ⌘← from the end comes back to the same start.
+    act(cx, window, |window, cx| window.press("cmd-left", cx));
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.selection(), line_start..line_start);
+    });
+}
+
+#[gpui_kit::test]
+fn shift_cmd_arrows_select_the_visual_line(cx: &mut TestAppContext) {
+    let (window, editor) = caret_in_third_visual_line(cx);
+    let text = long_paragraph();
+    let at = editor.read_with(cx, |editor, _| editor.selection().start);
+
+    act(cx, window, |window, cx| window.press("cmd-shift-left", cx));
+    let selected = editor.read_with(cx, |editor, _| editor.selection());
+    assert!(
+        selected.start < at && selected.end == at && text[..selected.start].ends_with(' '),
+        "⇧⌘← selects back to the visual line's start: {selected:?}"
+    );
+
+    // The anchor stays put, so ⇧⌘→ extends the same selection to the line's end.
+    act(cx, window, |window, cx| window.press("cmd-shift-right", cx));
+    let extended = editor.read_with(cx, |editor, _| editor.selection());
+    assert!(
+        extended.start == at && at < extended.end && text[extended.end..].starts_with(' '),
+        "⇧⌘→ extends from the anchor to the line's end: {extended:?}"
+    );
+}
+
+#[gpui_kit::test]
+fn cmd_backspace_deletes_back_to_the_visual_line_start(cx: &mut TestAppContext) {
+    let (window, editor) = caret_in_third_visual_line(cx);
+    let text = long_paragraph();
+    let at = editor.read_with(cx, |editor, _| editor.selection().start);
+
+    act(cx, window, |window, cx| window.press("cmd-backspace", cx));
+    let (after, caret) = editor.read_with(cx, |editor, _| {
+        (editor.text().to_owned(), editor.selection())
+    });
+    let removed = text.len() - after.len();
+    let line_start = at - removed;
+    assert!(
+        0 < line_start && text[..line_start].ends_with(' '),
+        "⌘⌫ removes only back to the wrap: {removed} bytes"
+    );
+    assert_eq!(after, format!("{}{}", &text[..line_start], &text[at..]));
+    assert_eq!(caret, line_start..line_start);
+}
+
+#[gpui_kit::test]
+fn cmd_backspace_at_a_visual_line_start_is_a_backspace(cx: &mut TestAppContext) {
+    let (window, editor) = caret_in_third_visual_line(cx);
+    let text = long_paragraph();
+    act(cx, window, |window, cx| window.press("cmd-left", cx));
+    let line_start = editor.read_with(cx, |editor, _| editor.selection().start);
+
+    act(cx, window, |window, cx| window.press("cmd-backspace", cx));
+    editor.read_with(cx, |editor, _| {
+        // The space that wrapped the line above goes; nothing else does.
+        assert_eq!(
+            editor.text(),
+            format!("{}{}", &text[..line_start - 1], &text[line_start..])
+        );
+        assert_eq!(editor.selection(), line_start - 1..line_start - 1);
+    });
+}
+
+#[gpui_kit::test]
+fn cmd_left_on_a_list_items_first_line_stops_after_the_marker(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, &format!("- {}", long_paragraph()));
+    act(cx, window, |window, cx| {
+        window.press("cmd-up", cx);
+        window.press("cmd-right", cx);
+    });
+    let end = editor.read_with(cx, |editor, _| editor.selection().start);
+    assert!(end > 2, "⌘→ leaves the marker behind: {end}");
+
+    act(cx, window, |window, cx| window.press("cmd-left", cx));
+    editor.read_with(cx, |editor, _| assert_eq!(editor.selection(), 2..2));
+}
+
+#[gpui_kit::test]
+fn home_still_goes_to_the_source_line_start(cx: &mut TestAppContext) {
+    let (window, editor) = caret_in_third_visual_line(cx);
+    act(cx, window, |window, cx| window.press("home", cx));
+    editor.read_with(cx, |editor, _| assert_eq!(editor.selection(), 0..0));
 }
 
 #[gpui_kit::test]
@@ -617,6 +755,7 @@ fn open_folder(
         editor::bind_keys(cx);
         crate::workspace::bind_keys(cx);
         crate::switcher::bind_keys(cx);
+        crate::viewer::bind_keys(cx);
         cx.set_global(Settings::default());
         let bounds = Bounds {
             origin: point(px(0.), px(0.)),
@@ -965,6 +1104,105 @@ fn an_anchor_link_moves_to_its_heading(cx: &mut TestAppContext) {
     editor.update(cx, |e, cx| e.move_to(2, cx));
     act(cx, window, |window, cx| window.press("cmd-enter", cx));
     editor.read_with(cx, |e, _| assert_eq!(e.selection(), 22..22));
+}
+
+/// A folder whose `docs/Design.md` has the headings `Goals` and `Next Steps`,
+/// and whose newest file, `notes.md`, holds `links`.
+fn folder_with_design(name: &str, links: &str) -> std::path::PathBuf {
+    let root = linked_folder(name, links);
+    std::fs::create_dir(root.join("docs")).unwrap();
+    let design = root.join("docs/Design.md");
+    std::fs::write(&design, "# Design\n\n## Goals\n\n## Next Steps\n\nText.\n").unwrap();
+    // The newest file opens first; the note with the links must.
+    let past = std::time::SystemTime::now() - std::time::Duration::from_hours(2);
+    std::fs::File::options()
+        .write(true)
+        .open(&design)
+        .unwrap()
+        .set_modified(past)
+        .unwrap();
+    root
+}
+
+#[gpui_kit::test]
+fn a_link_to_a_heading_in_another_note_puts_the_caret_on_it(cx: &mut TestAppContext) {
+    let links = "See [[Design#Next Steps]] and [goals](docs/Design.md#goals).";
+    let root = folder_with_design("heading-links", links);
+    let design = "# Design\n\n## Goals\n\n## Next Steps\n\nText.\n";
+    let (window, workspace) = open_folder(cx, &root);
+    editor_of(cx, &workspace).update(cx, |e, cx| e.move_to(6, cx));
+    act(cx, window, |window, cx| window.press("cmd-enter", cx));
+    assert_eq!(current_title(cx, &workspace), "Design.md");
+    let next_steps = design.find("Next Steps").unwrap();
+    editor_of(cx, &workspace).read_with(cx, |e, _| {
+        assert_eq!(e.selection(), next_steps..next_steps, "the wiki heading");
+    });
+    act(cx, window, |window, cx| window.press("cmd-[", cx));
+    assert_eq!(current_title(cx, &workspace), "notes.md");
+    editor_of(cx, &workspace).read_with(cx, |e, _| {
+        assert_eq!(e.selection(), 6..6, "back returns to the link's source");
+    });
+    let goals_link = links.find("[goals]").unwrap() + 1;
+    editor_of(cx, &workspace).update(cx, |e, cx| e.move_to(goals_link, cx));
+    act(cx, window, |window, cx| window.press("cmd-enter", cx));
+    let goals = design.find("Goals").unwrap();
+    editor_of(cx, &workspace).read_with(cx, |e, _| {
+        assert_eq!(e.selection(), goals..goals, "the Markdown anchor");
+    });
+}
+
+#[gpui_kit::test]
+fn a_link_to_a_missing_heading_opens_the_note_at_its_start(cx: &mut TestAppContext) {
+    let root = folder_with_design("heading-missing", "See [[Design#Nowhere]].");
+    let (window, workspace) = open_folder(cx, &root);
+    editor_of(cx, &workspace).update(cx, |e, cx| e.move_to(6, cx));
+    act(cx, window, |window, cx| window.press("cmd-enter", cx));
+    assert_eq!(current_title(cx, &workspace), "Design.md");
+    editor_of(cx, &workspace).read_with(cx, |e, _| assert_eq!(e.selection(), 0..0));
+}
+
+#[gpui_kit::test]
+fn a_wiki_link_to_a_heading_in_this_note_jumps_there_and_back(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "See [[#goals]].\n\n## Goals\n");
+    editor.update(cx, |e, cx| e.move_to(6, cx));
+    act(cx, window, |window, cx| window.press("cmd-enter", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 20..20));
+    act(cx, window, |window, cx| window.press("cmd-[", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 6..6));
+}
+
+#[gpui_kit::test]
+fn a_request_with_a_fragment_opens_its_note_at_the_heading(cx: &mut TestAppContext) {
+    use crate::instance::Request;
+    use focal_core::links::Fragment;
+    let root = folder_with_design("heading-request", "notes");
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        editor::bind_keys(cx);
+        cx.set_global(Settings::default());
+        crate::windows::init(cx);
+        let request = Request {
+            path: Some(root.join("docs/Design.md")),
+            fragment: Some(Fragment::Slug("next-steps".into())),
+            ..Request::default()
+        };
+        crate::windows::open(request, None, cx);
+    });
+    let design = "# Design\n\n## Goals\n\n## Next Steps\n\nText.\n";
+    let workspace = cx.update(|cx| {
+        crate::windows::workspaces(cx)
+            .into_iter()
+            .find(|w| {
+                w.read(cx).editor().read(cx).path() == Some(root.join("docs/Design.md").as_path())
+            })
+            .expect("a window shows the note")
+    });
+    editor_of(cx, &workspace).read_with(cx, |e, _| {
+        assert_eq!(
+            e.selection(),
+            design.find("Next Steps").unwrap()..design.find("Next Steps").unwrap()
+        );
+    });
 }
 
 const NOTES: &str = "One[^a] and two[^b].\n\n[^a]: The *first* note.\n";
@@ -1859,7 +2097,7 @@ fn settings_segments_change_the_setting(cx: &mut TestAppContext) {
     use crate::settings::{Appearance, ProseFont, TextSize};
     let (window, _) = open_settings(cx);
     act(cx, window, |window, cx| window.click("prose-font-Duo", cx));
-    act(cx, window, |window, cx| window.click("text-size-XL", cx));
+    act(cx, window, |window, cx| window.click("text-size-Huge", cx));
     act(cx, window, |window, cx| window.click("appearance-Dark", cx));
     cx.update(|cx| {
         let settings = cx.global::<Settings>();
@@ -2161,6 +2399,28 @@ fn the_panel_switches_light_and_dark(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn the_info_panel_uses_the_settings_names(cx: &mut TestAppContext) {
+    let (window, _) = open_workspace(cx, "text");
+    act(cx, window, |window, cx| window.click("corner-info", cx));
+    act(cx, window, |window, _| {
+        for id in [
+            "panel-appearance-System",
+            "panel-appearance-Light",
+            "panel-appearance-Dark",
+            "panel-column-Narrow",
+            "panel-column-Medium",
+            "panel-column-Wide",
+            "panel-keys-Standard",
+            "panel-keys-Vim",
+            "panel-keys-Helix",
+        ] {
+            assert!(window.try_find(id).is_some(), "{id} is shown");
+        }
+        assert!(window.try_find("panel-appearance-Auto").is_none());
+    });
+}
+
+#[gpui_kit::test]
 fn other_typeface_lists_installed_families(cx: &mut TestAppContext) {
     let (window, _) = open_settings(cx);
     cx.update(crate::switcher::bind_keys);
@@ -2298,4 +2558,1081 @@ fn sidebar_tags_filter_the_files(cx: &mut TestAppContext) {
             "all files again"
         );
     });
+}
+
+// ---- Paste and drop (M13) ---------------------------------------------------
+
+fn paste_string(cx: &mut TestAppContext, window: AnyWindowHandle, text: &str, keys: &str) {
+    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text.to_owned()));
+    act(cx, window, |window, cx| window.press(keys, cx));
+}
+
+#[gpui_kit::test]
+fn pasting_a_url_over_a_selection_makes_a_link(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "see the docs");
+    editor.update(cx, |e, cx| e.select(4..12, cx));
+    paste_string(cx, window, "https://a.com", "cmd-v");
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.text(), "see [the docs](https://a.com)");
+    });
+    act(cx, window, |window, cx| window.press("cmd-z", cx));
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.text(), "see the docs", "one undo step");
+    });
+}
+
+#[gpui_kit::test]
+fn a_url_without_a_selection_pastes_as_written(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "");
+    paste_string(cx, window, "https://a.com", "cmd-v");
+    editor.read_with(cx, |e, _| assert_eq!(e.text(), "https://a.com"));
+}
+
+#[gpui_kit::test]
+fn rich_text_pastes_as_markdown_unless_plain_is_asked(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "");
+    crate::mac::set_test_pasteboard_html(Some("<p><b>bold</b> text</p>"));
+    paste_string(cx, window, "bold text", "cmd-v");
+    editor.read_with(cx, |e, _| assert_eq!(e.text(), "**bold** text"));
+    paste_string(cx, window, "bold text", "cmd-alt-shift-v");
+    crate::mac::set_test_pasteboard_html(None);
+    editor.read_with(cx, |e, _| assert_eq!(e.text(), "**bold** textbold text"));
+}
+
+#[gpui_kit::test]
+fn paste_in_a_code_block_stays_plain(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "```\n\n```");
+    editor.update(cx, |e, cx| e.move_to(4, cx));
+    crate::mac::set_test_pasteboard_html(Some("<p><b>bold</b></p>"));
+    paste_string(cx, window, "bold", "cmd-v");
+    crate::mac::set_test_pasteboard_html(None);
+    editor.read_with(cx, |e, _| assert_eq!(e.text(), "```\nbold\n```"));
+}
+
+#[gpui_kit::test]
+fn a_pasted_image_is_saved_into_assets(cx: &mut TestAppContext) {
+    let root = notes_folder("paste-image", "");
+    let (window, workspace) = open_folder(cx, &root);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    let image = gpui_kit::Image {
+        format: gpui_kit::ImageFormat::Png,
+        bytes: vec![1, 2, 3],
+        id: 1,
+    };
+    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_image(&image));
+    act(cx, window, |window, cx| window.press("cmd-v", cx));
+    let text = editor.read_with(cx, |e, _| e.text().to_owned());
+    let path = text
+        .strip_prefix("![](")
+        .and_then(|rest| rest.strip_suffix(')'))
+        .unwrap_or_else(|| panic!("an image link: {text}"));
+    assert!(path.starts_with("assets/pasted-"), "{path}");
+    assert_eq!(std::fs::read(root.join(path)).unwrap(), [1, 2, 3]);
+}
+
+#[gpui_kit::test]
+fn dropped_files_are_copied_or_linked(cx: &mut TestAppContext) {
+    let root = notes_folder("drop-files", "");
+    let outside = crate::folder::tests::temp_folder("drop-files-source");
+    std::fs::write(outside.join("My Photo.png"), [9]).unwrap();
+    let (window, workspace) = open_folder(cx, &root);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    act(cx, window, |window, cx| {
+        editor.update(cx, |e, cx| {
+            e.drop_paths(
+                &[outside.join("My Photo.png"), root.join("old.md")],
+                window,
+                cx,
+            );
+        });
+    });
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.text(), "![](assets/My%20Photo.png)\n[old](old.md)");
+    });
+    assert_eq!(
+        std::fs::read(root.join("assets/My Photo.png")).unwrap(),
+        [9]
+    );
+}
+
+#[gpui_kit::test]
+fn the_images_folder_is_chosen_in_settings(cx: &mut TestAppContext) {
+    let (window, _) = open_settings(cx);
+    act(cx, window, |window, cx| window.click("pane-Writing", cx));
+    act(cx, window, |window, cx| {
+        window.click("images-folder-Beside the file", cx);
+    });
+    cx.update(|cx| assert_eq!(cx.global::<Settings>().images_folder, ""));
+    act(cx, window, |window, cx| {
+        window.click("images-folder-images/", cx);
+    });
+    cx.update(|cx| assert_eq!(cx.global::<Settings>().images_folder, "images"));
+}
+
+#[gpui_kit::test]
+fn a_drag_says_what_dropping_will_do(cx: &mut TestAppContext) {
+    let root = crate::folder::tests::temp_folder("drop-hint");
+    std::fs::write(root.join("a.png"), [1]).unwrap();
+    std::fs::write(root.join("b.md"), "").unwrap();
+    let (_, _) = open_editor(cx, "");
+    cx.update(|cx| {
+        let paths = [root.join("a.png"), root.join("b.md"), root.clone()];
+        assert_eq!(
+            crate::editor::paste_drop_hint(&paths, cx).as_deref(),
+            Some("Add 1 image to assets/ and link 1 file"),
+            "the folder is left out"
+        );
+    });
+}
+
+// ---- Backlinks (M13) ----------------------------------------------------------
+
+#[gpui_kit::test]
+fn the_info_panel_lists_files_linking_here(cx: &mut TestAppContext) {
+    let root = notes_folder("backlinks-ui", "# Target");
+    std::fs::write(root.join("other.md"), "Intro\nSee [[new]].").unwrap();
+    // Older than new.md, which the folder opens.
+    std::fs::File::options()
+        .write(true)
+        .open(root.join("other.md"))
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_hours(2))
+        .unwrap();
+    let (window, workspace) = open_folder(cx, &root);
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::workspace::ShowLinkedFrom), cx);
+    });
+    cx.run_until_parked();
+    act(cx, window, |window, _| {
+        assert_eq!(
+            window.find(("backlink", 0usize)).label(),
+            Some("other.md: See [[new]].")
+        );
+    });
+    act(cx, window, |window, cx| {
+        window.click(("backlink", 0usize), cx);
+    });
+    assert_eq!(current_title(cx, &workspace), "other.md");
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 10..10, "on the link"));
+}
+
+#[gpui_kit::test]
+fn a_file_nobody_links_to_says_so(cx: &mut TestAppContext) {
+    let root = notes_folder("backlinks-none", "# Alone");
+    let (window, _) = open_folder(cx, &root);
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::workspace::ShowLinkedFrom), cx);
+    });
+    cx.run_until_parked();
+    act(cx, window, |window, _| {
+        assert_eq!(
+            window.find("backlinks-empty").label(),
+            Some("No other file links here.")
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn space_l_and_colon_links_open_the_linked_from_list(cx: &mut TestAppContext) {
+    let (window, _) = open_helix(cx, "text");
+    act(cx, window, |window, cx| window.input(" l", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("panel").is_some());
+    });
+    let (window, _) = open_vim(cx, "text");
+    act(cx, window, |window, cx| window.input(":links", cx));
+    act(cx, window, |window, cx| window.press("enter", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("panel").is_some());
+    });
+}
+
+// ---- What changed (M13) -----------------------------------------------------
+
+#[gpui_kit::test]
+fn an_outside_change_shows_and_dismisses(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "The fox jumps.\n");
+    editor.update(cx, |e, cx| {
+        e.load_theirs_for_test("The quick fox jumps.\n", cx);
+    });
+    act(cx, window, |window, _| {
+        assert_eq!(window.find("changes-count").label(), Some("1 change"));
+    });
+    editor.read_with(cx, |e, _| {
+        assert_eq!(
+            e.changes_for_test().inserted,
+            std::iter::once(4..9).collect::<Vec<_>>()
+        );
+    });
+    act(cx, window, |window, cx| window.click("changes-dismiss", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("changes-count").is_none());
+    });
+    editor.read_with(cx, |e, _| assert_eq!(e.changes_for_test().count(), 0));
+}
+
+#[gpui_kit::test]
+fn two_reloads_keep_the_first_baseline(cx: &mut TestAppContext) {
+    let (_, editor) = open_editor(cx, "one\n");
+    editor.update(cx, |e, cx| e.load_theirs_for_test("one\ntwo\n", cx));
+    editor.update(cx, |e, cx| e.load_theirs_for_test("one\ntwo\nthree\n", cx));
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.changes_for_test().inserted, [4..7, 8..13]);
+    });
+}
+
+#[gpui_kit::test]
+fn own_typing_is_not_a_change(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "x");
+    act(cx, window, |window, cx| window.input("abc", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.changes_for_test().count(), 0));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("changes-count").is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn typing_after_an_outside_change_keeps_the_marks_in_step(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "one two\n");
+    editor.update(cx, |e, cx| e.load_theirs_for_test("one two\nnew\n", cx));
+    editor.update(cx, |e, cx| e.move_to(0, cx));
+    act(cx, window, |window, cx| window.input("so ", cx));
+    editor.read_with(cx, |e, _| {
+        let text = e.text();
+        assert_eq!(text, "so one two\nnew\n");
+        let marked: Vec<&str> = e
+            .changes_for_test()
+            .inserted
+            .iter()
+            .map(|range| text[range.clone()].trim())
+            .collect();
+        assert_eq!(marked, ["so", "new"], "in step with the typing");
+    });
+}
+
+#[gpui_kit::test]
+fn alt_cmd_down_goes_to_the_next_change(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "a\nb\nc\nd\n");
+    editor.update(cx, |e, cx| e.load_theirs_for_test("a\nB\nc\nD\n", cx));
+    editor.update(cx, |e, cx| e.move_to(0, cx));
+    act(cx, window, |window, cx| window.press("cmd-alt-down", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 2..2));
+    act(cx, window, |window, cx| window.press("cmd-alt-down", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 6..6));
+    act(cx, window, |window, cx| window.press("cmd-alt-up", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 2..2));
+}
+
+#[gpui_kit::test]
+fn escape_dismisses_changes_but_closes_the_find_bar_first(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "one\n");
+    editor.update(cx, |e, cx| e.load_theirs_for_test("one\ntwo\n", cx));
+    act(cx, window, |window, cx| window.press("cmd-f", cx));
+    act(cx, window, |window, cx| window.press("escape", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("find-bar").is_none());
+        assert!(window.try_find("changes-count").is_some(), "still showing");
+    });
+    act(cx, window, |window, cx| window.press("escape", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("changes-count").is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn vim_brackets_step_through_changes(cx: &mut TestAppContext) {
+    let (window, editor) = open_vim(cx, "a\nb\nc\nd\n");
+    editor.update(cx, |e, cx| e.load_theirs_for_test("a\nB\nc\nD\n", cx));
+    editor.update(cx, |e, cx| e.move_to(0, cx));
+    act(cx, window, |window, cx| window.input("]c", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 2..2));
+    act(cx, window, |window, cx| window.press("escape", cx));
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find("changes-count").is_some(),
+            "Esc stays Vim's"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn a_reload_without_changes_leaves_typing_unmarked(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "same\n");
+    editor.update(cx, |e, cx| e.load_theirs_for_test("same\n", cx));
+    act(cx, window, |window, cx| window.input("typed", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.changes_for_test().count(), 0));
+}
+
+#[gpui_kit::test]
+fn changes_since_the_last_commit(cx: &mut TestAppContext) {
+    use crate::git::tests::git;
+    let root = notes_folder("changes-commit", "committed line\n");
+    git(&root, &["init", "-q"]);
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-q", "-m", "one"]);
+    std::fs::write(root.join("new.md"), "committed line\nadded line\n").unwrap();
+    let (window, workspace) = open_folder(cx, &root);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.text(), "committed line\nadded line\n");
+    });
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::editor::CompareWithLastCommit), cx);
+    });
+    cx.run_until_parked();
+    act(cx, window, |window, _| {
+        assert_eq!(
+            window.find("changes-count").label(),
+            Some("1 change since last commit")
+        );
+        assert!(
+            window.try_find("changes-dismiss").is_none(),
+            "turned off in the menu"
+        );
+    });
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::editor::CompareWithLastCommit), cx);
+    });
+    act(cx, window, |window, _| {
+        assert!(window.try_find("changes-count").is_none());
+    });
+}
+
+// ---- Style tools (M13) --------------------------------------------------------
+
+#[gpui_kit::test]
+fn style_check_marks_fillers_only_when_on(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "It was very late.\n\n```\nvery code\n```");
+    editor.read_with(cx, |e, _| {
+        assert!(e.style_issues_for_test(0).is_empty(), "off by default");
+    });
+    set_settings(cx, |s| s.style_check = true);
+    act(cx, window, |_, _| {});
+    editor.read_with(cx, |e, _| {
+        assert_eq!(
+            e.style_issues_for_test(0),
+            std::iter::once(7..11).collect::<Vec<_>>()
+        );
+        assert!(e.style_issues_for_test(3).is_empty(), "never in code");
+    });
+}
+
+#[gpui_kit::test]
+fn syntax_highlight_colors_the_chosen_parts(cx: &mut TestAppContext) {
+    use crate::style::Part;
+    let (window, editor) = open_editor(cx, "The quick fox jumps over the lazy dog.");
+    editor.read_with(cx, |e, _| {
+        assert!(e.parts_for_test(0).is_empty(), "off by default");
+    });
+    set_settings(cx, |s| s.syntax_highlight = vec![Part::Adjective]);
+    act(cx, window, |_, _| {});
+    editor.read_with(cx, |e, _| {
+        let text = e.text().to_owned();
+        let words: Vec<&str> = e
+            .parts_for_test(0)
+            .into_iter()
+            .map(|(range, _)| &text[range])
+            .collect();
+        assert_eq!(words, ["quick", "lazy"]);
+    });
+}
+
+#[gpui_kit::test]
+fn style_tools_are_chosen_in_settings_and_the_menu(cx: &mut TestAppContext) {
+    use crate::style::Part;
+    let (window, _) = open_settings(cx);
+    act(cx, window, |window, cx| window.click("pane-Writing", cx));
+    act(cx, window, |window, cx| {
+        window.click("syntax-Adjectives", cx);
+    });
+    act(cx, window, |window, cx| window.click("syntax-Verbs", cx));
+    act(cx, window, |window, cx| {
+        window.click("syntax-Adjectives", cx);
+    });
+    act(cx, window, |window, cx| window.click("style-check", cx));
+    cx.update(|cx| {
+        let settings = cx.global::<Settings>();
+        assert_eq!(settings.syntax_highlight, [Part::Verb]);
+        assert!(settings.style_check);
+    });
+    cx.update(|cx| {
+        cx.dispatch_action(&crate::settings::ToggleStyleCheck);
+        cx.dispatch_action(&crate::settings::ToggleSyntaxPart(Part::Noun));
+    });
+    cx.update(|cx| {
+        let settings = cx.global::<Settings>();
+        assert!(!settings.style_check);
+        assert_eq!(settings.syntax_highlight, [Part::Verb, Part::Noun]);
+    });
+}
+
+#[gpui_kit::test]
+fn a_filler_word_is_removed_or_ignored(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "It was very late. Very good.");
+    set_settings(cx, |s| s.style_check = true);
+    act(cx, window, |window, cx| {
+        window.dispatch_action(
+            Box::new(crate::editor::RemoveStyleWord {
+                range: 7..11,
+                word: "very".into(),
+            }),
+            cx,
+        );
+    });
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.text(), "It was late. Very good.", "with one space");
+        assert_eq!(
+            e.style_issues_for_test(0),
+            std::iter::once(13..17).collect::<Vec<_>>()
+        );
+    });
+    act(cx, window, |window, cx| {
+        window.dispatch_action(
+            Box::new(crate::editor::IgnoreStyle {
+                word: "Very".into(),
+            }),
+            cx,
+        );
+    });
+    editor.read_with(cx, |e, _| {
+        assert!(e.style_issues_for_test(0).is_empty(), "ignored here");
+    });
+}
+
+// ---- Review notes (M13) -------------------------------------------------------
+
+fn review_folder(name: &str, sidecar: Option<&str>) -> std::path::PathBuf {
+    let root = notes_folder(name, "The fox jumps.\n");
+    if let Some(sidecar) = sidecar {
+        std::fs::write(root.join("new.review.md"), sidecar).unwrap();
+    }
+    root
+}
+
+const ONE_NOTE: &str = "# Review notes for new.md\n\n## Line 1\n\n> fox\n\nMake it a cat.\n";
+
+#[gpui_kit::test]
+fn adding_a_note_writes_the_sidecar_and_copy_makes_a_prompt(cx: &mut TestAppContext) {
+    let root = review_folder("review-add", None);
+    let (window, workspace) = open_folder(cx, &root);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    editor.update(cx, |e, cx| e.select(4..7, cx));
+    act(cx, window, |window, cx| window.press("cmd-alt-m", cx));
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find("note-draft").is_some(),
+            "the note card opens"
+        );
+    });
+    act(cx, window, |window, cx| window.input("Make it a cat.", cx));
+    act(cx, window, |window, cx| window.press("enter", cx));
+    let sidecar = std::fs::read_to_string(root.join("new.review.md")).unwrap();
+    assert_eq!(sidecar, ONE_NOTE);
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.text(), "The fox jumps.\n", "the document is untouched");
+    });
+    act(cx, window, |window, _| {
+        assert!(window.try_find("note-draft").is_none());
+        assert!(
+            window.try_find(("note-dot", 0usize)).is_some(),
+            "a dot in the margin"
+        );
+    });
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::editor::CopyNotesForAgent), cx);
+    });
+    let copied = cx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .unwrap();
+    assert!(copied.starts_with("Please revise new.md"), "{copied}");
+    assert!(
+        copied.contains("1. Line 1: \"fox\"\n   Make it a cat.\n"),
+        "{copied}"
+    );
+}
+
+#[gpui_kit::test]
+fn escape_cancels_a_note(cx: &mut TestAppContext) {
+    let root = review_folder("review-cancel", None);
+    let (window, workspace) = open_folder(cx, &root);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    editor.update(cx, |e, cx| e.select(4..7, cx));
+    act(cx, window, |window, cx| window.press("cmd-alt-m", cx));
+    act(cx, window, |window, cx| window.input("never mind", cx));
+    act(cx, window, |window, cx| window.press("escape", cx));
+    act(cx, window, |window, cx| {
+        assert!(window.try_find("note-draft").is_none());
+        assert!(
+            editor.read(cx).focus_handle.is_focused(window),
+            "back to the text"
+        );
+    });
+    assert!(!root.join("new.review.md").exists());
+}
+
+#[gpui_kit::test]
+fn the_notes_tab_lists_and_deletes_notes(cx: &mut TestAppContext) {
+    let root = review_folder("review-tab", Some(ONE_NOTE));
+    let (window, _) = open_folder(cx, &root);
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::workspace::ShowNotes), cx);
+    });
+    act(cx, window, |window, _| {
+        assert_eq!(
+            window.find(("note", 0usize)).label(),
+            Some("Line 1: fox. Make it a cat.")
+        );
+        assert_eq!(window.find("panel-tab-notes").label(), Some("Notes 1"));
+    });
+    act(cx, window, |window, cx| {
+        window.click(("note-delete", 0usize), cx);
+    });
+    assert!(
+        !root.join("new.review.md").exists(),
+        "the last note takes the file"
+    );
+    act(cx, window, |window, _| {
+        assert!(window.try_find("notes-empty").is_some());
+    });
+}
+
+#[gpui_kit::test]
+fn the_empty_notes_tab_explains_itself(cx: &mut TestAppContext) {
+    let root = review_folder("review-empty", None);
+    let (window, _) = open_folder(cx, &root);
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::workspace::ShowNotes), cx);
+    });
+    act(cx, window, |window, _| {
+        let label = window
+            .find("notes-empty")
+            .label()
+            .unwrap_or_default()
+            .to_owned();
+        assert!(label.contains("Add Note (⌥⌘M)"), "{label}");
+        assert!(label.contains("new.review.md"), "{label}");
+    });
+}
+
+#[gpui_kit::test]
+fn a_rewritten_passage_marks_its_note_changed(cx: &mut TestAppContext) {
+    let root = review_folder("review-changed", Some(ONE_NOTE));
+    let (window, workspace) = open_folder(cx, &root);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    editor.update(cx, |e, cx| e.load_theirs_for_test("The cat jumps.\n", cx));
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::workspace::ShowNotes), cx);
+    });
+    act(cx, window, |window, _| {
+        let label = window
+            .find(("note", 0usize))
+            .label()
+            .unwrap_or_default()
+            .to_owned();
+        assert!(label.contains("passage changed"), "{label}");
+    });
+}
+
+#[gpui_kit::test]
+fn a_sidecar_changed_on_disk_is_read_again(cx: &mut TestAppContext) {
+    let root = review_folder("review-reload", Some(ONE_NOTE));
+    let (_, workspace) = open_folder(cx, &root);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    editor.read_with(cx, |e, _| assert_eq!(e.notes().len(), 1));
+    std::fs::remove_file(root.join("new.review.md")).unwrap();
+    editor.update(cx, |e, cx| e.reload_notes(cx));
+    editor.read_with(cx, |e, _| assert!(e.notes().is_empty()));
+}
+
+#[gpui_kit::test]
+fn the_new_tools_leave_the_file_untouched(cx: &mut TestAppContext) {
+    use crate::style::Part;
+    let original = "# Notes\r\n\r\nIt was very late, the end result.\r\nNo trailing newline";
+    let root = notes_folder("round-trip-m13", original);
+    let (window, workspace) = open_folder(cx, &root);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    set_settings(cx, |s| {
+        s.style_check = true;
+        s.syntax_highlight = Part::ALL.to_vec();
+    });
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::workspace::ShowLinkedFrom), cx);
+    });
+    editor.update(cx, |e, cx| e.select(17..21, cx));
+    act(cx, window, |window, cx| window.press("cmd-alt-m", cx));
+    act(cx, window, |window, cx| window.input("Cut this.", cx));
+    act(cx, window, |window, cx| window.press("enter", cx));
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::editor::CopyNotesForAgent), cx);
+    });
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::workspace::ShowNotes), cx);
+    });
+    act(cx, window, |window, cx| {
+        window.click(("note-delete", 0usize), cx);
+    });
+    act(cx, window, |window, cx| {
+        editor.update(cx, |e, cx| e.flush(window, cx));
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        std::fs::read(root.join("new.md")).unwrap(),
+        original.as_bytes(),
+        "identical bytes"
+    );
+    assert!(!root.join("new.review.md").exists());
+}
+
+#[gpui_kit::test]
+fn a_note_survives_the_text_changing_while_it_is_written(cx: &mut TestAppContext) {
+    let root = review_folder("review-stale", None);
+    let (window, workspace) = open_folder(cx, &root);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    editor.update(cx, |e, cx| e.select(8..14, cx));
+    act(cx, window, |window, cx| window.press("cmd-alt-m", cx));
+    act(cx, window, |window, cx| window.input("Shorter.", cx));
+    // An agent rewrites the file while the note is being written.
+    editor.update(cx, |e, cx| e.load_theirs_for_test("Short.\n", cx));
+    act(cx, window, |window, cx| window.press("enter", cx));
+    let sidecar = std::fs::read_to_string(root.join("new.review.md")).unwrap();
+    assert!(sidecar.contains("> jumps.\n\nShorter.\n"), "{sidecar}");
+}
+
+#[gpui_kit::test]
+fn editing_a_note_after_the_notes_file_changed_edits_that_note(cx: &mut TestAppContext) {
+    let two = "# Review notes for new.md\n\n## Line 1\n\n> The\n\nFirst.\n\n## Line 1\n\n> fox\n\nSecond.\n";
+    let root = review_folder("review-edit-stale", Some(two));
+    let (window, workspace) = open_folder(cx, &root);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    act(cx, window, |window, cx| {
+        editor.update(cx, |e, cx| e.edit_note(1, window, cx));
+    });
+    // An agent handled the first note and removed it.
+    std::fs::write(
+        root.join("new.review.md"),
+        "# Review notes for new.md\n\n## Line 1\n\n> fox\n\nSecond.\n",
+    )
+    .unwrap();
+    editor.update(cx, |e, cx| e.reload_notes(cx));
+    act(cx, window, |window, cx| window.input(" Edited.", cx));
+    act(cx, window, |window, cx| window.press("enter", cx));
+    editor.read_with(cx, |e, _| {
+        let texts: Vec<&str> = e.notes().iter().map(|n| n.text.as_str()).collect();
+        assert_eq!(texts, ["Second. Edited."]);
+    });
+}
+
+#[gpui_kit::test]
+fn a_note_follows_its_passage_past_a_repeated_one(cx: &mut TestAppContext) {
+    let root = notes_folder("review-follow", "x\nfox\nfox\n");
+    std::fs::write(
+        root.join("new.review.md"),
+        "# Review notes for new.md\n\n## Line 3\n\n> fox\n\nThe second one.\n",
+    )
+    .unwrap();
+    let (window, workspace) = open_folder(cx, &root);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    editor.update(cx, |e, cx| e.move_to(0, cx));
+    act(cx, window, |window, cx| window.input("new\n", cx));
+    act(cx, window, |window, cx| window.input("more\n", cx));
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.text(), "new\nmore\nx\nfox\nfox\n");
+        assert_eq!(
+            e.note_anchors(),
+            [focal_core::review::Anchor::Found(15..18)],
+            "still the second fox"
+        );
+        assert_eq!(e.notes()[0].line, 5);
+    });
+}
+
+#[gpui_kit::test]
+fn escape_with_a_selection_keeps_the_changes(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "one\n");
+    editor.update(cx, |e, cx| e.load_theirs_for_test("one\ntwo\n", cx));
+    editor.update(cx, |e, cx| e.select(0..3, cx));
+    act(cx, window, |window, cx| window.press("escape", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("changes-count").is_some(), "still showing");
+    });
+}
+
+#[gpui_kit::test]
+fn a_changed_table_is_marked_in_the_margin(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "Intro\n\n| x |\n|---|\n| 1 |\n");
+    editor.update(cx, |e, cx| {
+        e.load_theirs_for_test("Intro\n\n| x |\n|---|\n| 2 |\n", cx);
+    });
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find(("change-bar", 2usize)).is_some(),
+            "the table's bar, beside its first line"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn typing_at_the_end_of_a_long_paragraph_keeps_the_view_still(cx: &mut TestAppContext) {
+    // One paragraph taller than the window: a single row, scrolled into.
+    let paragraph = "Words that wrap across many lines of the column. ".repeat(300);
+    let text = format!("# Title\n\n{paragraph}\n\nAfter.\n");
+    let (window, editor) = open_editor(cx, &text);
+    for _ in 0..3 {
+        act(cx, window, |_, _| {});
+    }
+    let end = text.find("\n\nAfter").unwrap();
+    editor.update(cx, |e, cx| e.move_to(end, cx));
+    for _ in 0..8 {
+        act(cx, window, |_, _| {});
+    }
+    let before = editor.read_with(cx, |e, _| {
+        assert!(e.caret_in_view(), "the caret was revealed");
+        e.scroll_top()
+    });
+    assert!(before.1 > px(0.), "the view is inside the paragraph");
+    for _ in 0..5 {
+        act(cx, window, |window, cx| window.input("x", cx));
+        // Every frame, not only the settled one: a jump and its correction
+        // read as flicker.
+        for _ in 0..3 {
+            act(cx, window, |_, _| {});
+            editor.read_with(cx, |e, _| {
+                let now = e.scroll_top();
+                assert_eq!(now.0, before.0, "the same row stays on top");
+                assert!(
+                    (now.1 - before.1).abs() <= px(40.),
+                    "the view moved from {before:?} to {now:?}"
+                );
+                assert!(e.caret_in_view(), "the caret stays in view");
+            });
+        }
+    }
+}
+
+/// A 4000×1000 PNG's header: enough for its size, which is all the viewer
+/// reads before drawing.
+fn wide_png() -> Vec<u8> {
+    let mut png = PIXEL.to_vec();
+    png[16..20].copy_from_slice(&4000u32.to_be_bytes());
+    png[20..24].copy_from_slice(&1000u32.to_be_bytes());
+    png
+}
+
+#[gpui_kit::test]
+fn the_image_viewer_zooms_steps_and_closes(cx: &mut TestAppContext) {
+    let root = image_folder("viewer", "![A pixel](pixel.png)\n\nText\n\n![](wide.png)\n");
+    std::fs::write(root.join("wide.png"), wide_png()).unwrap();
+    let (window, workspace) = open_folder(cx, &root);
+    act(cx, window, |_, _| {});
+    // From the second image's line.
+    let editor = editor_of(cx, &workspace);
+    editor.update(cx, |e, cx| e.move_to(29, cx));
+    act(cx, window, |window, cx| window.press("cmd-y", cx));
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find("image-viewer").is_some(),
+            "the viewer opened"
+        );
+    });
+    let viewer = workspace.read_with(cx, |w, _| w.viewer().cloned().expect("open"));
+    let fitted = viewer.read_with(cx, |v, _| {
+        assert!(v.current().unwrap().path.ends_with("wide.png"));
+        assert_eq!(v.current().unwrap().title, "wide.png");
+        v.scale()
+    });
+    assert!(fitted < 1., "a wide image is shrunk to fit: {fitted}");
+    act(cx, window, |window, cx| window.press("=", cx));
+    let zoomed = viewer.read_with(cx, |v, _| v.scale());
+    assert!(zoomed > fitted);
+    act(cx, window, |window, cx| window.press("0", cx));
+    viewer.read_with(cx, |v, _| assert!((v.scale() - fitted).abs() < 0.001));
+    act(cx, window, |window, cx| window.press("right", cx));
+    viewer.read_with(cx, |v, _| {
+        assert_eq!(
+            v.current().unwrap().title,
+            "A pixel",
+            "the next image, round"
+        );
+    });
+    act(cx, window, |window, cx| window.press("escape", cx));
+    act(cx, window, |window, cx| {
+        assert!(window.try_find("image-viewer").is_none(), "closed");
+        window.input("x", cx);
+    });
+    editor.read_with(cx, |e, _| {
+        assert!(
+            e.text().contains("x![](wide.png)"),
+            "the editor has the keys again"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn an_images_button_opens_the_viewer_without_moving_the_caret(cx: &mut TestAppContext) {
+    let root = image_folder("viewer-button", "Above\n\n![A strip](wide.png)\n");
+    std::fs::write(root.join("wide.png"), wide_png()).unwrap();
+    let (window, workspace) = open_folder(cx, &root);
+    act(cx, window, |_, _| {});
+    let before = editor_of(cx, &workspace).read_with(cx, |e, _| e.selection());
+    act(cx, window, |window, _| {
+        assert!(
+            !window.find(("view-image", 2usize)).visible(),
+            "hidden until hovered"
+        );
+    });
+    act(cx, window, |window, cx| {
+        window.hover(("image-island", 2usize), cx);
+    });
+    act(cx, window, |window, cx| {
+        window.click(("view-image", 2usize), cx);
+    });
+    act(cx, window, |_, _| {});
+    workspace.read_with(cx, |w, cx| {
+        let viewer = w.viewer().expect("the viewer opened");
+        assert_eq!(viewer.read(cx).current().unwrap().title, "A strip");
+    });
+    editor_of(cx, &workspace).read_with(cx, |e, _| assert_eq!(e.selection(), before));
+}
+
+/// A file `name` with `text` in a new temporary folder, opened in a window.
+fn open_temp_file(
+    cx: &mut TestAppContext,
+    folder: &str,
+    text: &str,
+) -> (AnyWindowHandle, Entity<Editor>, std::path::PathBuf) {
+    let dir = crate::folder::tests::temp_folder(folder);
+    let path = dir.join("note.md");
+    std::fs::write(&path, text).unwrap();
+    let (document, text) = Document::open(path.clone()).unwrap();
+    let (window, workspace) = open_document(cx, document, &text);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    (window, editor, path)
+}
+
+#[gpui_kit::test]
+fn piped_text_is_unsaved_from_the_start(cx: &mut TestAppContext) {
+    let (_, workspace) = open_document(cx, Document::unsaved(), "from a pipe");
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    editor.read_with(cx, |e, _| {
+        assert!(e.asks_before_closing(), "closing asks before losing it");
+    });
+}
+
+#[gpui_kit::test]
+fn a_save_never_overwrites_a_file_changed_on_disk(cx: &mut TestAppContext) {
+    let (window, editor, path) = open_temp_file(cx, "save-conflict", "mine");
+    act(cx, window, |window, cx| {
+        window.press("cmd-down", cx);
+        window.input(" and more", cx);
+    });
+    // Another program writes the file before Focal noticed (no watcher in
+    // tests), then the user saves.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(&path, "theirs").unwrap();
+    act(cx, window, |window, cx| window.press("cmd-s", cx));
+    cx.run_until_parked();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "theirs");
+    editor.read_with(cx, |e, _| assert!(e.asks_before_closing(), "a conflict"));
+    // Saving again still leaves the choice to the banner.
+    act(cx, window, |window, cx| window.press("cmd-s", cx));
+    cx.run_until_parked();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "theirs");
+    act(cx, window, |window, cx| window.click("keep-mine", cx));
+    cx.run_until_parked();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "mine and more");
+}
+
+#[gpui_kit::test]
+fn the_same_text_written_elsewhere_is_no_conflict(cx: &mut TestAppContext) {
+    let (window, editor, path) = open_temp_file(cx, "save-same", "mine");
+    act(cx, window, |window, cx| {
+        window.press("cmd-down", cx);
+        window.input("!", cx);
+    });
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(&path, "mine!").unwrap();
+    act(cx, window, |window, cx| window.press("cmd-s", cx));
+    cx.run_until_parked();
+    editor.read_with(cx, |e, _| assert!(!e.asks_before_closing()));
+}
+
+#[gpui_kit::test]
+fn a_failed_save_keeps_the_window_open(cx: &mut TestAppContext) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let (window, editor, path) = open_temp_file(cx, "save-fails", "text");
+    let dir = path.parent().unwrap().to_path_buf();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    act(cx, window, |window, cx| {
+        window.press("cmd-down", cx);
+        window.input(" more", cx);
+    });
+    act(cx, window, |window, cx| window.press("cmd-s", cx));
+    act(cx, window, |window, cx| window.press("cmd-w", cx));
+    cx.run_until_parked();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(cx.update(|cx| cx.windows().len()), 1, "the window stays");
+    editor.read_with(cx, |e, _| {
+        assert!(e.asks_before_closing());
+        assert_eq!(e.text(), "text more");
+    });
+    act(cx, window, |window, _| {
+        let banner = window.find("error-banner");
+        assert!(banner.label().unwrap().starts_with("Could not save"));
+    });
+}
+
+#[gpui_kit::test]
+fn opening_another_file_keeps_edits_that_conflict(cx: &mut TestAppContext) {
+    let root = crate::folder::tests::temp_folder("switch-conflict");
+    std::fs::write(root.join("a.md"), "a").unwrap();
+    std::fs::write(root.join("b.md"), "b").unwrap();
+    let (window, workspace) = open_folder(cx, &root);
+    let a = root.join("a.md");
+    act(cx, window, |window, cx| {
+        workspace.update(cx, |w, cx| w.open_file(a.clone(), window, cx));
+    });
+    act(cx, window, |window, cx| {
+        window.press("cmd-down", cx);
+        window.input(" edited", cx);
+    });
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(&a, "theirs").unwrap();
+    let b = root.join("b.md");
+    act(cx, window, |window, cx| {
+        workspace.update(cx, |w, cx| w.open_file(b.clone(), window, cx));
+    });
+    cx.run_until_parked();
+    let editor = editor_of(cx, &workspace);
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.path(), Some(a.as_path()), "still on a, asking");
+        assert_eq!(e.text(), "a edited");
+    });
+    assert_eq!(std::fs::read_to_string(&a).unwrap(), "theirs");
+}
+
+#[gpui_kit::test]
+fn a_reload_keeps_the_caret_on_a_character(cx: &mut TestAppContext) {
+    let (window, editor, path) = open_temp_file(cx, "reload-caret", "abc");
+    editor.update(cx, |e, cx| e.move_to(1, cx));
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(&path, "ébc").unwrap();
+    editor.update(cx, |e, cx| e.check_disk(cx));
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.text(), "ébc");
+        assert_eq!(e.selection(), 2..2, "after é, before b, as it was");
+    });
+    act(cx, window, |window, cx| window.press("left", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 0..0));
+}
+
+#[gpui_kit::test]
+fn the_bar_shows_what_is_on_at_the_caret(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "- a **bold** word\n");
+    editor.update(cx, |e, cx| e.move_to(7, cx));
+    editor.read_with(cx, |e, _| {
+        let active = e.bar_state().active;
+        assert!(
+            active
+                .styles
+                .contains(focal_core::analysis::InlineStyle::STRONG)
+        );
+        assert_eq!(active.list, Some(crate::bar::ListKind::Bullets));
+        assert!(!active.quote);
+    });
+    act(cx, window, |window, cx| window.press("cmd-d", cx));
+    editor.read_with(cx, |e, _| assert!(e.bar_state().active.focus));
+}
+
+#[gpui_kit::test]
+fn a_narrow_editor_leaves_the_word_count_to_the_info_panel(cx: &mut TestAppContext) {
+    let (window, _) = open_workspace(cx, "text");
+    act(cx, window, |window, cx| window.hover("bar-zone", cx));
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find("bar-words").is_some(),
+            "room for everything"
+        );
+    });
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::workspace::ToggleInfo), cx);
+    });
+    act(cx, window, |window, cx| window.hover("bar-zone", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("bar-words").is_none());
+        assert!(window.try_find("bar-bold").is_some());
+    });
+}
+
+#[gpui_kit::test]
+fn copying_without_notes_says_so_briefly(cx: &mut TestAppContext) {
+    let root = crate::folder::tests::temp_folder("toast");
+    std::fs::write(root.join("a.md"), "text").unwrap();
+    let (document, text) = Document::open(root.join("a.md")).unwrap();
+    let (window, workspace) = open_document(cx, document, &text);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::editor::CopyNotesForAgent), cx);
+    });
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.toast(), Some("There are no review notes to copy yet."));
+    });
+    act(cx, window, |window, _| {
+        assert!(window.try_find("toast").is_some());
+    });
+    act(cx, window, |window, _| {
+        assert!(window.try_find("error-banner").is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn an_error_can_be_dismissed(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "text");
+    editor.update(cx, |e, cx| e.show_error("Something went wrong.".into(), cx));
+    act(cx, window, |window, cx| window.click("error-dismiss", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("error-banner").is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn the_corner_pills_make_room_for_the_bar(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "text");
+    let resting = editor.read_with(cx, |e, _| e.pill_bottom());
+    act(cx, window, |window, cx| window.hover("bar-zone", cx));
+    let lifted = editor.read_with(cx, |e, _| e.pill_bottom());
+    assert!(lifted > resting);
+}
+
+#[gpui_kit::test]
+fn an_empty_untitled_document_shows_a_placeholder_until_typing(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "");
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find("empty-placeholder").is_some(),
+            "an empty untitled document says what to do"
+        );
+    });
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.text(), "", "the placeholder is not text");
+        assert_eq!(editor.selection(), 0..0, "nor does it move the caret");
+    });
+    act(cx, window, |window, cx| window.input("a", cx));
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find("empty-placeholder").is_none(),
+            "any text hides the placeholder"
+        );
+    });
+    editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "a"));
+}
+
+#[gpui_kit::test]
+fn the_welcome_document_closes_without_asking(cx: &mut TestAppContext) {
+    let (_, workspace) = open_document(cx, Document::untitled(), crate::welcome::TEXT);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    editor.read_with(cx, |e, _| assert!(!e.asks_before_closing()));
 }

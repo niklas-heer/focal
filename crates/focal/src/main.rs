@@ -13,6 +13,7 @@ mod export;
 mod find_bar;
 mod fold_memory;
 mod folder;
+mod git;
 mod goals;
 mod grid;
 mod highlight;
@@ -29,6 +30,7 @@ mod recent;
 mod settings;
 mod spell;
 mod stl;
+mod style;
 mod switcher;
 mod table_view;
 mod theme;
@@ -37,6 +39,9 @@ mod tools;
 mod ui_tests;
 mod updates;
 mod vega;
+mod viewer;
+mod welcome;
+mod window_frame;
 mod windows;
 mod workspace;
 mod writing_tools;
@@ -134,6 +139,8 @@ fn request(args: &Args) -> Result<Request> {
         path,
         untitled,
         wait: args.wait,
+        welcome: false,
+        fragment: None,
     })
 }
 
@@ -217,6 +224,7 @@ fn run_app(launch: Launch) {
         workspace::bind_keys(cx);
         switcher::bind_keys(cx);
         find_bar::bind_keys(cx);
+        viewer::bind_keys(cx);
         windows::bind_keys(cx);
         settings::init(cx);
         about::init(cx);
@@ -260,7 +268,13 @@ fn run_app(launch: Launch) {
                     cx.update(|cx| {
                         if cx.windows().is_empty() {
                             if finder {
-                                windows::open(Request::default(), None, cx);
+                                // The first launch greets the user with the Welcome document.
+                                let request = if settings::first_launch(cx) {
+                                    welcome::request()
+                                } else {
+                                    Request::default()
+                                };
+                                windows::open(request, None, cx);
                             } else {
                                 cx.quit();
                             }

@@ -6,9 +6,9 @@ use gpui_kit::{App, Menu, MenuItem, OsAction, actions};
 use crate::cli_install::{InstallCommand, UninstallCommand};
 use crate::editor::{
     Bold, CloseWindow, Copy, CopyHtml, Cut, ExportHtml, ExportPdf, Highlight, InlineCode,
-    InsertCodeBlock, InsertLink, InsertMath, InsertTable, Italic, OpenLink, Paste, Print, Quit,
-    Redo, Save, SelectAll, SetHeading, ShowInFinder, Strikethrough, ToggleBullets, ToggleFocusMode,
-    ToggleNumbers, ToggleQuote, ToggleTask, Undo,
+    InsertCodeBlock, InsertLink, InsertMath, InsertTable, Italic, OpenLink, Paste,
+    PasteAsPlainText, Print, Quit, Redo, Save, SelectAll, SetHeading, ShowInFinder, Strikethrough,
+    ToggleBullets, ToggleFocusMode, ToggleNumbers, ToggleQuote, ToggleTask, Undo,
 };
 use crate::find_bar::{Find, FindAndReplace, FindNext, FindPrevious};
 use crate::settings::{
@@ -39,18 +39,26 @@ pub fn update_item(cx: &App) -> (&'static str, MenuItem) {
 
 pub fn init(cx: &mut App) {
     cx.on_action(|_: &AboutFocal, cx| crate::about::open_window(cx));
-    cx.on_action(|_: &OpenHelp, cx| cx.open_url(&format!("{REPOSITORY}#features")));
+    cx.on_action(|_: &OpenHelp, cx| crate::welcome::open(cx));
     cx.on_action(|_: &OpenShortcuts, cx| {
         cx.open_url(&format!("{REPOSITORY}#keyboard-shortcuts"));
     });
     cx.on_action(|_: &ReportIssue, cx| cx.open_url(&format!("{REPOSITORY}/issues/new")));
     set_menus(cx);
-    // Vim Mode's checkmark follows the setting.
-    let mut keyboard = cx.global::<Settings>().keyboard;
+    // The checkmarks of the editing keys and the style tools follow the
+    // settings.
+    let checked = |settings: &Settings| {
+        (
+            settings.keyboard,
+            settings.syntax_highlight.clone(),
+            settings.style_check,
+        )
+    };
+    let mut shown = checked(cx.global::<Settings>());
     cx.observe_global::<Settings>(move |cx| {
-        let now = cx.global::<Settings>().keyboard;
-        if now != keyboard {
-            keyboard = now;
+        let now = checked(cx.global::<Settings>());
+        if now != shown {
+            shown = now;
             set_menus(cx);
         }
     })
@@ -58,6 +66,7 @@ pub fn init(cx: &mut App) {
 }
 
 /// Builds the menu bar, again whenever Open Recent changes.
+#[allow(clippy::too_many_lines)]
 pub fn set_menus(cx: &mut App) {
     cx.set_menus(vec![
         Menu::new("Focal").items([
@@ -93,7 +102,11 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::os_action("Copy", Copy, OsAction::Copy),
             MenuItem::action("Copy as HTML", CopyHtml),
             MenuItem::os_action("Paste", Paste, OsAction::Paste),
+            MenuItem::action("Paste as Plain Text", PasteAsPlainText),
             MenuItem::os_action("Select All", SelectAll, OsAction::SelectAll),
+            MenuItem::separator(),
+            MenuItem::action("Add Note…", crate::editor::AddNote),
+            MenuItem::action("Copy Notes for Agent", crate::editor::CopyNotesForAgent),
             MenuItem::separator(),
             MenuItem::submenu(Menu::new("Find").items([
                 MenuItem::action("Find…", Find),
@@ -138,10 +151,38 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::action("Toggle Sidebar", ToggleSidebar),
             MenuItem::action("Info Panel", ToggleInfo),
             MenuItem::action("Outline", ToggleOutline),
+            MenuItem::action("Linked From…", crate::workspace::ShowLinkedFrom),
+            MenuItem::action("Notes", crate::workspace::ShowNotes),
+            MenuItem::action("Open Notes File", crate::workspace::OpenNotesFile),
+            MenuItem::submenu(Menu::new("Changes").items([
+                MenuItem::action("Next Change", crate::editor::NextChange),
+                MenuItem::action("Previous Change", crate::editor::PreviousChange),
+                MenuItem::action("Dismiss Changes", crate::editor::DismissChanges),
+                MenuItem::separator(),
+                MenuItem::action(
+                    "Compare with Last Commit",
+                    crate::editor::CompareWithLastCommit,
+                ),
+            ])),
             MenuItem::action("Recent Files", crate::workspace::ToggleRecent),
             MenuItem::action("Quick Open…", QuickOpen),
             MenuItem::action("Go to Heading…", GoToHeading),
             MenuItem::action("Focus Mode", ToggleFocusMode),
+            MenuItem::submenu(
+                Menu::new("Syntax Highlight").items(
+                    std::iter::once(
+                        MenuItem::action("None", crate::settings::ClearSyntaxHighlight)
+                            .checked(cx.global::<Settings>().syntax_highlight.is_empty()),
+                    )
+                    .chain(std::iter::once(MenuItem::separator()))
+                    .chain(crate::style::Part::ALL.map(|part| {
+                        MenuItem::action(part.name(), crate::settings::ToggleSyntaxPart(part))
+                            .checked(cx.global::<Settings>().syntax_highlight.contains(&part))
+                    })),
+                ),
+            ),
+            MenuItem::action("Style Check", crate::settings::ToggleStyleCheck)
+                .checked(cx.global::<Settings>().style_check),
             MenuItem::separator(),
             MenuItem::action("Toggle Dark Mode", ToggleDarkMode),
             MenuItem::separator(),
@@ -150,6 +191,7 @@ pub fn set_menus(cx: &mut App) {
             MenuItem::action("Default Text Size", DefaultTextSize),
             MenuItem::separator(),
             MenuItem::action("Open Link", OpenLink),
+            MenuItem::action("View Image", crate::editor::ViewImage),
             MenuItem::action("Back", GoBack),
         ]),
         window_menu(),

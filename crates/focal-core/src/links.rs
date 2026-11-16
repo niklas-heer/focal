@@ -3,7 +3,70 @@
 
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 use crate::analysis::{Analysis, LineKind};
+
+/// Where a link in a document leads, before it is resolved.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LinkTarget {
+    /// `[[name]]`, resolved against the folder's files.
+    Wiki(String),
+    /// A relative path to a Markdown file (`#part` dropped), resolved against
+    /// the document's folder.
+    Path(String),
+}
+
+/// The heading a link points to inside its document, after the `#`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Fragment {
+    /// `[[Note#Heading]]` or `[[#Heading]]`: the heading's text, matched
+    /// without regard to case, as Obsidian does.
+    Heading(String),
+    /// `[text](note.md#heading)` or `[text](#heading)`: a GitHub-style anchor
+    /// slug.
+    Slug(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutgoingLink {
+    /// The whole link, markers included.
+    pub range: std::ops::Range<usize>,
+    pub target: LinkTarget,
+}
+
+/// The links in `text` that lead to other documents: wiki links, and
+/// relative links to Markdown files. Web links, anchors, images and
+/// anything in code are left out.
+pub fn outgoing_links(text: &str) -> Vec<OutgoingLink> {
+    crate::analysis::analyze(text)
+        .links
+        .into_iter()
+        .filter_map(|link| {
+            let target = if link.wiki {
+                let (name, _) = wiki_target(&link.destination);
+                (!name.is_empty()).then_some(LinkTarget::Wiki(name))?
+            } else {
+                let destination = &link.destination;
+                if destination.contains("://")
+                    || destination.starts_with("mailto:")
+                    || destination.starts_with('#')
+                {
+                    return None;
+                }
+                let path = destination.split(['#', '?']).next().unwrap_or_default();
+                let markdown = Path::new(path).extension().is_none_or(|ext| {
+                    ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown")
+                });
+                (!path.is_empty() && markdown).then(|| LinkTarget::Path(path.to_owned()))?
+            };
+            Some(OutgoingLink {
+                range: link.range,
+                target,
+            })
+        })
+        .collect()
+}
 
 /// Splits the inside of `[[…]]` into the target name and the label after
 /// `|`; a `#heading` part is dropped.
@@ -14,6 +77,24 @@ pub fn wiki_target(inner: &str) -> (String, Option<String>) {
     };
     let target = target.split_once('#').map_or(target, |(name, _)| name);
     (target.trim().to_owned(), label)
+}
+
+/// The `#heading` part of a wiki link's target, if it has one. `[[#Heading]]`
+/// names a heading in the same document.
+pub fn wiki_fragment(inner: &str) -> Option<Fragment> {
+    let target = inner.split_once('|').map_or(inner, |(target, _)| target);
+    let (_, heading) = target.split_once('#')?;
+    let heading = heading.trim();
+    (!heading.is_empty()).then(|| Fragment::Heading(heading.to_owned()))
+}
+
+/// The `#anchor` part of a Markdown link's destination, if it has one. The
+/// anchor is percent-decoded and slugged, so `#Goals`, `#goals` and
+/// `#Goals%20and%20more` all name the heading slugged `goals`.
+pub fn markdown_fragment(destination: &str) -> Option<Fragment> {
+    let (_, anchor) = destination.split_once('#')?;
+    let slug = heading_slug(&percent_decode(anchor));
+    (!slug.is_empty()).then_some(Fragment::Slug(slug))
 }
 
 /// The file in `files` (paths relative to the folder) that a wiki link names,
@@ -114,8 +195,12 @@ pub fn heading_slug(heading: &str) -> String {
         .collect()
 }
 
-/// Where the text of the heading with anchor `slug` starts.
-pub fn find_heading(analysis: &Analysis, text: &str, slug: &str) -> Option<usize> {
+/// Where the text of the first heading whose title `matches` starts.
+fn find_heading_where(
+    analysis: &Analysis,
+    text: &str,
+    matches: impl Fn(&str) -> bool,
+) -> Option<usize> {
     (0..analysis.line_count()).find_map(|line| {
         if !matches!(analysis.info(line).kind, LineKind::Heading(_)) {
             return None;
@@ -124,8 +209,31 @@ pub fn find_heading(analysis: &Analysis, text: &str, slug: &str) -> Option<usize
         let source = &text[range.clone()];
         let lead = source.len() - source.trim_start_matches(['#', ' ']).len();
         let title = source[lead..].trim_end_matches(['#', ' ']);
-        (heading_slug(title) == slug).then_some(range.start + lead)
+        matches(title).then_some(range.start + lead)
     })
+}
+
+/// Where the text of the heading with anchor `slug` starts.
+pub fn find_heading(analysis: &Analysis, text: &str, slug: &str) -> Option<usize> {
+    find_heading_where(analysis, text, |title| heading_slug(title) == slug)
+}
+
+/// Where the text of the heading titled `wanted` starts, without regard to
+/// case.
+pub fn find_heading_text(analysis: &Analysis, text: &str, wanted: &str) -> Option<usize> {
+    let wanted = wanted.trim().to_lowercase();
+    find_heading_where(analysis, text, |title| {
+        title.trim().to_lowercase() == wanted
+    })
+}
+
+/// Where a link's fragment points within the document `text`, if a heading
+/// matches it.
+pub fn find_fragment(analysis: &Analysis, text: &str, fragment: &Fragment) -> Option<usize> {
+    match fragment {
+        Fragment::Heading(title) => find_heading_text(analysis, text, title),
+        Fragment::Slug(slug) => find_heading(analysis, text, slug),
+    }
 }
 
 /// The first file below `root` whose path ends with `name` (a file name,
@@ -166,6 +274,27 @@ pub fn find_file(root: &Path, name: &str, limit: usize) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn outgoing_links_find_wiki_and_relative_links_outside_code() {
+        let text = "See [[Design]] and [x](./notes/Two.md#part).\n`[[not]]`\n```\n[[no]]\n```\n[web](https://a.com) [top](#top) ![pic](a.png)";
+        let found: Vec<_> = outgoing_links(text).into_iter().map(|l| l.target).collect();
+        assert_eq!(
+            found,
+            [
+                LinkTarget::Wiki("Design".into()),
+                LinkTarget::Path("./notes/Two.md".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn outgoing_links_keep_their_ranges() {
+        let text = "a [[B|label]] c";
+        let links = outgoing_links(text);
+        assert_eq!(links[0].range, 2..13);
+        assert_eq!(links[0].target, LinkTarget::Wiki("B".into()));
+    }
     use crate::analysis::analyze;
 
     fn paths(list: &[&str]) -> Vec<PathBuf> {
@@ -249,6 +378,70 @@ mod tests {
             "the heading text"
         );
         assert_eq!(find_heading(&analysis, text, "missing"), None);
+    }
+
+    #[test]
+    fn wiki_fragments_name_a_heading_by_its_text() {
+        assert_eq!(
+            wiki_fragment("Design#Goals"),
+            Some(Fragment::Heading("Goals".into()))
+        );
+        assert_eq!(
+            wiki_fragment("Design#Goals|the goals"),
+            Some(Fragment::Heading("Goals".into())),
+            "the label is not part of the heading"
+        );
+        assert_eq!(
+            wiki_fragment("#Next Steps"),
+            Some(Fragment::Heading("Next Steps".into())),
+            "a heading in the same document"
+        );
+        assert_eq!(wiki_fragment("Design"), None);
+        assert_eq!(wiki_fragment("Design#  "), None);
+        assert_eq!(wiki_target("Design#Goals"), ("Design".into(), None));
+    }
+
+    #[test]
+    fn markdown_fragments_name_a_heading_by_its_slug() {
+        assert_eq!(
+            markdown_fragment("Design.md#Goals"),
+            Some(Fragment::Slug("goals".into()))
+        );
+        assert_eq!(
+            markdown_fragment("../My%20Notes.md#next%20steps"),
+            Some(Fragment::Slug("next-steps".into())),
+            "percent-encoded"
+        );
+        assert_eq!(
+            markdown_fragment("#1.-goal-and-principles-agreed"),
+            Some(Fragment::Slug("1-goal-and-principles-agreed".into()))
+        );
+        assert_eq!(markdown_fragment("Design.md"), None);
+        assert_eq!(markdown_fragment("Design.md#"), None);
+    }
+
+    #[test]
+    fn fragments_find_their_heading() {
+        let text = "# Design\n\n## Goals\n\n## Next Steps\n";
+        let analysis = analyze(text);
+        let at = |fragment: Option<Fragment>| {
+            find_fragment(&analysis, text, &fragment.expect("a fragment"))
+        };
+        assert_eq!(at(wiki_fragment("x#goals")), Some(13), "text, any case");
+        assert_eq!(at(wiki_fragment("x#NEXT STEPS")), Some(23));
+        assert_eq!(at(wiki_fragment("x#Missing")), None);
+        assert_eq!(at(markdown_fragment("x.md#next-steps")), Some(23), "a slug");
+        assert_eq!(
+            at(markdown_fragment("x.md#Next%20Steps")),
+            Some(23),
+            "a decoded slug"
+        );
+        assert_eq!(
+            at(markdown_fragment("x.md#next steps")),
+            Some(23),
+            "a title is not a slug, but spaces slug to hyphens"
+        );
+        assert_eq!(at(markdown_fragment("x.md#goals-")), None);
     }
 
     #[test]

@@ -41,6 +41,16 @@ impl InlineStyle {
     pub const TAG: Self = Self(1 << 17);
     /// Words the grammar checker has a suggestion for.
     pub const GRAMMAR: Self = Self(1 << 18);
+    /// A filler word, cliché or redundancy the style check found.
+    pub const STYLE: Self = Self(1 << 19);
+    /// Parts of speech, colored by syntax highlighting.
+    pub const ADJECTIVE: Self = Self(1 << 20);
+    pub const NOUN: Self = Self(1 << 21);
+    pub const ADVERB: Self = Self(1 << 22);
+    pub const VERB: Self = Self(1 << 23);
+    pub const CONJUNCTION: Self = Self(1 << 24);
+    /// A passage a review note is about.
+    pub const NOTED: Self = Self(1 << 25);
 
     pub const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0 && other.0 != 0
@@ -148,6 +158,31 @@ pub struct LineInfo {
     /// Centered by HTML: `<h1 align="center">`, or inside `<p
     /// align="center">`, `<div align="center">` or `<center>`.
     pub centered: bool,
+}
+
+impl LineInfo {
+    /// Hashes how the line is drawn, with its byte offsets taken from
+    /// `line_start`, so that an edit above it leaves the hash alone.
+    pub fn hash_from<H: std::hash::Hasher>(&self, line_start: usize, state: &mut H) {
+        use std::hash::Hash as _;
+        let local = |range: &Range<usize>| {
+            range.start.saturating_sub(line_start)..range.end.saturating_sub(line_start)
+        };
+        self.kind.hash(state);
+        self.quote_depth.hash(state);
+        self.alert.hash(state);
+        self.code_block.hash(state);
+        self.prefix.levels.hash(state);
+        self.prefix
+            .content_start
+            .saturating_sub(line_start)
+            .hash(state);
+        self.prefix.marker.as_ref().map(local).hash(state);
+        for quote in &self.prefix.quotes {
+            local(quote).hash(state);
+        }
+        self.centered.hash(state);
+    }
 }
 
 /// A list item's marker, drawn in the item's marker column.
@@ -346,6 +381,15 @@ pub struct Analysis {
 impl Analysis {
     pub fn line_count(&self) -> usize {
         self.lines.len()
+    }
+
+    /// The inline styles around `offset`: those of every span it is inside
+    /// or at the end of, as a caret there would type them.
+    pub fn styles_at(&self, offset: usize) -> InlineStyle {
+        self.styles
+            .iter()
+            .filter(|span| span.range.start < offset && offset <= span.range.end)
+            .fold(InlineStyle::NONE, |styles, span| styles | span.style)
     }
 
     pub fn info(&self, line: usize) -> &LineInfo {
@@ -1690,6 +1734,35 @@ fn bucket<'r>(
 #[allow(clippy::single_range_in_vec_init)] // one marker per line is common here
 mod tests {
     use super::*;
+
+    #[test]
+    fn styles_at_the_caret() {
+        let text = "a **bold _both_** c";
+        let analysis = analyze(text);
+        let inside = text.find("both").unwrap() + 2;
+        let styles = analysis.styles_at(inside);
+        assert!(styles.contains(InlineStyle::STRONG));
+        assert!(styles.contains(InlineStyle::EMPHASIS));
+        assert!(analysis.styles_at(1).is_empty());
+    }
+
+    #[test]
+    fn line_hashes_ignore_edits_above() {
+        use std::hash::{DefaultHasher, Hasher as _};
+        let hash = |text: &str, line: usize| {
+            let analysis = analyze(text);
+            let mut hasher = DefaultHasher::new();
+            analysis
+                .info(line)
+                .hash_from(analysis.lines.range(line).start, &mut hasher);
+            hasher.finish()
+        };
+        let before = "Intro\n\n> - [ ] task\n";
+        let after = "Intro, longer\n\n> - [ ] task\n";
+        assert_eq!(hash(before, 2), hash(after, 2));
+        assert_ne!(hash(before, 2), hash("Intro\n\n> 1. [ ] task\n", 2));
+        assert_ne!(hash(before, 2), hash("Intro\n\n>   - [ ] task\n", 2));
+    }
 
     fn marker_texts<'t>(text: &'t str, analysis: &Analysis) -> Vec<&'t str> {
         analysis

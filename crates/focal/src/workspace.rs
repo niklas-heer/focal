@@ -14,18 +14,24 @@ use gpui_kit::{
 
 use crate::bar;
 use crate::document::Document;
+use crate::editor::AfterSave;
 use crate::editor::{Editor, EditorEvent, ToggleFocusMode};
 use crate::find_bar::{Find, FindAndReplace, FindBar, FindBarEvent, FindNext, FindPrevious};
 use crate::folder;
 use crate::instance::Request;
 use crate::switcher::{GoToHeading, PickItem, QuickOpen, Switcher, SwitcherEvent};
 use crate::theme::Theme;
+use crate::viewer::{ImageViewer, ViewedImage, ViewerEvent};
 
 mod keys;
+mod notes_tab;
 mod panel;
 
 pub use keys::ShowEditingKeys;
-pub use panel::{PanelTab, ToggleDarkMode, ToggleInfo, ToggleOutline, ToggleRecent};
+pub use panel::{
+    OpenNotesFile, PanelTab, ShowLinkedFrom, ShowNotes, ToggleDarkMode, ToggleInfo, ToggleOutline,
+    ToggleRecent,
+};
 
 actions!(focal, [ToggleSidebar, GoBack, Minimize, Zoom]);
 
@@ -56,6 +62,8 @@ struct Folder {
     files: Vec<PathBuf>,
     /// Each tag in the files, with the files that carry it.
     tags: Vec<(String, Vec<PathBuf>)>,
+    /// The links between the files, by the file they lead to.
+    backlinks: std::collections::HashMap<PathBuf, Vec<folder::Backlink>>,
     sidebar: bool,
     _watch: Option<(notify::RecommendedWatcher, Task<()>)>,
     /// Reads the files' tags in the background; kept to keep it running.
@@ -107,6 +115,8 @@ pub struct Workspace {
     key_reference: Option<gpui_kit::FocusHandle>,
     /// The sidebar shows only files with this tag.
     tag_filter: Option<String>,
+    /// The image viewer, while it is open.
+    viewer: Option<(Entity<ImageViewer>, gpui_kit::Subscription)>,
 }
 
 impl Workspace {
@@ -133,6 +143,7 @@ impl Workspace {
             panel: None,
             key_reference: None,
             tag_filter: None,
+            viewer: None,
         }
     }
 
@@ -148,24 +159,42 @@ impl Workspace {
         match event {
             EditorEvent::Jumped(from) => self.history.push((here, from.clone())),
             EditorEvent::Searched(query) => self.last_query = Some(query.clone()),
-            EditorEvent::Open(path) => {
+            EditorEvent::NotesChanged => cx.notify(),
+            EditorEvent::ViewImages(images, index) => {
+                self.open_viewer(images.clone(), *index, window, cx);
+            }
+            EditorEvent::Open(path, fragment) => {
                 let in_folder = self
                     .folder
                     .as_ref()
                     .is_some_and(|folder| folder.holds(path));
                 if in_folder {
-                    self.history.push((here, editor.selection.clone()));
-                    self.open_file(path.clone(), window, cx);
+                    let from = (here, editor.selection.clone());
+                    if self.open_file_at(path.clone(), fragment.as_ref(), window, cx) {
+                        self.history.push(from);
+                    }
                 } else {
                     // The window list reads every workspace, this one too.
                     let request = Request {
                         path: Some(path.clone()),
+                        fragment: fragment.clone(),
                         ..Request::default()
                     };
                     cx.defer(move |cx| crate::windows::open(request, None, cx));
                 }
             }
         }
+    }
+
+    /// Puts the caret on the heading `fragment` names, if the document has
+    /// one, without recording a jump.
+    pub(crate) fn reveal(
+        &mut self,
+        fragment: &focal_core::links::Fragment,
+        cx: &mut Context<Self>,
+    ) {
+        self.editor
+            .update(cx, |editor, cx| editor.reveal_fragment(fragment, cx));
     }
 
     /// Returns to where the last followed link or jump came from.
@@ -215,7 +244,7 @@ impl Workspace {
         }
         this.folder = Some(Self::watched_folder(root, folder::Depth::Tree, files, cx));
         this.share_files(cx);
-        this.index_tags(cx);
+        this.index_folder(cx);
         this
     }
 
@@ -245,6 +274,7 @@ impl Workspace {
             depth,
             files,
             tags: Vec::new(),
+            backlinks: std::collections::HashMap::new(),
             sidebar: false,
             _watch: watch,
             tagging: None,
@@ -259,7 +289,7 @@ impl Workspace {
             let root = self.editor.read(cx).path()?.parent()?.to_path_buf();
             let files = folder::scan(&root, folder::Depth::Level, folder::SCAN_LIMIT);
             self.folder = Some(Self::watched_folder(root, folder::Depth::Level, files, cx));
-            self.index_tags(cx);
+            self.index_folder(cx);
         }
         self.folder.as_mut()
     }
@@ -284,7 +314,7 @@ impl Workspace {
                     if let Some(folder) = &mut this.folder {
                         folder.files = files;
                         this.share_files(cx);
-                        this.index_tags(cx);
+                        this.index_folder(cx);
                         cx.notify();
                     }
                 });
@@ -295,9 +325,9 @@ impl Workspace {
         })
     }
 
-    /// Reads the folder's tags in the background; a tag filter whose tag is
-    /// gone is cleared.
-    fn index_tags(&mut self, cx: &mut Context<Self>) {
+    /// Reads the folder's tags and links in the background; a tag filter
+    /// whose tag is gone is cleared.
+    fn index_folder(&mut self, cx: &mut Context<Self>) {
         let Some(folder) = &mut self.folder else {
             return;
         };
@@ -305,8 +335,14 @@ impl Workspace {
         folder.tagging = Some(cx.spawn(async move |this, cx| {
             let tags = cx
                 .background_executor()
-                .spawn(async move { folder::tags(&root, &files) })
+                .spawn(async move {
+                    (
+                        folder::tags(&root, &files),
+                        folder::backlinks(&root, &files),
+                    )
+                })
                 .await;
+            let (tags, backlinks) = tags;
             this.update(cx, |this, cx| {
                 if this
                     .tag_filter
@@ -317,6 +353,7 @@ impl Workspace {
                 }
                 if let Some(folder) = &mut this.folder {
                     folder.tags = tags;
+                    folder.backlinks = backlinks;
                     cx.notify();
                 }
             })
@@ -324,18 +361,55 @@ impl Workspace {
         }));
     }
 
+    /// The links to `path` from the other files this window lists, or
+    /// `None` when it lists none.
+    pub(crate) fn backlinks_for(&self, path: &std::path::Path) -> Option<&[folder::Backlink]> {
+        let folder = self.folder.as_ref()?;
+        let relative = path.strip_prefix(&folder.root).ok()?;
+        Some(folder.backlinks.get(relative).map_or(&[], Vec::as_slice))
+    }
+
+    /// The root the window's files are listed under.
+    pub(crate) fn folder_root(&self) -> Option<&std::path::Path> {
+        self.folder.as_ref().map(|folder| folder.root.as_path())
+    }
+
     /// Saves the current file, then opens `path` in its place.
     pub fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_file_at(path, None, window, cx);
+    }
+
+    /// Saves the current file, then opens `path` in its place with the caret
+    /// on the heading `fragment` names. Tells whether it opened now; unsaved
+    /// text that cannot be saved asks first, and opens the file itself once
+    /// answered.
+    fn open_file_at(
+        &mut self,
+        path: PathBuf,
+        fragment: Option<&focal_core::links::Fragment>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if self.editor.read(cx).path() == Some(path.as_path()) {
-            return;
+            if let Some(fragment) = fragment {
+                self.reveal(fragment, cx);
+            }
+            return true;
         }
-        self.editor
-            .update(cx, |editor, cx| editor.flush(window, cx));
+        let after = AfterSave::Open(path.clone(), fragment.cloned());
+        if !self
+            .editor
+            .update(cx, |editor, cx| editor.may_leave(after, window, cx))
+        {
+            return false;
+        }
         let (document, text) = match Document::open(path) {
             Ok(opened) => opened,
             Err(error) => {
-                eprintln!("focal: {error:#}");
-                return;
+                self.editor.update(cx, |editor, cx| {
+                    editor.show_error(format!("Could not open the file: {error:#}"), cx);
+                });
+                return false;
             }
         };
         let title = document.title();
@@ -349,7 +423,11 @@ impl Workspace {
         window.set_window_title(&title);
         let handle = self.editor.read(cx).focus_handle(cx);
         window.focus(&handle, cx);
+        if let Some(fragment) = fragment {
+            self.reveal(fragment, cx);
+        }
         cx.notify();
+        true
     }
 
     fn quick_open(&mut self, _: &QuickOpen, window: &mut Window, cx: &mut Context<Self>) {
@@ -470,6 +548,32 @@ impl Workspace {
                 .update(cx, |editor, cx| editor.select(at..at, cx));
         };
         self.open_picker(items, "Go to a heading…", empty, on_pick, window, cx);
+    }
+
+    fn open_viewer(
+        &mut self,
+        images: Vec<ViewedImage>,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let viewer = cx.new(|cx| ImageViewer::new(images, index, window, cx));
+        let subscription = cx.subscribe_in(&viewer, window, |this, _, event, window, cx| {
+            let ViewerEvent::Dismiss = event;
+            this.viewer = None;
+            let handle = this.editor.read(cx).focus_handle(cx);
+            window.focus(&handle, cx);
+            cx.notify();
+        });
+        window.focus(&viewer.focus_handle(cx), cx);
+        self.viewer = Some((viewer, subscription));
+        cx.notify();
+    }
+
+    /// The image viewer, while it is open.
+    #[cfg(test)]
+    pub(crate) fn viewer(&self) -> Option<&Entity<ImageViewer>> {
+        self.viewer.as_ref().map(|(viewer, _)| viewer)
     }
 
     fn open_picker(
@@ -661,7 +765,7 @@ impl Workspace {
             .py(px(5.))
             .cursor_pointer()
             .when(selected, |d| d.bg(theme.selection))
-            .hover(move |style| style.bg(hover))
+            .when(!selected, |d| d.hover(move |style| style.bg(hover)))
             .child(name)
             .when(!parent.is_empty(), |d| {
                 d.child(
@@ -787,6 +891,8 @@ impl Workspace {
         self.bar_timer = None;
         if self.bar != Bar::Hidden {
             self.bar = Bar::Hidden;
+            self.editor
+                .update(cx, |editor, cx| editor.set_bar_shown(false, cx));
             cx.notify();
         }
     }
@@ -808,6 +914,8 @@ impl Workspace {
             if !matches!(self.bar, Bar::Shown(_)) {
                 self.shows += 1;
                 self.bar = Bar::Shown(self.shows);
+                self.editor
+                    .update(cx, |editor, cx| editor.set_bar_shown(true, cx));
                 cx.notify();
             }
         } else if matches!(self.bar, Bar::Shown(_)) && self.bar_timer.is_none() {
@@ -831,7 +939,7 @@ impl Workspace {
     /// The bar, fading in or out, while the pointer asks for it. Focus mode
     /// keeps it out of the way while you write, but the pointer still
     /// brings it up.
-    fn render_bar(&self, theme: &Theme, cx: &Context<Self>) -> Option<AnyElement> {
+    fn render_bar(&self, room: f32, theme: &Theme, cx: &Context<Self>) -> Option<AnyElement> {
         // The word count reads the whole text; only count while the bar shows.
         let (n, fading_in) = match self.bar {
             Bar::Hidden => return None,
@@ -846,7 +954,7 @@ impl Workspace {
             .left_0()
             .right_0()
             .bottom_0()
-            .child(bar::render(&state, goal, theme));
+            .child(bar::render(&state, goal, room, theme));
         Some(if fading_in {
             bar.with_animation(("bar-in", n), Animation::new(BAR_FADE), |el, t| {
                 el.opacity(t)
@@ -862,6 +970,7 @@ impl Workspace {
 }
 
 impl Render for Workspace {
+    #[allow(clippy::too_many_lines)]
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::for_appearance(window.appearance());
         let editor = self.editor.read(cx);
@@ -873,6 +982,14 @@ impl Render for Workspace {
         };
         let corner = self.render_corner(&theme, focus_mode, cx);
         let panel = self.render_panel(&theme, cx);
+        // The width the editor gets, for the bar to fit in.
+        let room = f32::from(window.viewport_size().width)
+            - if sidebar.is_some() { SIDEBAR_WIDTH } else { 0. }
+            - if panel.is_some() {
+                crate::workspace::panel::PANEL_WIDTH
+            } else {
+                0.
+            };
         let main = div()
             .relative()
             .flex_1()
@@ -890,7 +1007,7 @@ impl Render for Workspace {
                     .bottom_0()
                     .h(px(bar::SHOW_ZONE)),
             )
-            .children(self.render_bar(&theme, cx));
+            .children(self.render_bar(room, &theme, cx));
         div()
             .id("workspace")
             .size_full()
@@ -902,6 +1019,16 @@ impl Render for Workspace {
             // Entering or leaving focus mode starts from a quiet page, from
             // the keys, the menu or the bar's own button.
             .capture_action(cx.listener(|this, _: &ToggleFocusMode, _, cx| this.hide_bar(cx)))
+            .on_action(cx.listener(Self::show_linked_from))
+            .on_action(cx.listener(Self::show_notes))
+            // Esc in the note card, which the workspace draws.
+            .on_action(
+                cx.listener(|this, action: &crate::editor::CancelNote, window, cx| {
+                    this.editor
+                        .update(cx, |editor, cx| editor.cancel_note(action, window, cx));
+                }),
+            )
+            .on_action(cx.listener(Self::open_notes_file))
             .on_action(cx.listener(|this, _: &ToggleInfo, _, cx| {
                 this.toggle_panel(PanelTab::Info, cx);
             }))
@@ -936,6 +1063,9 @@ impl Render for Workspace {
             .children(sidebar)
             .child(main.child(corner))
             .children(panel)
+            // The note being written, under its passage: outside the editor,
+            // so its keys stay the note's.
+            .children(self.editor.read(cx).render_note_draft(&theme))
             .when_some(self.find_bar.as_ref(), |d, (bar, _)| {
                 d.child(
                     div()
@@ -959,5 +1089,8 @@ impl Render for Workspace {
                 )
             })
             .children(self.render_key_reference(&theme, cx))
+            .when_some(self.viewer.as_ref(), |d, (viewer, _)| {
+                d.child(viewer.clone())
+            })
     }
 }

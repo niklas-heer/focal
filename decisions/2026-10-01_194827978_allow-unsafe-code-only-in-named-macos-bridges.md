@@ -19,6 +19,8 @@ The workspace keeps `unsafe_code = "deny"`. Code may allow `unsafe` only where i
 - `SpellChecker::check` in `crates/focal/src/spell.rs` (one function): `NSSpellChecker`'s `checkString:range:types:…`, which grammar, spelling and correction share.
 - `crates/focal/src/writing_tools.rs` (module, added 2026-10-02 when Niklas chose Writing Tools in panel mode): adds the Services-requestor methods (`validRequestorForSendType:returnType:`, `writeSelectionToPasteboard:types:`, `readSelectionFromPasteboard:`) to GPUI's `GPUIView` class at runtime, so Apple's Writing Tools can read and replace the editor's text.
 
+- `tag` in `crates/focal/src/style.rs` (one function, added 2026-10-04 with the style tools Niklas chose for Milestone 13): NaturalLanguage's `NLTagger`, whose every method `objc2-natural-language` marks `unsafe`, for parts of speech and a paragraph's language.
+
 Adding a place means updating this record.
 
 Proposed on 2026-10-01 while building Milestone 12. It widens the rule in "Update Focal with Sparkle through objc2", which named `updates.rs` as the only exception.

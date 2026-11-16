@@ -29,8 +29,53 @@ actions!(
         BiggerText,
         SmallerText,
         DefaultTextSize,
+        ToggleStyleCheck,
+        ClearSyntaxHighlight,
     ]
 );
+
+/// Colors one part of speech, or no longer.
+#[derive(Clone, Debug, PartialEq, gpui_kit::Action)]
+#[action(namespace = focal, no_json)]
+pub struct ToggleSyntaxPart(pub crate::style::Part);
+
+/// Adds `part` to the colored parts of speech, or takes it out.
+fn toggle_part(settings: &mut Settings, part: crate::style::Part) {
+    if let Some(ix) = settings.syntax_highlight.iter().position(|p| *p == part) {
+        settings.syntax_highlight.remove(ix);
+    } else {
+        settings.syntax_highlight.push(part);
+    }
+}
+
+/// The parts of speech as chips that turn their colors on and off, each in
+/// its color when on.
+pub(crate) fn part_chips(settings: &Settings, theme: &Colors) -> impl IntoElement {
+    let hover = theme.code_background;
+    div()
+        .flex()
+        .flex_wrap()
+        .gap(px(4.))
+        .children(crate::style::Part::ALL.map(|part| {
+            let on = settings.syntax_highlight.contains(&part);
+            let color = theme.part(part);
+            div()
+                .id(SharedString::from(format!("syntax-{}", part.name())))
+                .test_support()
+                .aria_label(part.name())
+                .px(px(8.))
+                .py(px(2.))
+                .rounded(px(5.))
+                .border_1()
+                .border_color(if on { color } else { theme.rule })
+                .text_size(px(12.))
+                .text_color(if on { color } else { theme.marker })
+                .cursor_pointer()
+                .hover(move |style| style.bg(hover))
+                .child(part.name())
+                .on_click(move |_, _, cx| update(cx, |s| toggle_part(s, part)))
+        }))
+}
 
 /// Shows the settings pane with this index.
 #[derive(Clone, Debug, PartialEq, gpui_kit::Action)]
@@ -286,10 +331,26 @@ pub struct Settings {
     pub correct_spelling: bool,
     /// Focal's own keys, or Vim's or Helix's modal editing.
     pub keyboard: Keyboard,
+    /// Where pasted and dropped images are saved, beside the document.
+    pub images_folder: String,
+    /// The parts of speech colored, after iA Writer; none by default.
+    pub syntax_highlight: Vec<crate::style::Part>,
+    /// Mark filler words, clichés and redundancies.
+    pub style_check: bool,
 }
 
 impl TextSize {
     const ALL: [Self; 4] = [Self::Small, Self::Medium, Self::Large, Self::Huge];
+
+    /// The name the Settings window and the Info panel show.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Small => "Small",
+            Self::Medium => "Medium",
+            Self::Large => "Large",
+            Self::Huge => "Huge",
+        }
+    }
 
     /// The next size up or down, staying at the ends.
     fn step(self, up: bool) -> Self {
@@ -317,11 +378,25 @@ impl Default for Settings {
             check_grammar: true,
             correct_spelling: true,
             keyboard: Keyboard::Standard,
+            images_folder: "assets".to_owned(),
+            syntax_highlight: Vec::new(),
+            style_check: false,
         }
     }
 }
 
 impl Global for Settings {}
+
+/// Whether this launch is the first one: no settings file existed before it.
+#[derive(Clone, Copy)]
+struct FirstLaunch(bool);
+
+impl Global for FirstLaunch {}
+
+/// Whether this is the first launch, which opens the Welcome document.
+pub fn first_launch(cx: &App) -> bool {
+    cx.try_global::<FirstLaunch>().is_some_and(|first| first.0)
+}
 
 impl Settings {
     /// Reads settings from `path`; a missing or unreadable file gives the
@@ -339,6 +414,18 @@ impl Settings {
         }
         std::fs::write(path, serde_json::to_string_pretty(self)? + "\n")?;
         Ok(())
+    }
+
+    /// Reads the settings at `path`, and tells whether there was no such file
+    /// yet, which makes this the first launch. The first launch writes the
+    /// defaults, so the next launch is not a first one.
+    pub fn start_from(path: &Path) -> (Self, bool) {
+        let first = !path.exists();
+        let settings = Self::load_from(path);
+        if first && let Err(error) = settings.save_to(path) {
+            eprintln!("focal: could not save settings: {error:#}");
+        }
+        (settings, first)
     }
 
     /// `~/Library/Application Support/Focal/settings.json`.
@@ -363,7 +450,12 @@ impl Settings {
 /// Loads the settings, applies the appearance and registers the settings
 /// window's actions.
 pub fn init(cx: &mut App) {
-    cx.set_global(Settings::path().map_or_else(Settings::default, |p| Settings::load_from(&p)));
+    let (settings, first) = Settings::path().map_or_else(
+        || (Settings::default(), false),
+        |path| Settings::start_from(&path),
+    );
+    cx.set_global(settings);
+    cx.set_global(FirstLaunch(first));
     cx.set_global(SettingsWindow(None));
     crate::mac::set_appearance(cx.global::<Settings>().appearance);
     let mut appearance = cx.global::<Settings>().appearance;
@@ -395,6 +487,12 @@ pub fn init(cx: &mut App) {
         let keyboard = action.0;
         update(cx, |s| s.keyboard = keyboard);
     });
+    cx.on_action(|_: &ToggleStyleCheck, cx| update(cx, |s| s.style_check = !s.style_check));
+    cx.on_action(|action: &ToggleSyntaxPart, cx| {
+        let part = action.0;
+        update(cx, |s| toggle_part(s, part));
+    });
+    cx.on_action(|_: &ClearSyntaxHighlight, cx| update(cx, |s| s.syntax_highlight.clear()));
     cx.on_action(|_: &BiggerText, cx| update(cx, |s| s.text_size = s.text_size.step(true)));
     cx.on_action(|_: &SmallerText, cx| update(cx, |s| s.text_size = s.text_size.step(false)));
     cx.on_action(|_: &DefaultTextSize, cx| update(cx, |s| s.text_size = TextSize::default()));
@@ -1074,10 +1172,10 @@ fn text_pane(settings: &Settings, theme: &Colors) -> impl IntoElement {
                     segmented(
                         "text-size",
                         &[
-                            (TextSize::Small, "S"),
-                            (TextSize::Medium, "M"),
-                            (TextSize::Large, "L"),
-                            (TextSize::Huge, "XL"),
+                            (TextSize::Small, "Small"),
+                            (TextSize::Medium, "Medium"),
+                            (TextSize::Large, "Large"),
+                            (TextSize::Huge, "Huge"),
                         ],
                         settings.text_size,
                         |s, v| s.text_size = v,
@@ -1120,6 +1218,7 @@ pub(crate) const fn keyboard_hint(keyboard: Keyboard) -> &'static str {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn writing_pane(settings: &Settings, theme: &Colors) -> impl IntoElement {
     let correction_hint: SharedString = if crate::spell::system_corrects_spelling() {
         "Fixes a typo once you finish the word, as its own undo step.".into()
@@ -1182,7 +1281,65 @@ fn writing_pane(settings: &Settings, theme: &Colors) -> impl IntoElement {
                 ),
             ],
         ))
+        .child(group(
+            "Style",
+            theme,
+            [
+                row(
+                    "Syntax highlight",
+                    Some("Colors the parts of speech you choose, after iA Writer.".into()),
+                    part_chips(settings, theme),
+                    theme,
+                ),
+                row(
+                    "Style check",
+                    Some(
+                        "Underlines filler words, clichés and redundancies, in English and German."
+                            .into(),
+                    ),
+                    toggle(
+                        "style-check",
+                        settings.style_check,
+                        |s, v| s.style_check = v,
+                        theme,
+                    ),
+                    theme,
+                ),
+            ],
+        ))
+        .child(group(
+            "Pasting",
+            theme,
+            [row(
+                "Images folder",
+                Some(
+                    "Pasted and dropped images are saved here, beside the document. \
+                     ⌥⇧⌘V pastes rich text as plain text."
+                        .into(),
+                ),
+                segmented(
+                    "images-folder",
+                    IMAGE_FOLDERS,
+                    IMAGE_FOLDERS
+                        .iter()
+                        .map(|(folder, _)| *folder)
+                        .find(|folder| *folder == settings.images_folder)
+                        .unwrap_or("custom"),
+                    |s, v| v.clone_into(&mut s.images_folder),
+                    theme,
+                ),
+                theme,
+            )],
+        ))
 }
+
+/// The images folders offered in Settings; another can be set in
+/// `settings.json`.
+const IMAGE_FOLDERS: &[(&str, &str)] = &[
+    ("assets", "assets/"),
+    ("images", "images/"),
+    ("", "Beside the file"),
+];
 
 fn focus_pane(settings: &Settings, theme: &Colors) -> impl IntoElement {
     div().flex().flex_col().gap(px(18.)).child(group(
@@ -1438,6 +1595,9 @@ mod tests {
             check_grammar: false,
             correct_spelling: false,
             keyboard: Keyboard::Helix,
+            images_folder: "img".to_owned(),
+            syntax_highlight: vec![crate::style::Part::Verb],
+            style_check: true,
         };
         settings.save_to(&path).unwrap();
         assert_eq!(Settings::load_from(&path), settings);
@@ -1496,5 +1656,16 @@ mod tests {
         );
         std::fs::write(&path, "not json").unwrap();
         assert_eq!(Settings::load_from(&path), Settings::default());
+    }
+
+    #[test]
+    fn only_the_launch_without_a_settings_file_is_the_first() {
+        let path = temp("first-launch");
+        let _ = std::fs::remove_file(&path);
+        let (_, first) = Settings::start_from(&path);
+        assert!(first, "no settings file yet");
+        assert!(path.exists(), "the first launch writes the defaults");
+        let (_, again) = Settings::start_from(&path);
+        assert!(!again, "a later launch is not the first");
     }
 }

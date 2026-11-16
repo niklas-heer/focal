@@ -6,12 +6,13 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use gpui_kit::{
-    AnyWindowHandle, App, AppContext as _, Bounds, Global, KeyBinding, PathPromptOptions,
-    TitlebarOptions, WeakEntity, WindowBounds, WindowId, WindowOptions, actions, point, px, size,
+    AnyWindowHandle, App, AppContext as _, Global, KeyBinding, PathPromptOptions, TitlebarOptions,
+    WeakEntity, WindowBounds, WindowId, WindowOptions, actions, point, px,
 };
 
 use crate::document::Document;
 use crate::instance::{Request, Responder};
+use crate::window_frame::{self, Frame};
 use crate::workspace::Workspace;
 
 actions!(focal, [NewWindow, OpenFiles]);
@@ -27,6 +28,8 @@ pub fn bind_keys(cx: &mut App) {
 struct Windows {
     open: Vec<(AnyWindowHandle, WeakEntity<Workspace>)>,
     waiting: HashMap<WindowId, Vec<Responder>>,
+    /// Where the session's first window opened; later windows cascade from it.
+    anchor: Option<(f32, f32)>,
 }
 
 impl Global for Windows {}
@@ -34,6 +37,10 @@ impl Global for Windows {}
 /// Tracks windows and quits when the last one closes.
 pub fn init(cx: &mut App) {
     cx.set_global(Windows::default());
+    cx.set_global(window_frame::Memory {
+        frame: window_frame::load(),
+        generation: 0,
+    });
     cx.on_window_closed(|cx, id| {
         let windows = cx.global_mut::<Windows>();
         windows.open.retain(|(handle, _)| handle.window_id() != id);
@@ -115,7 +122,7 @@ pub fn workspaces(cx: &App) -> Vec<gpui_kit::Entity<Workspace>> {
 /// Opens the draft at `path`, whose text is `text`, as an unsaved untitled
 /// document that keeps writing to that draft.
 pub fn open_draft(path: PathBuf, text: String, cx: &mut App) {
-    match open_window(None, Some(text), cx) {
+    match open_window(None, Untitled::Text(Some(text)), cx) {
         Ok((_, workspace)) => {
             let editor = workspace.read(cx).editor().clone();
             editor.update(cx, |editor, _| editor.restore_draft(path));
@@ -130,14 +137,21 @@ pub fn open(request: Request, mut responder: Option<Responder>, cx: &mut App) {
         path,
         untitled,
         wait,
+        welcome,
+        fragment,
     } = request;
-    let shown = path.as_deref().and_then(|path| showing(path, cx));
-    let handle = match shown {
-        Some(handle) => Ok(handle),
-        None => open_window(path.clone(), untitled, cx).map(|(handle, _)| handle),
+    let untitled = if welcome {
+        Untitled::Welcome
+    } else {
+        Untitled::Text(untitled)
     };
-    let handle = match handle {
-        Ok(handle) => handle,
+    let shown = path.as_deref().and_then(|path| showing(path, cx));
+    let opened = match shown {
+        Some(opened) => Ok(opened),
+        None => open_window(path.clone(), untitled, cx),
+    };
+    let (handle, workspace) = match opened {
+        Ok(opened) => opened,
         Err(error) => {
             if let Some(responder) = responder {
                 responder.failed(&format!("{error:#}"));
@@ -145,6 +159,9 @@ pub fn open(request: Request, mut responder: Option<Responder>, cx: &mut App) {
             return;
         }
     };
+    if let Some(fragment) = &fragment {
+        workspace.update(cx, |workspace, cx| workspace.reveal(fragment, cx));
+    }
     handle
         .update(cx, |_, window, _| window.activate_window())
         .ok();
@@ -165,22 +182,31 @@ pub fn open(request: Request, mut responder: Option<Responder>, cx: &mut App) {
     }
 }
 
-/// The open window whose file or folder is `path`.
-fn showing(path: &Path, cx: &App) -> Option<AnyWindowHandle> {
+/// The open window whose file or folder is `path`, and its workspace.
+fn showing(path: &Path, cx: &App) -> Option<(AnyWindowHandle, gpui_kit::Entity<Workspace>)> {
     cx.global::<Windows>()
         .open
         .iter()
-        .find(|(_, workspace)| {
+        .find_map(|(handle, workspace)| {
+            let workspace = workspace.upgrade()?;
             workspace
-                .upgrade()
-                .is_some_and(|workspace| workspace.read(cx).shows(path, cx))
+                .read(cx)
+                .shows(path, cx)
+                .then_some((*handle, workspace))
         })
-        .map(|(handle, _)| *handle)
+}
+
+/// What a window without a file starts with.
+enum Untitled {
+    /// Text that is in no file yet, such as piped standard input.
+    Text(Option<String>),
+    /// The Welcome document, which needs no saving until it is edited.
+    Welcome,
 }
 
 fn open_window(
     path: Option<PathBuf>,
-    untitled: Option<String>,
+    untitled: Untitled,
     cx: &mut App,
 ) -> anyhow::Result<(AnyWindowHandle, gpui_kit::Entity<Workspace>)> {
     enum Content {
@@ -193,7 +219,16 @@ fn open_window(
             let (document, text) = Document::open(path)?;
             Content::File(document, text)
         }
-        None => Content::File(Document::untitled(), untitled.unwrap_or_default()),
+        None => match untitled {
+            Untitled::Welcome => {
+                Content::File(Document::untitled(), crate::welcome::TEXT.to_owned())
+            }
+            // Piped text is in no file yet: it is unsaved from the start.
+            Untitled::Text(Some(text)) if !text.is_empty() => {
+                Content::File(Document::unsaved(), text)
+            }
+            Untitled::Text(_) => Content::File(Document::untitled(), String::new()),
+        },
     };
     let title = match &content {
         Content::Folder(root) => root.file_name().map_or_else(
@@ -202,12 +237,23 @@ fn open_window(
         ),
         Content::File(document, _) => document.title(),
     };
-    // Each new window steps down and right from the last, as on macOS.
-    let step = px(24.) * cx.global::<Windows>().open.len().min(10) as f32;
-    let mut bounds = Bounds::centered(None, size(px(860.), px(920.)), cx);
-    bounds.origin += point(step, step);
+    // Each new window steps down and right from the first, as on macOS, and
+    // every frame is fitted to the screen it opens on.
+    let step = 24. * cx.global::<Windows>().open.len().min(10) as f32;
+    let screens: Vec<Frame> = cx
+        .displays()
+        .iter()
+        .map(|display| window_frame::from_bounds(display.visible_bounds()))
+        .collect();
+    let primary = cx.primary_display().map_or_else(
+        || screens.first().copied().unwrap_or(FALLBACK_SCREEN),
+        |display| window_frame::from_bounds(display.visible_bounds()),
+    );
+    let remembered = cx.global::<window_frame::Memory>().frame;
+    let anchor = cx.global::<Windows>().anchor;
+    let frame = window_frame::placement(remembered, anchor, step, &screens, primary);
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        window_bounds: Some(WindowBounds::Windowed(window_frame::to_bounds(frame))),
         titlebar: Some(TitlebarOptions {
             title: Some(title.into()),
             appears_transparent: true,
@@ -216,15 +262,33 @@ fn open_window(
         ..WindowOptions::default()
     };
     let (handle, workspace) = gpui_kit::open_window(options, cx, |window, cx| {
-        let workspace = cx.new(|cx| match content {
-            Content::Folder(root) => Workspace::new_folder(root, window, cx),
-            Content::File(document, text) => Workspace::new(document, text, window, cx),
+        let workspace = cx.new(|cx| {
+            // A resize or move is remembered for the next window (and written
+            // after a pause), so the window's size and place outlive it.
+            cx.observe_window_bounds(window, |_, window, cx| {
+                if let WindowBounds::Windowed(bounds) = window.window_bounds() {
+                    window_frame::remember(window_frame::from_bounds(bounds), cx);
+                }
+            })
+            .detach();
+            match content {
+                Content::Folder(root) => Workspace::new_folder(root, window, cx),
+                Content::File(document, text) => Workspace::new(document, text, window, cx),
+            }
         });
         Workspace::focus_editor(&workspace, window, cx);
         workspace
     })?;
-    cx.global_mut::<Windows>()
-        .open
-        .push((handle, workspace.downgrade()));
+    let windows = cx.global_mut::<Windows>();
+    windows.anchor.get_or_insert((frame.x, frame.y));
+    windows.open.push((handle, workspace.downgrade()));
     Ok((handle, workspace))
 }
+
+/// Used only when the platform reports no display at all.
+const FALLBACK_SCREEN: Frame = Frame {
+    x: 0.,
+    y: 0.,
+    width: 1440.,
+    height: 900.,
+};

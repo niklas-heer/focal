@@ -5,7 +5,9 @@ use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSAlertStyle, NSAppearance,
     NSApplication, NSPasteboard,
 };
-use objc2_foundation::{NSBundle, NSString};
+use objc2_foundation::{
+    NSBundle, NSFileManager, NSFileManagerItemReplacementOptions, NSString, NSURL,
+};
 
 use crate::settings::Appearance;
 
@@ -63,6 +65,8 @@ pub enum CloseQuestion {
     Untitled,
     /// The file changed on disk while it had unsaved edits.
     Conflict,
+    /// The file could not be written.
+    SaveFailed,
 }
 
 /// Asks what to do with the document `name`'s unsaved text before closing
@@ -86,6 +90,12 @@ pub fn ask_on_close(question: CloseQuestion, name: &str) -> SaveAnswer {
             "Keep Mine",
             "Discard Mine",
         ),
+        CloseQuestion::SaveFailed => (
+            format!("Focal could not save “{name}”."),
+            "Save it somewhere else to keep your edits, or discard them.",
+            "Save As…",
+            "Don’t Save",
+        ),
     };
     let alert = NSAlert::new(mtm);
     alert.setMessageText(&NSString::from_str(&message));
@@ -101,7 +111,7 @@ pub fn ask_on_close(question: CloseQuestion, name: &str) -> SaveAnswer {
 }
 
 /// Asks whether to quit although `count` documents have text that could not
-/// be saved (untitled, or changed on disk meanwhile). Like [`ask_on_close`],
+/// be saved (untitled, changed on disk meanwhile, or not writable). Like [`ask_on_close`],
 /// without AppKit's main thread the answer is no.
 pub fn confirm_discard(count: usize) -> bool {
     let Some(mtm) = MainThreadMarker::new() else {
@@ -110,12 +120,12 @@ pub fn confirm_discard(count: usize) -> bool {
     let (message, detail) = if count == 1 {
         (
             "Quit and discard unsaved changes in 1 document?".to_owned(),
-            "It is untitled or changed on disk meanwhile. Cancel to save it first.",
+            "It is untitled, changed on disk meanwhile, or could not be saved. Cancel to save it first.",
         )
     } else {
         (
             format!("Quit and discard unsaved changes in {count} documents?"),
-            "They are untitled or changed on disk meanwhile. Cancel to save them first.",
+            "They are untitled, changed on disk meanwhile, or could not be saved. Cancel to save them first.",
         )
     };
     let alert = NSAlert::new(mtm);
@@ -124,6 +134,20 @@ pub fn confirm_discard(count: usize) -> bool {
     alert.setAlertStyle(NSAlertStyle::Warning);
     alert.addButtonWithTitle(&NSString::from_str("Cancel"));
     alert.addButtonWithTitle(&NSString::from_str("Discard and Quit"));
+    alert.runModal() == NSAlertSecondButtonReturn
+}
+
+/// Asks before something that cannot be undone; `true` to go ahead.
+pub fn confirm(message: &str, detail: &str, action: &str) -> bool {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return false;
+    };
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str(message));
+    alert.setInformativeText(&NSString::from_str(detail));
+    alert.setAlertStyle(NSAlertStyle::Warning);
+    alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+    alert.addButtonWithTitle(&NSString::from_str(action));
     alert.runModal() == NSAlertSecondButtonReturn
 }
 
@@ -148,6 +172,48 @@ pub fn copy_html(html: &str, plain: &str) {
         &NSString::from_str(plain),
         &NSString::from_str("public.utf8-plain-text"),
     );
+    // The text is Markdown already: pasting it back into Focal keeps it.
+    pasteboard.setString_forType(
+        &NSString::from_str(plain),
+        &NSString::from_str(MARKDOWN_TYPE),
+    );
+}
+
+/// Markdown's pasteboard type, set by Markdown-aware apps beside the HTML.
+const MARKDOWN_TYPE: &str = "net.daringfireball.markdown";
+
+/// The general pasteboard's HTML (from browsers, Docs, Mail), unless it
+/// carries Markdown too, as Focal's own Copy as HTML does. Test builds read
+/// what [`set_test_pasteboard_html`] left instead.
+pub fn pasteboard_html() -> Option<String> {
+    #[cfg(test)]
+    {
+        return PASTE_HTML.with(|html| html.borrow().clone());
+    }
+    #[allow(unreachable_code)]
+    {
+        MainThreadMarker::new()?;
+        let pasteboard = NSPasteboard::generalPasteboard();
+        if pasteboard
+            .stringForType(&NSString::from_str(MARKDOWN_TYPE))
+            .is_some()
+        {
+            return None;
+        }
+        let html = pasteboard.stringForType(&NSString::from_str("public.html"))?;
+        Some(html.to_string())
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static PASTE_HTML: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The HTML [`pasteboard_html`] gives in tests.
+#[cfg(test)]
+pub fn set_test_pasteboard_html(html: Option<&str>) {
+    PASTE_HTML.with(|pasted| *pasted.borrow_mut() = html.map(str::to_owned));
 }
 
 #[cfg(test)]
@@ -169,4 +235,26 @@ pub fn bundle_build() -> Option<String> {
     let build = value.downcast::<NSString>().ok()?.to_string();
     // A development binary has no bundle of its own.
     (!build.is_empty() && crate::cli_install::bundled_binary().is_some()).then_some(build)
+}
+
+/// Puts the file at `replacement` in place of `original` in one step, as
+/// macOS's own document saving does: the original's permissions, Finder
+/// tags and other metadata carry over, and a reader sees either the old
+/// file or the new one, never a half-written one.
+pub fn replace_file(
+    original: &std::path::Path,
+    replacement: &std::path::Path,
+) -> Result<(), String> {
+    let url = |path: &std::path::Path| {
+        NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()))
+    };
+    NSFileManager::defaultManager()
+        .replaceItemAtURL_withItemAtURL_backupItemName_options_resultingItemURL_error(
+            &url(original),
+            &url(replacement),
+            None,
+            NSFileManagerItemReplacementOptions::empty(),
+            None,
+        )
+        .map_err(|error| error.localizedDescription().to_string())
 }

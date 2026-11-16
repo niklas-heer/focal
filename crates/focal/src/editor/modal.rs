@@ -287,7 +287,7 @@ impl Editor {
             div()
                 .absolute()
                 .left(px(16.))
-                .bottom(px(12.))
+                .bottom(self.pill_bottom())
                 .flex()
                 .flex_col()
                 .items_start()
@@ -344,6 +344,9 @@ impl Editor {
                                     .test_support()
                                     .flex()
                                     .gap(px(5.))
+                                    .px(px(4.))
+                                    .rounded(px(4.))
+                                    .bg(theme.background)
                                     .text_color(theme.marker.opacity(0.7))
                                     .child(div().text_color(theme.marker).child(key))
                                     .child("menu"),
@@ -413,6 +416,10 @@ fn app_action(command: focal_core::keys::AppCommand) -> Box<dyn gpui_kit::Action
         AppCommand::Outline => Box::new(crate::workspace::ToggleOutline),
         AppCommand::Sidebar => Box::new(crate::workspace::ToggleSidebar),
         AppCommand::Recent => Box::new(crate::workspace::ToggleRecent),
+        AppCommand::Links => Box::new(crate::workspace::ShowLinkedFrom),
+        AppCommand::NextChange => Box::new(super::NextChange),
+        AppCommand::PreviousChange => Box::new(super::PreviousChange),
+        AppCommand::AddNote => Box::new(super::AddNote),
         AppCommand::DarkMode => Box::new(crate::workspace::ToggleDarkMode),
         AppCommand::FocusMode => Box::new(super::ToggleFocusMode),
         AppCommand::KeyReference => Box::new(crate::workspace::ShowEditingKeys),

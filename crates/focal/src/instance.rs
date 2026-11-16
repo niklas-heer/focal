@@ -18,6 +18,11 @@ pub struct Request {
     pub untitled: Option<String>,
     /// Keep the connection until the window closes.
     pub wait: bool,
+    /// Open the Welcome document: untitled, and unedited until edited.
+    #[serde(default)]
+    pub welcome: bool,
+    /// The heading to put the caret on, from a followed link's `#fragment`.
+    pub fragment: Option<focal_core::links::Fragment>,
 }
 
 /// The instance's socket. Each Focal binary gets its own, so a development
@@ -177,6 +182,8 @@ mod tests {
             path: Some("/tmp/a.md".into()),
             untitled: None,
             wait: true,
+            welcome: false,
+            fragment: Some(focal_core::links::Fragment::Slug("goals".into())),
         };
         let line = encode(&request);
         assert!(line.ends_with('\n') && !line.trim_end().contains('\n'));
@@ -198,6 +205,8 @@ mod tests {
             path: Some("/tmp/a.md".into()),
             untitled: None,
             wait: true,
+            welcome: false,
+            fragment: None,
         };
         forward(&path, &request).unwrap();
         assert_eq!(server.join().unwrap(), request);

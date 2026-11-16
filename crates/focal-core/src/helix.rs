@@ -1042,6 +1042,16 @@ fn parse(keys: &[Key]) -> Parse {
                 .map_or(Parse::Invalid, |command| done(Action::App(command))),
             Some(_) => Parse::Invalid,
         },
+        // `]g` and `[g`: the next and previous change, as in Helix.
+        Key::Char(bracket @ (']' | '[')) => match rest.get(1) {
+            None => Parse::Pending,
+            Some(Key::Char('g')) => done(Action::App(if bracket == ']' {
+                crate::keys::AppCommand::NextChange
+            } else {
+                crate::keys::AppCommand::PreviousChange
+            })),
+            Some(_) => Parse::Invalid,
+        },
         Key::Char('x') => done(Action::SelectLine),
         Key::Char('X') => done(Action::ExtendToLineBounds),
         Key::Char('%') => done(Action::SelectAll),
@@ -1312,6 +1322,28 @@ mod tests {
         assert_eq!(
             helix.key(Key::Enter, &cx),
             Some(vec![Command::Save, Command::Close])
+        );
+    }
+
+    #[test]
+    fn brackets_g_step_through_changes() {
+        use crate::keys::AppCommand;
+        let cx = Context {
+            text: "a",
+            anchor: 0,
+            head: 0,
+            clipboard: None,
+        };
+        let mut helix = Helix::new();
+        assert_eq!(helix.key(Key::Char(']'), &cx), Some(vec![]));
+        assert_eq!(
+            helix.key(Key::Char('g'), &cx),
+            Some(vec![Command::App(AppCommand::NextChange)])
+        );
+        helix.key(Key::Char('['), &cx);
+        assert_eq!(
+            helix.key(Key::Char('g'), &cx),
+            Some(vec![Command::App(AppCommand::PreviousChange)])
         );
     }
 
