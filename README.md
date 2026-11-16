@@ -53,6 +53,8 @@ focal --wait msg.md     # wait until the window closes, so it works as $EDITOR
 
 Focal runs as one app: every `focal` call opens a window in it, and an open file comes to the front instead of opening twice. In Finder, Focal is offered under **Open With** for Markdown files.
 
+The first launch opens a short Welcome document that shows Focal at work; **Help ▸ Focal Help** opens it again, offline. Windows remember their size and place.
+
 ## Features
 
 ### Writing
