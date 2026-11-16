@@ -163,24 +163,38 @@ impl Workspace {
             EditorEvent::ViewImages(images, index) => {
                 self.open_viewer(images.clone(), *index, window, cx);
             }
-            EditorEvent::Open(path) => {
+            EditorEvent::Open(path, fragment) => {
                 let in_folder = self
                     .folder
                     .as_ref()
                     .is_some_and(|folder| folder.holds(path));
                 if in_folder {
-                    self.history.push((here, editor.selection.clone()));
-                    self.open_file(path.clone(), window, cx);
+                    let from = (here, editor.selection.clone());
+                    if self.open_file_at(path.clone(), fragment.as_ref(), window, cx) {
+                        self.history.push(from);
+                    }
                 } else {
                     // The window list reads every workspace, this one too.
                     let request = Request {
                         path: Some(path.clone()),
+                        fragment: fragment.clone(),
                         ..Request::default()
                     };
                     cx.defer(move |cx| crate::windows::open(request, None, cx));
                 }
             }
         }
+    }
+
+    /// Puts the caret on the heading `fragment` names, if the document has
+    /// one, without recording a jump.
+    pub(crate) fn reveal(
+        &mut self,
+        fragment: &focal_core::links::Fragment,
+        cx: &mut Context<Self>,
+    ) {
+        self.editor
+            .update(cx, |editor, cx| editor.reveal_fragment(fragment, cx));
     }
 
     /// Returns to where the last followed link or jump came from.
@@ -362,17 +376,32 @@ impl Workspace {
 
     /// Saves the current file, then opens `path` in its place.
     pub fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_file_at(path, None, window, cx);
+    }
+
+    /// Saves the current file, then opens `path` in its place with the caret
+    /// on the heading `fragment` names. Tells whether it opened now; unsaved
+    /// text that cannot be saved asks first, and opens the file itself once
+    /// answered.
+    fn open_file_at(
+        &mut self,
+        path: PathBuf,
+        fragment: Option<&focal_core::links::Fragment>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if self.editor.read(cx).path() == Some(path.as_path()) {
-            return;
+            if let Some(fragment) = fragment {
+                self.reveal(fragment, cx);
+            }
+            return true;
         }
-        // Unsaved text that cannot be saved asks first, and opens the file
-        // itself once answered.
-        let after = AfterSave::Open(path.clone());
+        let after = AfterSave::Open(path.clone(), fragment.cloned());
         if !self
             .editor
             .update(cx, |editor, cx| editor.may_leave(after, window, cx))
         {
-            return;
+            return false;
         }
         let (document, text) = match Document::open(path) {
             Ok(opened) => opened,
@@ -380,7 +409,7 @@ impl Workspace {
                 self.editor.update(cx, |editor, cx| {
                     editor.show_error(format!("Could not open the file: {error:#}"), cx);
                 });
-                return;
+                return false;
             }
         };
         let title = document.title();
@@ -394,7 +423,11 @@ impl Workspace {
         window.set_window_title(&title);
         let handle = self.editor.read(cx).focus_handle(cx);
         window.focus(&handle, cx);
+        if let Some(fragment) = fragment {
+            self.reveal(fragment, cx);
+        }
         cx.notify();
+        true
     }
 
     fn quick_open(&mut self, _: &QuickOpen, window: &mut Window, cx: &mut Context<Self>) {

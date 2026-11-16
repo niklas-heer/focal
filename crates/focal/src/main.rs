@@ -139,6 +139,7 @@ fn request(args: &Args) -> Result<Request> {
         untitled,
         wait: args.wait,
         welcome: false,
+        fragment: None,
     })
 }
 
