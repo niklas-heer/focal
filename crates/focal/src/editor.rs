@@ -465,6 +465,10 @@ pub struct Editor {
     /// Remote images being downloaded, and those that failed, by URL.
     pub(crate) fetching_images: RefCell<std::collections::HashSet<String>>,
     pub(crate) failed_images: RefCell<HashMap<String, Instant>>,
+    /// Remote images downloaded this session that have not yet faded in.
+    pub(crate) arrived_images: RefCell<std::collections::HashSet<String>>,
+    /// The size each diagram source was last drawn at, by its key.
+    pub(crate) diagram_sizes: RefCell<HashMap<u64, (f32, f32)>>,
     /// Image embeds found in the folder, by name, and when they were looked for.
     pub(crate) found_files: RefCell<HashMap<String, (Option<PathBuf>, Instant)>>,
     /// The pointer's last position, where a footnote preview appears.
@@ -590,6 +594,8 @@ impl Editor {
             diagrams: RefCell::default(),
             fetching_images: RefCell::default(),
             failed_images: RefCell::default(),
+            arrived_images: RefCell::default(),
+            diagram_sizes: RefCell::default(),
             found_files: RefCell::default(),
             pointer: Point::default(),
             frame: Rc::default(),

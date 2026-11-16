@@ -10,14 +10,15 @@ use std::time::{Duration, Instant};
 use focal_core::Analysis;
 use focal_core::analysis::Alert;
 use focal_core::blocks::{
-    block_image, diagram_blocks, front_matter, html_tables, math_blocks, toc_blocks,
+    DiagramLanguage, block_image, diagram_blocks, front_matter, html_tables, math_blocks,
+    toc_blocks,
 };
 use focal_core::links;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, Context, Image, ImageFormat, InteractiveElement as _, IntoElement, ObjectFit,
-    ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _,
-    StyledImage as _, TestSupportExt as _, canvas, div, img, px,
+    Animation, AnimationExt as _, AnyElement, Context, Image, ImageFormat, InteractiveElement as _,
+    IntoElement, ObjectFit, ParentElement as _, SharedString, StatefulInteractiveElement as _,
+    Styled as _, StyledImage as _, TestSupportExt as _, canvas, div, img, px,
 };
 
 use crate::editor::{Editor, EditorEvent, Island, IslandKind, PaintedRow, Row};
@@ -192,6 +193,68 @@ fn channel(value: f32) -> u8 {
 
 /// Tall images are scaled down to this height, so one never fills the window.
 const MAX_IMAGE_HEIGHT: f32 = 560.;
+
+/// The height of the box reserved for a picture that is loading or drawing,
+/// when no earlier size is known.
+const PLACEHOLDER_HEIGHT: f32 = 160.;
+
+/// How long a picture that arrived from the network takes to fade in.
+const FADE_IN: Duration = Duration::from_millis(150);
+
+/// What a picture's label shows of its source: the file name, with a remote
+/// address's host before it, as in `example.com/…/photo.jpg`.
+fn source_label(destination: &str) -> String {
+    let address = destination.split(['?', '#']).next().unwrap_or_default();
+    let address = address.strip_prefix("file://").unwrap_or(address);
+    let (host, path) = match address.split_once("://") {
+        Some((_, rest)) => match rest.split_once('/') {
+            Some((host, path)) => (Some(host), path),
+            None => (Some(rest), ""),
+        },
+        None => (None, address),
+    };
+    let file = path.rsplit('/').find(|part| !part.is_empty());
+    match (host, file) {
+        (Some(host), Some(file)) => format!("{host}/…/{file}"),
+        (Some(host), None) => host.to_owned(),
+        (None, file) => file.unwrap_or_default().to_owned(),
+    }
+}
+
+/// A box reserved for a picture that is loading or drawing: `width` wide and
+/// `height` tall, with a quiet label centered in it.
+fn placeholder(
+    width: f32,
+    height: f32,
+    label: String,
+    size: f32,
+    theme: &Theme,
+) -> impl IntoElement {
+    div()
+        .flex_none()
+        .w(px(width))
+        .h(px(height))
+        .rounded(px(6.))
+        .bg(theme.code_background)
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(quiet(label, size, theme))
+}
+
+/// The size to reserve for a diagram being drawn: the size it was last drawn
+/// at, else a column wide and [`PLACEHOLDER_HEIGHT`] tall.
+fn reserved(remembered: Option<(f32, f32)>, column: f32) -> (f32, f32) {
+    remembered.unwrap_or((column, PLACEHOLDER_HEIGHT))
+}
+
+/// Keys a diagram's size memory by its language and source.
+fn source_key(language: DiagramLanguage, source: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    language.hash(&mut hasher);
+    source.hash(&mut hasher);
+    hasher.finish()
+}
 
 /// The size to draw an image of `width` × `height` pixels (one pixel a
 /// point): scaled down, keeping its shape, to fit `max_width` × `max_height`.
@@ -438,28 +501,37 @@ impl Editor {
         let Some(image) = block_image(&self.snapshot.analysis, self.text(), line) else {
             return div().into_any_element();
         };
-        let note = |id: &'static str, text: String| {
-            div()
-                .id((id, line))
-                .test_support()
-                .aria_label(text.clone())
-                .py(px(6.))
-                .text_size(px(self.typography.size * 0.8))
-                .text_color(theme.marker)
-                .child(text)
-                .into_any_element()
-        };
         // A width asked for (`![[pic.png|300]]`) narrows the column.
         let column = image.width.map_or(self.typography.column, |w| {
             self.typography.column.min(w as f32)
         });
+        // A box where the picture will be, labelled with the source's name.
+        let reserve = |id: &'static str, aria: String, text: String| {
+            div()
+                .id((id, line))
+                .test_support()
+                .aria_label(aria)
+                .py(px(6.))
+                .flex()
+                .when(image.centered, |d| d.justify_center())
+                .child(placeholder(
+                    column,
+                    PLACEHOLDER_HEIGHT,
+                    text,
+                    self.typography.size,
+                    theme,
+                ))
+                .into_any_element()
+        };
         match self.picture(&image.destination, image.wiki, cx) {
             Picture::Ready(path) => {
                 let missing = format!("Image not found: {}", image.destination);
                 let marker = theme.marker;
                 let group = SharedString::from(format!("{id}-{line}"));
                 let expand = self.view_image_button(id, line, group.clone(), theme, cx);
-                div()
+                // A picture downloaded this session fades in once, as it arrives.
+                let fresh = self.arrived_images.borrow_mut().remove(&image.destination);
+                let picture = div()
                     .id((id, line))
                     .test_support()
                     .aria_label(image.alt.clone())
@@ -499,13 +571,26 @@ impl Editor {
                                     }),
                             )
                             .child(expand),
-                    )
-                    .into_any_element()
+                    );
+                if fresh {
+                    picture
+                        .with_animation(("image-fade", line), Animation::new(FADE_IN), |el, t| {
+                            el.opacity(t)
+                        })
+                        .into_any_element()
+                } else {
+                    picture.into_any_element()
+                }
             }
-            Picture::Loading => note("image-loading", format!("Loading {}…", image.destination)),
-            Picture::Missing => note(
+            Picture::Loading => reserve(
+                "image-loading",
+                format!("Loading {}…", image.destination),
+                format!("Loading {}", source_label(&image.destination)),
+            ),
+            Picture::Missing => reserve(
                 "image-missing",
                 format!("Image not found: {}", image.destination),
+                format!("Image not found: {}", source_label(&image.destination)),
             ),
         }
     }
@@ -597,7 +682,9 @@ impl Editor {
                         .await;
                     this.update(cx, |this, cx| {
                         this.fetching_images.borrow_mut().remove(&url);
-                        if !fetched {
+                        if fetched {
+                            this.arrived_images.borrow_mut().insert(url);
+                        } else {
                             this.failed_images.borrow_mut().insert(url, Instant::now());
                         }
                         cx.notify();
@@ -787,6 +874,7 @@ impl Editor {
             return div().into_any_element();
         };
         let name = block.language.name();
+        let source = source_key(block.language, &block.source);
         let key = (block.language, block.source.clone(), palette(theme));
         let state = self.diagrams.borrow().get(&key).cloned();
         if state.is_none() {
@@ -799,22 +887,25 @@ impl Editor {
                 Some((width, height)) => {
                     let (width, height) =
                         fit(width, height, self.typography.column, MAX_IMAGE_HEIGHT);
+                    remember(
+                        &mut self.diagram_sizes.borrow_mut(),
+                        source,
+                        (width, height),
+                    );
                     // Written to rasterize at the display's pixels; see `Editor::pixel_scale`.
                     let scale = self.pixel_scale;
                     let sharp = diagram::with_size(svg, width * scale, height * scale);
-                    let marker = theme.marker;
+                    let owned = *theme;
                     img(Arc::new(Image::from_bytes(
                         ImageFormat::Svg,
                         sharp.into_bytes(),
                     )))
                     .w(px(width))
                     .h(px(height))
-                    // GPUI loads the picture after the frame that asks for it.
+                    // GPUI loads the picture after the frame that asks for it;
+                    // meanwhile the same box is reserved.
                     .with_loading(move || {
-                        div()
-                            .text_size(px(size * 0.8))
-                            .text_color(marker)
-                            .child("Drawing…")
+                        placeholder(width, height, "Drawing…".into(), size, &owned)
                             .into_any_element()
                     })
                     .into_any_element()
@@ -824,7 +915,12 @@ impl Editor {
             Shown::Error(message) => {
                 quiet(format!("{name}: {message}"), size, theme).into_any_element()
             }
-            Shown::Pending => quiet("Drawing the diagram…".into(), size, theme).into_any_element(),
+            Shown::Pending => {
+                let remembered = self.diagram_sizes.borrow().get(&source).copied();
+                let (width, height) = reserved(remembered, self.typography.column);
+                placeholder(width, height, "Drawing the diagram…".into(), size, theme)
+                    .into_any_element()
+            }
         };
         island_frame(id, line, format!("{name} diagram"), content)
     }
@@ -887,7 +983,12 @@ impl Editor {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::{CACHE_LIMIT, Shown, Typeset, fit, remember, retry_due, shown};
+    use focal_core::blocks::DiagramLanguage;
+
+    use super::{
+        CACHE_LIMIT, Shown, Typeset, fit, remember, reserved, retry_due, shown, source_key,
+        source_label,
+    };
 
     #[test]
     fn images_fit_the_column_and_the_height_cap_keeping_their_shape() {
@@ -941,6 +1042,52 @@ mod tests {
             Shown::Error("bad"),
             "an error is current"
         );
+    }
+
+    #[test]
+    fn a_picture_is_labelled_by_its_host_and_file_name() {
+        assert_eq!(
+            source_label("https://images.example.org/2026/11/cat.png?w=800#top"),
+            "images.example.org/…/cat.png"
+        );
+        assert_eq!(source_label("https://example.com/a/b/"), "example.com/…/b");
+        assert_eq!(source_label("https://example.com/"), "example.com");
+        assert_eq!(source_label("https://example.com"), "example.com");
+        assert_eq!(source_label("photos/cat.png"), "cat.png");
+        assert_eq!(source_label("file:///Users/me/cat.png"), "cat.png");
+        assert_eq!(source_label("cat.png"), "cat.png");
+    }
+
+    #[test]
+    fn a_diagram_reserves_the_size_it_was_last_drawn_at() {
+        let column = 720.;
+        let key = source_key(DiagramLanguage::Mermaid, "A-->B");
+        let mut sizes = std::collections::HashMap::new();
+        assert_eq!(
+            reserved(sizes.get(&key).copied(), column),
+            (720., 160.),
+            "a modest box a column wide the first time"
+        );
+        remember(&mut sizes, key, (400., 300.));
+        assert_eq!(
+            reserved(sizes.get(&key).copied(), column),
+            (400., 300.),
+            "a redrawn diagram reserves its last size"
+        );
+        let other = source_key(DiagramLanguage::Mermaid, "A-->C");
+        assert_eq!(
+            reserved(sizes.get(&other).copied(), column),
+            (720., 160.),
+            "another source has its own size"
+        );
+    }
+
+    #[test]
+    fn a_diagram_source_is_keyed_by_its_language_and_text() {
+        let mermaid = source_key(DiagramLanguage::Mermaid, "A-->B");
+        assert_eq!(mermaid, source_key(DiagramLanguage::Mermaid, "A-->B"));
+        assert_ne!(mermaid, source_key(DiagramLanguage::Mermaid, "A-->C"));
+        assert_ne!(mermaid, source_key(DiagramLanguage::Graphviz, "A-->B"));
     }
 
     #[test]
