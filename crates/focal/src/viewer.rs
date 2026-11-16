@@ -612,9 +612,13 @@ impl Render for ImageViewer {
                     .test_support()
                     .absolute()
                     .top_0()
-                    .left(px(96.))
-                    .right(px(96.))
+                    .left_0()
+                    .right_0()
+                    .px(px(96.))
                     .h(px(36.))
+                    // A bar of its own, as the editor's title bar is, so a
+                    // zoomed image passes under it.
+                    .bg(theme.background)
                     .flex()
                     .items_center()
                     .justify_center()
