@@ -969,6 +969,105 @@ fn an_anchor_link_moves_to_its_heading(cx: &mut TestAppContext) {
     editor.read_with(cx, |e, _| assert_eq!(e.selection(), 22..22));
 }
 
+/// A folder whose `docs/Design.md` has the headings `Goals` and `Next Steps`,
+/// and whose newest file, `notes.md`, holds `links`.
+fn folder_with_design(name: &str, links: &str) -> std::path::PathBuf {
+    let root = linked_folder(name, links);
+    std::fs::create_dir(root.join("docs")).unwrap();
+    let design = root.join("docs/Design.md");
+    std::fs::write(&design, "# Design\n\n## Goals\n\n## Next Steps\n\nText.\n").unwrap();
+    // The newest file opens first; the note with the links must.
+    let past = std::time::SystemTime::now() - std::time::Duration::from_hours(2);
+    std::fs::File::options()
+        .write(true)
+        .open(&design)
+        .unwrap()
+        .set_modified(past)
+        .unwrap();
+    root
+}
+
+#[gpui_kit::test]
+fn a_link_to_a_heading_in_another_note_puts_the_caret_on_it(cx: &mut TestAppContext) {
+    let links = "See [[Design#Next Steps]] and [goals](docs/Design.md#goals).";
+    let root = folder_with_design("heading-links", links);
+    let design = "# Design\n\n## Goals\n\n## Next Steps\n\nText.\n";
+    let (window, workspace) = open_folder(cx, &root);
+    editor_of(cx, &workspace).update(cx, |e, cx| e.move_to(6, cx));
+    act(cx, window, |window, cx| window.press("cmd-enter", cx));
+    assert_eq!(current_title(cx, &workspace), "Design.md");
+    let next_steps = design.find("Next Steps").unwrap();
+    editor_of(cx, &workspace).read_with(cx, |e, _| {
+        assert_eq!(e.selection(), next_steps..next_steps, "the wiki heading");
+    });
+    act(cx, window, |window, cx| window.press("cmd-[", cx));
+    assert_eq!(current_title(cx, &workspace), "notes.md");
+    editor_of(cx, &workspace).read_with(cx, |e, _| {
+        assert_eq!(e.selection(), 6..6, "back returns to the link's source");
+    });
+    let goals_link = links.find("[goals]").unwrap() + 1;
+    editor_of(cx, &workspace).update(cx, |e, cx| e.move_to(goals_link, cx));
+    act(cx, window, |window, cx| window.press("cmd-enter", cx));
+    let goals = design.find("Goals").unwrap();
+    editor_of(cx, &workspace).read_with(cx, |e, _| {
+        assert_eq!(e.selection(), goals..goals, "the Markdown anchor");
+    });
+}
+
+#[gpui_kit::test]
+fn a_link_to_a_missing_heading_opens_the_note_at_its_start(cx: &mut TestAppContext) {
+    let root = folder_with_design("heading-missing", "See [[Design#Nowhere]].");
+    let (window, workspace) = open_folder(cx, &root);
+    editor_of(cx, &workspace).update(cx, |e, cx| e.move_to(6, cx));
+    act(cx, window, |window, cx| window.press("cmd-enter", cx));
+    assert_eq!(current_title(cx, &workspace), "Design.md");
+    editor_of(cx, &workspace).read_with(cx, |e, _| assert_eq!(e.selection(), 0..0));
+}
+
+#[gpui_kit::test]
+fn a_wiki_link_to_a_heading_in_this_note_jumps_there_and_back(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "See [[#goals]].\n\n## Goals\n");
+    editor.update(cx, |e, cx| e.move_to(6, cx));
+    act(cx, window, |window, cx| window.press("cmd-enter", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 20..20));
+    act(cx, window, |window, cx| window.press("cmd-[", cx));
+    editor.read_with(cx, |e, _| assert_eq!(e.selection(), 6..6));
+}
+
+#[gpui_kit::test]
+fn a_request_with_a_fragment_opens_its_note_at_the_heading(cx: &mut TestAppContext) {
+    use crate::instance::Request;
+    use focal_core::links::Fragment;
+    let root = folder_with_design("heading-request", "notes");
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        editor::bind_keys(cx);
+        cx.set_global(Settings::default());
+        crate::windows::init(cx);
+        let request = Request {
+            path: Some(root.join("docs/Design.md")),
+            fragment: Some(Fragment::Slug("next-steps".into())),
+            ..Request::default()
+        };
+        crate::windows::open(request, None, cx);
+    });
+    let design = "# Design\n\n## Goals\n\n## Next Steps\n\nText.\n";
+    let workspace = cx.update(|cx| {
+        crate::windows::workspaces(cx)
+            .into_iter()
+            .find(|w| {
+                w.read(cx).editor().read(cx).path() == Some(root.join("docs/Design.md").as_path())
+            })
+            .expect("a window shows the note")
+    });
+    editor_of(cx, &workspace).read_with(cx, |e, _| {
+        assert_eq!(
+            e.selection(),
+            design.find("Next Steps").unwrap()..design.find("Next Steps").unwrap()
+        );
+    });
+}
+
 const NOTES: &str = "One[^a] and two[^b].\n\n[^a]: The *first* note.\n";
 
 #[gpui_kit::test]

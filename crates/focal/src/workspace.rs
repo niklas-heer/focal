@@ -162,7 +162,7 @@ impl Workspace {
             EditorEvent::ViewImages(images, index) => {
                 self.open_viewer(images.clone(), *index, window, cx);
             }
-            EditorEvent::Open(path) => {
+            EditorEvent::Open(path, fragment) => {
                 let in_folder = self
                     .folder
                     .as_ref()
@@ -170,16 +170,31 @@ impl Workspace {
                 if in_folder {
                     self.history.push((here, editor.selection.clone()));
                     self.open_file(path.clone(), window, cx);
+                    if let Some(fragment) = fragment {
+                        self.reveal(fragment, cx);
+                    }
                 } else {
                     // The window list reads every workspace, this one too.
                     let request = Request {
                         path: Some(path.clone()),
+                        fragment: fragment.clone(),
                         ..Request::default()
                     };
                     cx.defer(move |cx| crate::windows::open(request, None, cx));
                 }
             }
         }
+    }
+
+    /// Puts the caret on the heading `fragment` names, if the document has
+    /// one, without recording a jump.
+    pub(crate) fn reveal(
+        &mut self,
+        fragment: &focal_core::links::Fragment,
+        cx: &mut Context<Self>,
+    ) {
+        self.editor
+            .update(cx, |editor, cx| editor.reveal_fragment(fragment, cx));
     }
 
     /// Returns to where the last followed link or jump came from.

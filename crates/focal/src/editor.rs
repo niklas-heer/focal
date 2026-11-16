@@ -136,8 +136,9 @@ pub struct SetHeading(pub u8);
 
 /// What the editor asks of its window.
 pub enum EditorEvent {
-    /// Open this file, from a followed link.
-    Open(PathBuf),
+    /// Open this file, from a followed link, with the caret at the heading
+    /// the link's fragment names, if the file has one.
+    Open(PathBuf, Option<links::Fragment>),
     /// The caret jumped (to an anchor or a footnote) from this selection,
     /// which "back" returns to.
     Jumped(Range<usize>),
@@ -962,18 +963,25 @@ impl Editor {
             .and_then(std::path::Path::parent)
             .map(PathBuf::from);
         if link.wiki {
+            let (name, _) = links::wiki_target(&destination);
+            let fragment = links::wiki_fragment(&destination);
+            if name.is_empty() {
+                // `[[#Heading]]` names a heading in this document.
+                if let Some(fragment) = fragment {
+                    self.jump_to_fragment(&fragment, cx);
+                }
+                return true;
+            }
             let target = self.wiki_file(&destination).or_else(|| {
-                let (name, _) = links::wiki_target(&destination);
                 let dir = folder.clone().or_else(|| self.link_root.clone())?;
-                (!name.is_empty()).then(|| dir.join(format!("{name}.md")))
+                Some(dir.join(format!("{name}.md")))
             });
             if let Some(target) = target {
-                cx.emit(EditorEvent::Open(target));
+                cx.emit(EditorEvent::Open(target, fragment));
             }
-        } else if let Some(slug) = destination.strip_prefix('#') {
-            let analysis = self.snapshot.analysis.clone();
-            if let Some(at) = links::find_heading(&analysis, self.text(), slug) {
-                self.jump_to(at, cx);
+        } else if destination.starts_with('#') {
+            if let Some(fragment) = links::markdown_fragment(&destination) {
+                self.jump_to_fragment(&fragment, cx);
             }
         } else if destination.contains("://") || destination.starts_with("mailto:") {
             cx.open_url(&destination);
@@ -986,7 +994,10 @@ impl Editor {
                     .any(|x| e.eq_ignore_ascii_case(x))
             });
             if markdown {
-                cx.emit(EditorEvent::Open(target));
+                cx.emit(EditorEvent::Open(
+                    target,
+                    links::markdown_fragment(&destination),
+                ));
             } else {
                 cx.open_url(&format!("file://{}", target.display()));
             }
@@ -1001,6 +1012,23 @@ impl Editor {
         let from = self.selection.clone();
         self.move_to(offset, cx);
         cx.emit(EditorEvent::Jumped(from));
+    }
+
+    /// Moves the caret to the heading `fragment` names, which "back" returns
+    /// from. Does nothing when no heading matches.
+    fn jump_to_fragment(&mut self, fragment: &links::Fragment, cx: &mut Context<Self>) {
+        if let Some(at) = links::find_fragment(&self.snapshot.analysis, self.text(), fragment) {
+            self.jump_to(at, cx);
+        }
+    }
+
+    /// Puts the caret on the heading `fragment` names, for a document that
+    /// was just opened by a link. "Back" does not return from it: the
+    /// window's history already holds the link's source.
+    pub(crate) fn reveal_fragment(&mut self, fragment: &links::Fragment, cx: &mut Context<Self>) {
+        if let Some(at) = links::find_fragment(&self.snapshot.analysis, self.text(), fragment) {
+            self.select(at..at, cx);
+        }
     }
 
     fn follow_footnote(&mut self, offset: usize, cx: &mut Context<Self>) -> bool {

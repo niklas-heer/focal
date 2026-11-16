@@ -130,14 +130,15 @@ pub fn open(request: Request, mut responder: Option<Responder>, cx: &mut App) {
         path,
         untitled,
         wait,
+        fragment,
     } = request;
     let shown = path.as_deref().and_then(|path| showing(path, cx));
-    let handle = match shown {
-        Some(handle) => Ok(handle),
-        None => open_window(path.clone(), untitled, cx).map(|(handle, _)| handle),
+    let opened = match shown {
+        Some(opened) => Ok(opened),
+        None => open_window(path.clone(), untitled, cx),
     };
-    let handle = match handle {
-        Ok(handle) => handle,
+    let (handle, workspace) = match opened {
+        Ok(opened) => opened,
         Err(error) => {
             if let Some(responder) = responder {
                 responder.failed(&format!("{error:#}"));
@@ -145,6 +146,9 @@ pub fn open(request: Request, mut responder: Option<Responder>, cx: &mut App) {
             return;
         }
     };
+    if let Some(fragment) = &fragment {
+        workspace.update(cx, |workspace, cx| workspace.reveal(fragment, cx));
+    }
     handle
         .update(cx, |_, window, _| window.activate_window())
         .ok();
@@ -165,17 +169,18 @@ pub fn open(request: Request, mut responder: Option<Responder>, cx: &mut App) {
     }
 }
 
-/// The open window whose file or folder is `path`.
-fn showing(path: &Path, cx: &App) -> Option<AnyWindowHandle> {
+/// The open window whose file or folder is `path`, and its workspace.
+fn showing(path: &Path, cx: &App) -> Option<(AnyWindowHandle, gpui_kit::Entity<Workspace>)> {
     cx.global::<Windows>()
         .open
         .iter()
-        .find(|(_, workspace)| {
+        .find_map(|(handle, workspace)| {
+            let workspace = workspace.upgrade()?;
             workspace
-                .upgrade()
-                .is_some_and(|workspace| workspace.read(cx).shows(path, cx))
+                .read(cx)
+                .shows(path, cx)
+                .then_some((*handle, workspace))
         })
-        .map(|(handle, _)| *handle)
 }
 
 fn open_window(

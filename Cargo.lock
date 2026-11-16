@@ -2039,6 +2039,7 @@ dependencies = [
  "encoding_rs",
  "htmd",
  "pulldown-cmark 0.13.4",
+ "serde",
  "similar",
  "unicode-segmentation",
  "unicode-width 0.2.2",
