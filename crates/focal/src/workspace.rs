@@ -722,7 +722,7 @@ impl Workspace {
             .py(px(5.))
             .cursor_pointer()
             .when(selected, |d| d.bg(theme.selection))
-            .hover(move |style| style.bg(hover))
+            .when(!selected, |d| d.hover(move |style| style.bg(hover)))
             .child(name)
             .when(!parent.is_empty(), |d| {
                 d.child(

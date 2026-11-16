@@ -1861,7 +1861,7 @@ fn settings_segments_change_the_setting(cx: &mut TestAppContext) {
     use crate::settings::{Appearance, ProseFont, TextSize};
     let (window, _) = open_settings(cx);
     act(cx, window, |window, cx| window.click("prose-font-Duo", cx));
-    act(cx, window, |window, cx| window.click("text-size-XL", cx));
+    act(cx, window, |window, cx| window.click("text-size-Huge", cx));
     act(cx, window, |window, cx| window.click("appearance-Dark", cx));
     cx.update(|cx| {
         let settings = cx.global::<Settings>();
@@ -2160,6 +2160,28 @@ fn the_panel_switches_light_and_dark(cx: &mut TestAppContext) {
         window.click("panel-appearance-Dark", cx);
     });
     cx.update(|cx| assert_eq!(cx.global::<Settings>().appearance, Appearance::Dark));
+}
+
+#[gpui_kit::test]
+fn the_info_panel_uses_the_settings_names(cx: &mut TestAppContext) {
+    let (window, _) = open_workspace(cx, "text");
+    act(cx, window, |window, cx| window.click("corner-info", cx));
+    act(cx, window, |window, _| {
+        for id in [
+            "panel-appearance-System",
+            "panel-appearance-Light",
+            "panel-appearance-Dark",
+            "panel-column-Narrow",
+            "panel-column-Medium",
+            "panel-column-Wide",
+            "panel-keys-Standard",
+            "panel-keys-Vim",
+            "panel-keys-Helix",
+        ] {
+            assert!(window.try_find(id).is_some(), "{id} is shown");
+        }
+        assert!(window.try_find("panel-appearance-Auto").is_none());
+    });
 }
 
 #[gpui_kit::test]

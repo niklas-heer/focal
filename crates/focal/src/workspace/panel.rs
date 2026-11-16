@@ -9,12 +9,13 @@ use gpui_kit::component::native_menu::NativeMenu;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, App, ClickEvent, Context, FontWeight, InteractiveElement as _, IntoElement,
+    Action, AnyElement, App, ClickEvent, Context, FontWeight, InteractiveElement as _, IntoElement,
     ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _,
     TestSupportExt as _, Window, actions, div, px,
 };
 
 use super::Workspace;
+use crate::bar::tooltip_for;
 use crate::editor::{CopyHtml, ExportHtml, ExportPdf, Print, ShowInFinder, ToggleFocusMode};
 use crate::icons::Icon;
 use crate::settings::{
@@ -185,11 +186,16 @@ impl Workspace {
         cx: &Context<Self>,
     ) -> AnyElement {
         let hover = theme.code_background;
-        let button = |id: &'static str, icon: Icon, label: &'static str, active: bool| {
+        let button = |id: &'static str,
+                      icon: Icon,
+                      label: &'static str,
+                      action: Option<Box<dyn Action>>,
+                      active: bool| {
             div()
                 .id(id)
                 .test_support()
                 .aria_label(label)
+                .tooltip(tooltip_for(label, action))
                 .size(px(26.))
                 .flex()
                 .items_center()
@@ -219,6 +225,7 @@ impl Workspace {
                     "corner-outline",
                     Icon::ListTree,
                     "Outline",
+                    Some(Box::new(ToggleOutline)),
                     self.panel == Some(PanelTab::Outline),
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_panel(PanelTab::Outline, cx))),
@@ -228,11 +235,12 @@ impl Workspace {
                     "corner-info",
                     Icon::Info,
                     "Info",
+                    Some(Box::new(ToggleInfo)),
                     self.panel == Some(PanelTab::Info),
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_panel(PanelTab::Info, cx))),
             )
-            .child(button("corner-more", Icon::Ellipsis, "More", false).on_click(more_menu))
+            .child(button("corner-more", Icon::Ellipsis, "More", None, false).on_click(more_menu))
             .into_any_element()
     }
 
@@ -620,12 +628,12 @@ fn document_section(editor: &crate::editor::Editor, theme: &Theme) -> impl IntoE
     section("Document", theme).child(details)
 }
 
-/// Light, dark or automatic, the typeface, the size and the line length.
+/// System, light or dark, the typeface, the size and the line length.
 fn appearance_section(settings: &Settings, theme: &Theme) -> impl IntoElement {
     let appearance = [
+        (Appearance::System, Icon::SunMoon, "System"),
         (Appearance::Light, Icon::Sun, "Light"),
         (Appearance::Dark, Icon::Moon, "Dark"),
-        (Appearance::System, Icon::SunMoon, "Auto"),
     ]
     .into_iter()
     .map(|(value, icon, label)| {
@@ -682,12 +690,13 @@ fn appearance_section(settings: &Settings, theme: &Theme) -> impl IntoElement {
                     }))
                     .child(
                         div()
-                            .w(px(44.))
+                            .min_w(px(44.))
                             .flex()
                             .justify_center()
+                            .whitespace_nowrap()
                             .font_family(MONO_FONT)
                             .text_size(px(12.))
-                            .child(format!("{size} pt")),
+                            .child(format!("{} · {size} pt", settings.text_size.name())),
                     )
                     .child(step_button("panel-bigger", "A+", theme, || {
                         Box::new(BiggerText)
@@ -698,9 +707,9 @@ fn appearance_section(settings: &Settings, theme: &Theme) -> impl IntoElement {
             quick_row("Line length", theme).child(crate::settings::segmented(
                 "panel-column",
                 &[
-                    (ColumnWidth::Narrow, "S"),
-                    (ColumnWidth::Medium, "M"),
-                    (ColumnWidth::Wide, "L"),
+                    (ColumnWidth::Narrow, "Narrow"),
+                    (ColumnWidth::Medium, "Medium"),
+                    (ColumnWidth::Wide, "Wide"),
                 ],
                 settings.column_width,
                 |s, v| s.column_width = v,
@@ -749,7 +758,7 @@ fn writing_section(settings: &Settings, focus_mode: bool, theme: &Theme) -> impl
         .child(quick_row("Keys", theme).child(crate::settings::segmented(
             "panel-keys",
             &[
-                (Keyboard::Standard, "Mac"),
+                (Keyboard::Standard, "Standard"),
                 (Keyboard::Vim, "Vim"),
                 (Keyboard::Helix, "Helix"),
             ],

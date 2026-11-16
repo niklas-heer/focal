@@ -4,7 +4,7 @@
 use gpui_kit::component::native_menu::NativeMenu;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    Action, App, ClickEvent, InteractiveElement as _, IntoElement, ParentElement as _,
+    Action, AnyView, App, ClickEvent, InteractiveElement as _, IntoElement, ParentElement as _,
     StatefulInteractiveElement as _, Styled as _, TestSupportExt as _, Window, div, px,
 };
 
@@ -24,6 +24,22 @@ pub const SHOW_ZONE: f32 = 40.;
 /// How far from the bottom the pointer keeps a shown bar.
 pub const BAR_REACH: f32 = BAR_HEIGHT + 2. * BAR_MARGIN;
 
+/// The tooltip for a control: its name and, for an action with a shortcut,
+/// the keys. The corner buttons and the bar share it.
+pub(crate) fn tooltip_for(
+    name: &'static str,
+    action: Option<Box<dyn Action>>,
+) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+    move |window, cx| {
+        let tip = Tooltip::new(name);
+        match &action {
+            Some(action) => tip.action(action.as_ref(), Some(CONTEXT)),
+            None => tip,
+        }
+        .build(window, cx)
+    }
+}
+
 /// A bar button with a tooltip that names it and, for an action with a
 /// shortcut, shows the keys.
 pub(crate) fn button(
@@ -39,14 +55,7 @@ pub(crate) fn button(
         .id(id)
         .test_support()
         .aria_label(tooltip)
-        .tooltip(move |window, cx| {
-            let tip = Tooltip::new(tooltip);
-            match &action {
-                Some(action) => tip.action(action.as_ref(), Some(CONTEXT)),
-                None => tip,
-            }
-            .build(window, cx)
-        })
+        .tooltip(tooltip_for(tooltip, action))
         .h(px(30.))
         .min_w(px(30.))
         .px(px(7.))
