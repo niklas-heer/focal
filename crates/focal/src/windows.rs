@@ -115,7 +115,7 @@ pub fn workspaces(cx: &App) -> Vec<gpui_kit::Entity<Workspace>> {
 /// Opens the draft at `path`, whose text is `text`, as an unsaved untitled
 /// document that keeps writing to that draft.
 pub fn open_draft(path: PathBuf, text: String, cx: &mut App) {
-    match open_window(None, Some(text), cx) {
+    match open_window(None, Untitled::Text(Some(text)), cx) {
         Ok((_, workspace)) => {
             let editor = workspace.read(cx).editor().clone();
             editor.update(cx, |editor, _| editor.restore_draft(path));
@@ -130,7 +130,13 @@ pub fn open(request: Request, mut responder: Option<Responder>, cx: &mut App) {
         path,
         untitled,
         wait,
+        welcome,
     } = request;
+    let untitled = if welcome {
+        Untitled::Welcome
+    } else {
+        Untitled::Text(untitled)
+    };
     let shown = path.as_deref().and_then(|path| showing(path, cx));
     let handle = match shown {
         Some(handle) => Ok(handle),
@@ -178,9 +184,17 @@ fn showing(path: &Path, cx: &App) -> Option<AnyWindowHandle> {
         .map(|(handle, _)| *handle)
 }
 
+/// What a window without a file starts with.
+enum Untitled {
+    /// Text that is in no file yet, such as piped standard input.
+    Text(Option<String>),
+    /// The Welcome document, which needs no saving until it is edited.
+    Welcome,
+}
+
 fn open_window(
     path: Option<PathBuf>,
-    untitled: Option<String>,
+    untitled: Untitled,
     cx: &mut App,
 ) -> anyhow::Result<(AnyWindowHandle, gpui_kit::Entity<Workspace>)> {
     enum Content {
@@ -193,10 +207,15 @@ fn open_window(
             let (document, text) = Document::open(path)?;
             Content::File(document, text)
         }
-        // Piped text is in no file yet: it is unsaved from the start.
-        None => match untitled.filter(|text| !text.is_empty()) {
-            Some(text) => Content::File(Document::unsaved(), text),
-            None => Content::File(Document::untitled(), String::new()),
+        None => match untitled {
+            Untitled::Welcome => {
+                Content::File(Document::untitled(), crate::welcome::TEXT.to_owned())
+            }
+            // Piped text is in no file yet: it is unsaved from the start.
+            Untitled::Text(Some(text)) if !text.is_empty() => {
+                Content::File(Document::unsaved(), text)
+            }
+            Untitled::Text(_) => Content::File(Document::untitled(), String::new()),
         },
     };
     let title = match &content {

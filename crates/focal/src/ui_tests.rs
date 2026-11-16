@@ -3348,3 +3348,33 @@ fn the_corner_pills_make_room_for_the_bar(cx: &mut TestAppContext) {
     let lifted = editor.read_with(cx, |e, _| e.pill_bottom());
     assert!(lifted > resting);
 }
+
+#[gpui_kit::test]
+fn an_empty_untitled_document_shows_a_placeholder_until_typing(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "");
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find("empty-placeholder").is_some(),
+            "an empty untitled document says what to do"
+        );
+    });
+    editor.read_with(cx, |editor, _| {
+        assert_eq!(editor.text(), "", "the placeholder is not text");
+        assert_eq!(editor.selection(), 0..0, "nor does it move the caret");
+    });
+    act(cx, window, |window, cx| window.input("a", cx));
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find("empty-placeholder").is_none(),
+            "any text hides the placeholder"
+        );
+    });
+    editor.read_with(cx, |editor, _| assert_eq!(editor.text(), "a"));
+}
+
+#[gpui_kit::test]
+fn the_welcome_document_closes_without_asking(cx: &mut TestAppContext) {
+    let (_, workspace) = open_document(cx, Document::untitled(), crate::welcome::TEXT);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    editor.read_with(cx, |e, _| assert!(!e.asks_before_closing()));
+}

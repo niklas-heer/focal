@@ -377,6 +377,17 @@ impl Default for Settings {
 
 impl Global for Settings {}
 
+/// Whether this launch is the first one: no settings file existed before it.
+#[derive(Clone, Copy)]
+struct FirstLaunch(bool);
+
+impl Global for FirstLaunch {}
+
+/// Whether this is the first launch, which opens the Welcome document.
+pub fn first_launch(cx: &App) -> bool {
+    cx.try_global::<FirstLaunch>().is_some_and(|first| first.0)
+}
+
 impl Settings {
     /// Reads settings from `path`; a missing or unreadable file gives the
     /// defaults, and unknown fields are ignored.
@@ -393,6 +404,18 @@ impl Settings {
         }
         std::fs::write(path, serde_json::to_string_pretty(self)? + "\n")?;
         Ok(())
+    }
+
+    /// Reads the settings at `path`, and tells whether there was no such file
+    /// yet, which makes this the first launch. The first launch writes the
+    /// defaults, so the next launch is not a first one.
+    pub fn start_from(path: &Path) -> (Self, bool) {
+        let first = !path.exists();
+        let settings = Self::load_from(path);
+        if first && let Err(error) = settings.save_to(path) {
+            eprintln!("focal: could not save settings: {error:#}");
+        }
+        (settings, first)
     }
 
     /// `~/Library/Application Support/Focal/settings.json`.
@@ -417,7 +440,12 @@ impl Settings {
 /// Loads the settings, applies the appearance and registers the settings
 /// window's actions.
 pub fn init(cx: &mut App) {
-    cx.set_global(Settings::path().map_or_else(Settings::default, |p| Settings::load_from(&p)));
+    let (settings, first) = Settings::path().map_or_else(
+        || (Settings::default(), false),
+        |path| Settings::start_from(&path),
+    );
+    cx.set_global(settings);
+    cx.set_global(FirstLaunch(first));
     cx.set_global(SettingsWindow(None));
     crate::mac::set_appearance(cx.global::<Settings>().appearance);
     let mut appearance = cx.global::<Settings>().appearance;
@@ -1618,5 +1646,16 @@ mod tests {
         );
         std::fs::write(&path, "not json").unwrap();
         assert_eq!(Settings::load_from(&path), Settings::default());
+    }
+
+    #[test]
+    fn only_the_launch_without_a_settings_file_is_the_first() {
+        let path = temp("first-launch");
+        let _ = std::fs::remove_file(&path);
+        let (_, first) = Settings::start_from(&path);
+        assert!(first, "no settings file yet");
+        assert!(path.exists(), "the first launch writes the defaults");
+        let (_, again) = Settings::start_from(&path);
+        assert!(!again, "a later launch is not the first");
     }
 }

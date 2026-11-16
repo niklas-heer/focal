@@ -39,7 +39,7 @@ pub fn update_item(cx: &App) -> (&'static str, MenuItem) {
 
 pub fn init(cx: &mut App) {
     cx.on_action(|_: &AboutFocal, cx| crate::about::open_window(cx));
-    cx.on_action(|_: &OpenHelp, cx| cx.open_url(&format!("{REPOSITORY}#features")));
+    cx.on_action(|_: &OpenHelp, cx| crate::welcome::open(cx));
     cx.on_action(|_: &OpenShortcuts, cx| {
         cx.open_url(&format!("{REPOSITORY}#keyboard-shortcuts"));
     });

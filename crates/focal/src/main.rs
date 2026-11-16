@@ -40,6 +40,7 @@ mod ui_tests;
 mod updates;
 mod vega;
 mod viewer;
+mod welcome;
 mod windows;
 mod workspace;
 mod writing_tools;
@@ -137,6 +138,7 @@ fn request(args: &Args) -> Result<Request> {
         path,
         untitled,
         wait: args.wait,
+        welcome: false,
     })
 }
 
@@ -264,7 +266,13 @@ fn run_app(launch: Launch) {
                     cx.update(|cx| {
                         if cx.windows().is_empty() {
                             if finder {
-                                windows::open(Request::default(), None, cx);
+                                // The first launch greets the user with the Welcome document.
+                                let request = if settings::first_launch(cx) {
+                                    welcome::request()
+                                } else {
+                                    Request::default()
+                                };
+                                windows::open(request, None, cx);
                             } else {
                                 cx.quit();
                             }
