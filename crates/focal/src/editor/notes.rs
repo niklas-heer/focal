@@ -312,7 +312,7 @@ impl Editor {
             return;
         };
         if self.notes.is_empty() {
-            self.show_error("There are no review notes to copy yet.".to_owned(), cx);
+            self.tell("There are no review notes to copy yet.", cx);
             return;
         }
         cx.write_to_clipboard(ClipboardItem::new_string(review::prompt(
@@ -320,6 +320,7 @@ impl Editor {
             &self.notes,
         )));
         self.notes_copied = true;
+        self.tell("Copied the notes for an agent", cx);
         cx.emit(super::EditorEvent::NotesChanged);
         cx.notify();
     }

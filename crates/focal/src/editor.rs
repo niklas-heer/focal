@@ -170,6 +170,8 @@ pub(crate) struct BarState {
     pub words: usize,
     pub selected_words: usize,
     pub minutes: usize,
+    /// What is in effect at the caret, which the buttons show.
+    pub active: crate::bar::Active,
 }
 
 /// Replaces a misspelled word, chosen from the spelling menu.
@@ -227,6 +229,8 @@ type HighlightCache = std::collections::HashMap<(&'static str, u64, bool), Rc<Bl
 /// Distinct line texts whose spelling results are kept.
 const SPELL_CACHE_LIMIT: usize = 20_000;
 const AUTOSAVE_DELAY: Duration = Duration::from_millis(400);
+/// How long a notice stays.
+const TOAST_FOR: Duration = Duration::from_millis(2500);
 /// Editors and agents write in bursts; wait this long before reloading.
 const RELOAD_SETTLE: Duration = Duration::from_millis(50);
 
@@ -451,6 +455,10 @@ pub struct Editor {
     /// The last save could not write the file.
     save_failed: bool,
     error: Option<String>,
+    /// A short notice that something was done, and the timer that clears it.
+    toast: Option<(String, Task<()>)>,
+    /// Whether the bottom bar shows, which the corner pills make room for.
+    bar_shown: bool,
     trace: bool,
     spell: RefCell<SpellChecker>,
     a11y_ids: RunIds,
@@ -584,6 +592,8 @@ impl Editor {
             word_count: Cell::new(None),
             conflict: false,
             save_failed: false,
+            toast: None,
+            bar_shown: false,
             error: None,
             trace: std::env::var_os("FOCAL_TRACE").is_some(),
             spell: RefCell::new(SpellChecker::new()),
@@ -726,16 +736,19 @@ impl Editor {
             let Ok(Ok(Some(path))) = chosen.await else {
                 return;
             };
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
             let written = cx
                 .background_executor()
                 .spawn(async move { crate::export::write_page(&text, &title, &sources, &path) })
                 .await;
-            if let Err(error) = written {
-                this.update(cx, |this, cx| {
-                    this.show_error(format!("Could not export: {error:#}"), cx);
-                })
-                .ok();
-            }
+            this.update(cx, |this, cx| match written {
+                Ok(()) => this.tell(format!("Exported {name}"), cx),
+                Err(error) => this.show_error(format!("Could not export: {error:#}"), cx),
+            })
+            .ok();
         })
         .detach();
     }
@@ -917,9 +930,15 @@ impl Editor {
         let html = cx
             .background_executor()
             .spawn(async move { crate::export::pasteboard_html(&text, &sources) });
-        cx.spawn(async move |_, cx| {
+        let what = if self.selection.is_empty() {
+            "Copied the document as HTML"
+        } else {
+            "Copied the selection as HTML"
+        };
+        cx.spawn(async move |this, cx| {
             let html = html.await;
             cx.update(|_| crate::mac::copy_html(&html, &plain));
+            this.update(cx, |this, cx| this.tell(what, cx)).ok();
         })
         .detach();
     }
@@ -1139,6 +1158,45 @@ impl Editor {
     pub(crate) fn show_error(&mut self, message: String, cx: &mut Context<Self>) {
         self.error = Some(message);
         cx.notify();
+    }
+
+    /// Says briefly that something was done, or why nothing was; the notice
+    /// leaves by itself.
+    pub(crate) fn tell(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
+        let clear = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(TOAST_FOR).await;
+            this.update(cx, |this, cx| {
+                this.toast = None;
+                cx.notify();
+            })
+            .ok();
+        });
+        self.toast = Some((message.into(), clear));
+        cx.notify();
+    }
+
+    /// The notice shown, if any.
+    #[cfg(test)]
+    pub(crate) fn toast(&self) -> Option<&str> {
+        self.toast.as_ref().map(|(message, _)| message.as_str())
+    }
+
+    /// Makes room for the bottom bar, or gives it back.
+    pub(crate) fn set_bar_shown(&mut self, shown: bool, cx: &mut Context<Self>) {
+        if self.bar_shown != shown {
+            self.bar_shown = shown;
+            cx.notify();
+        }
+    }
+
+    /// How far above the window's bottom edge the corner pills sit: over
+    /// the bottom bar while it shows.
+    pub(crate) fn pill_bottom(&self) -> Pixels {
+        px(if self.bar_shown {
+            crate::bar::BAR_MARGIN + crate::bar::BAR_HEIGHT + 10.
+        } else {
+            12.
+        })
     }
 
     pub(crate) fn path(&self) -> Option<&std::path::Path> {
@@ -2117,7 +2175,37 @@ impl Editor {
             words,
             selected_words: word_count(&self.text()[self.selection.clone()]),
             minutes: reading_minutes(words),
+            active: self.active_at_caret(),
         }
+    }
+
+    /// The inline styles and the block around the caret, and focus mode.
+    fn active_at_caret(&self) -> crate::bar::Active {
+        use focal_core::analysis::{ListMarker, PrefixLevel};
+        let analysis = &self.snapshot.analysis;
+        let info = analysis.info(analysis.lines.line_of(self.head()));
+        let mut active = crate::bar::Active {
+            styles: analysis.styles_at(self.head()),
+            quote: info.quote_depth > 0,
+            focus: self.focus_mode,
+            ..crate::bar::Active::default()
+        };
+        let marker = info
+            .prefix
+            .levels
+            .iter()
+            .rev()
+            .find_map(|level| match level {
+                PrefixLevel::List(marker) => Some(marker),
+                PrefixLevel::Quote(_) | PrefixLevel::Block(_) => None,
+            });
+        active.list = match marker {
+            Some(Some(ListMarker::Bullet)) => Some(crate::bar::ListKind::Bullets),
+            Some(Some(ListMarker::Ordered(_))) => Some(crate::bar::ListKind::Numbers),
+            Some(Some(ListMarker::Task { .. })) => Some(crate::bar::ListKind::Task),
+            Some(None) | None => None,
+        };
+        active
     }
 
     fn toggle_focus_mode(&mut self, _: &ToggleFocusMode, _: &mut Window, cx: &mut Context<Self>) {
@@ -4002,21 +4090,85 @@ impl Editor {
                     .into_any_element(),
             );
         }
+        let hover = theme.code_background;
         self.error.as_ref().map(|error| {
             banner(theme)
                 .id("error-banner")
                 .test_support()
                 .aria_label(error.clone())
-                .child(error.clone())
+                .child(div().flex_1().child(error.clone()))
+                .child(
+                    div()
+                        .id("error-dismiss")
+                        .test_support()
+                        .aria_label("Dismiss")
+                        .flex_none()
+                        .p(px(4.))
+                        .rounded(px(6.))
+                        .cursor_pointer()
+                        .hover(move |style| style.bg(hover))
+                        .child(crate::icons::Icon::X.element(14.).text_color(theme.text))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.error = None;
+                            cx.notify();
+                        })),
+                )
                 .into_any_element()
         })
     }
 }
 
+impl Editor {
+    /// The notice, centered under the title bar (or the banner).
+    fn render_toast(&self, below_banner: bool, theme: &Theme) -> Option<gpui_kit::AnyElement> {
+        use gpui_kit::AnimationExt as _;
+        let (message, _) = self.toast.as_ref()?;
+        Some(
+            div()
+                .absolute()
+                .top(px(if below_banner {
+                    BANNER_TOP + 56.
+                } else {
+                    BANNER_TOP
+                }))
+                .left_0()
+                .right_0()
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .id("toast")
+                        .test_support()
+                        .aria_label(message.clone())
+                        .px(px(12.))
+                        .py(px(6.))
+                        .rounded(px(10.))
+                        .bg(theme.surface)
+                        .border_1()
+                        .border_color(theme.rule)
+                        .shadow_md()
+                        .font_family(PROSE_FONT)
+                        .text_size(px(12.))
+                        .text_color(theme.text)
+                        .child(message.clone())
+                        .with_animation(
+                            ("toast-in", message.len()),
+                            gpui_kit::Animation::new(Duration::from_millis(150)),
+                            |el, t| el.opacity(t),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+}
+
+/// Where the banner and notices stand: under the title bar.
+const BANNER_TOP: f32 = 44.;
+
 fn banner(theme: &Theme) -> gpui_kit::Div {
     div()
         .absolute()
-        .bottom(px(16.))
+        .top(px(BANNER_TOP))
         .left(px(16.))
         .right(px(16.))
         .flex()
@@ -4546,6 +4698,7 @@ impl Render for Editor {
         let frame = self.frame.clone();
         let preview = self.render_footnote_preview(&theme);
         let banner = self.render_banner(&theme, cx);
+        let has_banner = banner.is_some();
         let title = self.title();
         let a11y = self.a11y_source();
         let a11y_ids = self.a11y_ids.clone();
@@ -4720,6 +4873,7 @@ impl Render for Editor {
                     .child(title),
             )
             .children(banner)
+            .children(self.render_toast(has_banner, &theme))
             .children(preview)
             .children(self.render_modal_status(&theme))
             .children(self.render_changes_pill(&theme, cx))

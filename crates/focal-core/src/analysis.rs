@@ -383,6 +383,15 @@ impl Analysis {
         self.lines.len()
     }
 
+    /// The inline styles around `offset`: those of every span it is inside
+    /// or at the end of, as a caret there would type them.
+    pub fn styles_at(&self, offset: usize) -> InlineStyle {
+        self.styles
+            .iter()
+            .filter(|span| span.range.start < offset && offset <= span.range.end)
+            .fold(InlineStyle::NONE, |styles, span| styles | span.style)
+    }
+
     pub fn info(&self, line: usize) -> &LineInfo {
         &self.infos[line.min(self.infos.len() - 1)]
     }
@@ -1725,6 +1734,17 @@ fn bucket<'r>(
 #[allow(clippy::single_range_in_vec_init)] // one marker per line is common here
 mod tests {
     use super::*;
+
+    #[test]
+    fn styles_at_the_caret() {
+        let text = "a **bold _both_** c";
+        let analysis = analyze(text);
+        let inside = text.find("both").unwrap() + 2;
+        let styles = analysis.styles_at(inside);
+        assert!(styles.contains(InlineStyle::STRONG));
+        assert!(styles.contains(InlineStyle::EMPHASIS));
+        assert!(analysis.styles_at(1).is_empty());
+    }
 
     #[test]
     fn line_hashes_ignore_edits_above() {

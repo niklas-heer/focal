@@ -3270,3 +3270,81 @@ fn a_reload_keeps_the_caret_on_a_character(cx: &mut TestAppContext) {
     act(cx, window, |window, cx| window.press("left", cx));
     editor.read_with(cx, |e, _| assert_eq!(e.selection(), 0..0));
 }
+
+#[gpui_kit::test]
+fn the_bar_shows_what_is_on_at_the_caret(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "- a **bold** word\n");
+    editor.update(cx, |e, cx| e.move_to(7, cx));
+    editor.read_with(cx, |e, _| {
+        let active = e.bar_state().active;
+        assert!(
+            active
+                .styles
+                .contains(focal_core::analysis::InlineStyle::STRONG)
+        );
+        assert_eq!(active.list, Some(crate::bar::ListKind::Bullets));
+        assert!(!active.quote);
+    });
+    act(cx, window, |window, cx| window.press("cmd-d", cx));
+    editor.read_with(cx, |e, _| assert!(e.bar_state().active.focus));
+}
+
+#[gpui_kit::test]
+fn a_narrow_editor_leaves_the_word_count_to_the_info_panel(cx: &mut TestAppContext) {
+    let (window, _) = open_workspace(cx, "text");
+    act(cx, window, |window, cx| window.hover("bar-zone", cx));
+    act(cx, window, |window, _| {
+        assert!(
+            window.try_find("bar-words").is_some(),
+            "room for everything"
+        );
+    });
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::workspace::ToggleInfo), cx);
+    });
+    act(cx, window, |window, cx| window.hover("bar-zone", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("bar-words").is_none());
+        assert!(window.try_find("bar-bold").is_some());
+    });
+}
+
+#[gpui_kit::test]
+fn copying_without_notes_says_so_briefly(cx: &mut TestAppContext) {
+    let root = crate::folder::tests::temp_folder("toast");
+    std::fs::write(root.join("a.md"), "text").unwrap();
+    let (document, text) = Document::open(root.join("a.md")).unwrap();
+    let (window, workspace) = open_document(cx, document, &text);
+    let editor = workspace.read_with(cx, |w, _| w.editor().clone());
+    act(cx, window, |window, cx| {
+        window.dispatch_action(Box::new(crate::editor::CopyNotesForAgent), cx);
+    });
+    editor.read_with(cx, |e, _| {
+        assert_eq!(e.toast(), Some("There are no review notes to copy yet."));
+    });
+    act(cx, window, |window, _| {
+        assert!(window.try_find("toast").is_some());
+    });
+    act(cx, window, |window, _| {
+        assert!(window.try_find("error-banner").is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn an_error_can_be_dismissed(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "text");
+    editor.update(cx, |e, cx| e.show_error("Something went wrong.".into(), cx));
+    act(cx, window, |window, cx| window.click("error-dismiss", cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find("error-banner").is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn the_corner_pills_make_room_for_the_bar(cx: &mut TestAppContext) {
+    let (window, editor) = open_editor(cx, "text");
+    let resting = editor.read_with(cx, |e, _| e.pill_bottom());
+    act(cx, window, |window, cx| window.hover("bar-zone", cx));
+    let lifted = editor.read_with(cx, |e, _| e.pill_bottom());
+    assert!(lifted > resting);
+}

@@ -115,7 +115,7 @@ impl Editor {
             return;
         }
         let Some(path) = self.document.path.clone() else {
-            self.show_error("Save the document to compare it with git.".to_owned(), cx);
+            self.tell("Save the document to compare it with git.", cx);
             return;
         };
         let committed = cx
@@ -237,7 +237,7 @@ impl Editor {
             div()
                 .absolute()
                 .right(px(16.))
-                .bottom(px(12.))
+                .bottom(self.pill_bottom())
                 .flex()
                 .items_center()
                 .gap(px(2.))

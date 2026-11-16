@@ -287,7 +287,7 @@ impl Editor {
             div()
                 .absolute()
                 .left(px(16.))
-                .bottom(px(12.))
+                .bottom(self.pill_bottom())
                 .flex()
                 .flex_col()
                 .items_start()
@@ -344,6 +344,9 @@ impl Editor {
                                     .test_support()
                                     .flex()
                                     .gap(px(5.))
+                                    .px(px(4.))
+                                    .rounded(px(4.))
+                                    .bg(theme.background)
                                     .text_color(theme.marker.opacity(0.7))
                                     .child(div().text_color(theme.marker).child(key))
                                     .child("menu"),

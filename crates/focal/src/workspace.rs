@@ -858,6 +858,8 @@ impl Workspace {
         self.bar_timer = None;
         if self.bar != Bar::Hidden {
             self.bar = Bar::Hidden;
+            self.editor
+                .update(cx, |editor, cx| editor.set_bar_shown(false, cx));
             cx.notify();
         }
     }
@@ -879,6 +881,8 @@ impl Workspace {
             if !matches!(self.bar, Bar::Shown(_)) {
                 self.shows += 1;
                 self.bar = Bar::Shown(self.shows);
+                self.editor
+                    .update(cx, |editor, cx| editor.set_bar_shown(true, cx));
                 cx.notify();
             }
         } else if matches!(self.bar, Bar::Shown(_)) && self.bar_timer.is_none() {
@@ -902,7 +906,7 @@ impl Workspace {
     /// The bar, fading in or out, while the pointer asks for it. Focus mode
     /// keeps it out of the way while you write, but the pointer still
     /// brings it up.
-    fn render_bar(&self, theme: &Theme, cx: &Context<Self>) -> Option<AnyElement> {
+    fn render_bar(&self, room: f32, theme: &Theme, cx: &Context<Self>) -> Option<AnyElement> {
         // The word count reads the whole text; only count while the bar shows.
         let (n, fading_in) = match self.bar {
             Bar::Hidden => return None,
@@ -917,7 +921,7 @@ impl Workspace {
             .left_0()
             .right_0()
             .bottom_0()
-            .child(bar::render(&state, goal, theme));
+            .child(bar::render(&state, goal, room, theme));
         Some(if fading_in {
             bar.with_animation(("bar-in", n), Animation::new(BAR_FADE), |el, t| {
                 el.opacity(t)
@@ -945,6 +949,14 @@ impl Render for Workspace {
         };
         let corner = self.render_corner(&theme, focus_mode, cx);
         let panel = self.render_panel(&theme, cx);
+        // The width the editor gets, for the bar to fit in.
+        let room = f32::from(window.viewport_size().width)
+            - if sidebar.is_some() { SIDEBAR_WIDTH } else { 0. }
+            - if panel.is_some() {
+                crate::workspace::panel::PANEL_WIDTH
+            } else {
+                0.
+            };
         let main = div()
             .relative()
             .flex_1()
@@ -962,7 +974,7 @@ impl Render for Workspace {
                     .bottom_0()
                     .h(px(bar::SHOW_ZONE)),
             )
-            .children(self.render_bar(&theme, cx));
+            .children(self.render_bar(room, &theme, cx));
         div()
             .id("workspace")
             .size_full()
