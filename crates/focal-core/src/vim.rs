@@ -2244,11 +2244,11 @@ fn quote_object(text: &str, at: usize, quote: char, around: bool) -> Option<Rang
         .filter(|&(ix, c)| c == quote && !text[..start + ix].ends_with('\\'))
         .map(|(ix, _)| start + ix)
         .collect();
-    let pair = quotes
-        .chunks_exact(2)
+    let pairs = quotes.as_chunks::<2>().0;
+    let [open, close] = *pairs
+        .iter()
         .find(|pair| pair[0] <= at && at <= pair[1])
-        .or_else(|| quotes.chunks_exact(2).find(|pair| pair[0] > at))?;
-    let (open, close) = (pair[0], pair[1]);
+        .or_else(|| pairs.iter().find(|pair| pair[0] > at))?;
     if around {
         let mut end = close + quote.len_utf8();
         while end < line_end(text, at) && text[end..].starts_with([' ', '\t']) {

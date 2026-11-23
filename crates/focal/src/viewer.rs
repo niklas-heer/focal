@@ -10,7 +10,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     App, Context, CursorStyle, EventEmitter, FocusHandle, Focusable, InteractiveElement as _,
     IntoElement, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit,
-    ParentElement as _, PinchEvent, Pixels, Point, Render, Role, ScrollWheelEvent, SharedString,
+    ParentElement as _, PinchEvent, Pixels, Point, Render, Role, ScrollEvent, SharedString,
     StatefulInteractiveElement as _, Styled as _, StyledImage as _, TestSupportExt as _, Window,
     actions, div, img, point, px,
 };
@@ -262,7 +262,7 @@ impl ImageViewer {
         cx.notify();
     }
 
-    fn on_scroll(&mut self, event: &ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_scroll(&mut self, event: &ScrollEvent, _: &mut Window, cx: &mut Context<Self>) {
         let delta = event.delta.pixel_delta(px(16.));
         if event.modifiers.platform || event.modifiers.control {
             let factor = (f32::from(delta.y) * 0.01).exp();
@@ -577,7 +577,7 @@ impl Render for ImageViewer {
             .on_action(cx.listener(|this, _: &NextImage, _, cx| this.step(true, cx)))
             .on_action(cx.listener(|this, _: &PreviousImage, _, cx| this.step(false, cx)))
             .on_action(cx.listener(Self::open_in_preview))
-            .on_scroll_wheel(cx.listener(Self::on_scroll))
+            .on_scroll(cx.listener(Self::on_scroll))
             .on_pinch(cx.listener(Self::on_pinch))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_move(cx.listener(Self::on_mouse_move))

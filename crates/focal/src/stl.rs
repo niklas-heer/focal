@@ -93,10 +93,7 @@ fn parse(source: &str) -> Result<Vec<[Point; 3]>, String> {
         };
         vertices.push([x, y, z]);
     }
-    let triangles: Vec<[Point; 3]> = vertices
-        .chunks_exact(3)
-        .map(|t| [t[0], t[1], t[2]])
-        .collect();
+    let triangles: Vec<[Point; 3]> = vertices.as_chunks::<3>().0.to_vec();
     if triangles.is_empty() {
         return Err("This is not an ASCII STL model.".into());
     }

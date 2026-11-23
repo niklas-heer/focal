@@ -4856,7 +4856,8 @@ impl Render for Editor {
                 }
             })
             .key_context({
-                let mut context = gpui_kit::KeyContext::new_with_defaults();
+                let mut context =
+                    gpui_kit::KeyContext::new_with_defaults(gpui_kit::OperatingSystem::Mac);
                 context.add(CONTEXT);
                 if self.dismissable_changes()
                     && self.modal.is_none()
