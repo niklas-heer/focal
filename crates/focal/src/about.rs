@@ -41,9 +41,11 @@ pub fn open_window(cx: &mut App) {
     {
         return;
     }
-    let bounds = Bounds::centered(None, size(px(380.), px(540.)), cx);
+    let display = crate::windows::active_display(cx);
+    let bounds = Bounds::centered(display, size(px(380.), px(540.)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
+        display_id: display,
         titlebar: Some(TitlebarOptions {
             title: Some("About Focal".into()),
             appears_transparent: true,

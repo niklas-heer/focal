@@ -538,9 +538,11 @@ fn open_window(cx: &mut App) {
     {
         return;
     }
-    let bounds = Bounds::centered(None, size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)), cx);
+    let display = crate::windows::active_display(cx);
+    let bounds = Bounds::centered(display, size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
+        display_id: display,
         titlebar: Some(TitlebarOptions {
             title: Some(Pane::ALL[0].title().into()),
             appears_transparent: true,
