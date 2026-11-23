@@ -28,6 +28,10 @@ Focal brings together the calm of [iA Writer](https://ia.net/writer) and the liv
 
 It works on plain Markdown files wherever they live: your notes folder, a Git repository, or the file an agent just wrote. Nothing is imported into a library, and Focal never reformats your text.
 
+**[Watch the 54-second film](https://youtu.be/RAGhqeU2rJ0)** on YouTube: one file opened from the terminal, its Markdown appearing under the caret, focus mode, an agent's edit marked word by word, and a note copied back to the agent.
+
+[![A thumbnail for the film on YouTube: "Same Markdown file" over the raw file in a terminal on the left and the same file rendered in Focal on the right, with a "Watch the film, 0:54" button.](docs/images/video.webp)](https://youtu.be/RAGhqeU2rJ0)
+
 - **Native.** Written in Rust and drawn on the GPU with [GPUI](https://gpui.rs), using macOS's own spelling, grammar and Writing Tools. No web view, no Electron.
 - **Your files, untouched, and safe.** The file on disk is the document, saved byte for byte as you wrote it, and never written half or over someone else's changes.
 - **At home with agents.** Live reload, word-by-word change marks and review notes make Focal a calm place to read, and steer, what an agent writes.
