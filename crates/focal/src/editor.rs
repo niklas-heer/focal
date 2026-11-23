@@ -13,7 +13,8 @@ use std::time::{Duration, Instant};
 use focal_core::analysis::{InlineStyle, LineKind};
 use focal_core::blocks::{block_image, diagram_blocks, math_blocks};
 use focal_core::display::{Run, mark_runs, prose_ranges};
-use focal_core::text_stats::{reading_minutes, sentence_at, word_count};
+use focal_core::focus::Focus;
+use focal_core::text_stats::{reading_minutes, word_count};
 use focal_core::{
     Analysis, Bias, Buffer, Caret, EditKind, LineView, analyze, editing, line_view, range_view,
 };
@@ -382,14 +383,6 @@ struct FoldTitle {
     folded: bool,
     body: Range<usize>,
     key: String,
-}
-
-/// The caret's paragraph (as lines) and, by sentence, the sentence in it (as
-/// source bytes).
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Focus {
-    lines: Range<usize>,
-    sentence: Option<Range<usize>>,
 }
 
 /// Where a row was drawn in the last frame, for hit testing and caret moves.
@@ -1296,24 +1289,12 @@ impl Editor {
     /// What focus mode keeps bright around the caret, if it is on.
     fn focus(&self, analysis: &Analysis, text: &str) -> Option<Focus> {
         self.focus_mode.then(|| {
-            let lines = paragraph_around(analysis, text, self.head());
-            let prose = lines.clone().all(|line| {
-                matches!(
-                    analysis.info(line).kind,
-                    LineKind::Text | LineKind::Heading(_)
-                )
-            });
-            let sentence = (self.focus_unit == FocusUnit::Sentence && prose).then(|| {
-                // In a list, a sentence never runs past its item.
-                let line = analysis.lines.line_of(self.head());
-                let range = if analysis.info(line).prefix.marker.is_some() {
-                    analysis.content_range(line)
-                } else {
-                    analysis.lines.range(lines.start).start..analysis.lines.range(lines.end - 1).end
-                };
-                sentence_at(text, range, self.head())
-            });
-            Focus { lines, sentence }
+            Focus::at(
+                analysis,
+                text,
+                self.head(),
+                self.focus_unit == FocusUnit::Sentence,
+            )
         })
     }
 
@@ -1485,12 +1466,10 @@ impl Editor {
         self.grid.as_ref().map(|g| (g.table, g.row, g.column))
     }
 
-    /// The lines of the caret's paragraph in focus mode.
-    pub(crate) fn focus_lines(&self) -> Option<Range<usize>> {
-        self.snapshot
-            .focus
-            .as_ref()
-            .map(|focus| focus.lines.clone())
+    /// Whether focus mode dims a block drawn for the source `lines` (a table,
+    /// diagram, image, formula or other island), as it dims their text.
+    pub(crate) fn block_dimmed(&self, lines: &Range<usize>) -> bool {
+        focal_core::focus::dims(self.snapshot.focus.as_ref(), &self.snapshot.analysis, lines)
     }
 
     /// What focus mode keeps bright, as source bytes.
@@ -3597,42 +3576,7 @@ impl Editor {
         let row = self.snapshot.rows.get(ix).copied().unwrap_or(Row::Line(0));
         let last = ix + 1 == self.snapshot.rows.len();
         let content = match row {
-            // With the caret on an image's line, the image shows below its source.
-            Row::Line(line) => {
-                let text = self.render_line(line, &theme, window, cx);
-                let analysis = &self.snapshot.analysis;
-                // A formula being edited shows its preview after its last line.
-                let math = math_blocks(analysis, self.text())
-                    .into_iter()
-                    .find(|block| block.lines.end == line + 1);
-                let diagram = diagram_blocks(analysis, self.text())
-                    .into_iter()
-                    .filter(|block| crate::diagram::can_draw(block.language))
-                    .find(|block| block.lines.end == line + 1);
-                if block_image(analysis, self.text(), line).is_some() {
-                    div()
-                        .child(text)
-                        .child(self.render_image(line, "image-preview", &theme, cx))
-                        .into_any_element()
-                } else if let Some(block) = diagram {
-                    div()
-                        .child(text)
-                        .child(self.render_diagram(
-                            block.lines.start,
-                            "diagram-preview",
-                            &theme,
-                            cx,
-                        ))
-                        .into_any_element()
-                } else if let Some(block) = math {
-                    div()
-                        .child(text)
-                        .child(self.render_math(block.lines.start, "math-preview", &theme, cx))
-                        .into_any_element()
-                } else {
-                    text
-                }
-            }
+            Row::Line(line) => self.render_line_with_preview(line, &theme, window, cx),
             Row::Table(table) => {
                 let element = self.render_table(table, &theme, window, cx);
                 match self.snapshot.analysis.tables.get(table) {
@@ -3696,6 +3640,53 @@ impl Editor {
                     .children(placeholder),
             )
             .into_any_element()
+    }
+
+    /// A line, and below it, with the caret in an image's line or at the end
+    /// of a formula or diagram, its preview.
+    fn render_line_with_preview(
+        &self,
+        line: usize,
+        theme: &Theme,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> gpui_kit::AnyElement {
+        let text = self.render_line(line, theme, window, cx);
+        let analysis = &self.snapshot.analysis;
+        // A formula being edited shows its preview after its last line.
+        let math = math_blocks(analysis, self.text())
+            .into_iter()
+            .find(|block| block.lines.end == line + 1);
+        let diagram = diagram_blocks(analysis, self.text())
+            .into_iter()
+            .filter(|block| crate::diagram::can_draw(block.language))
+            .find(|block| block.lines.end == line + 1);
+        let preview = if block_image(analysis, self.text(), line).is_some() {
+            Some((
+                line..line + 1,
+                self.render_image(line, "image-preview", theme, cx),
+            ))
+        } else if let Some(block) = diagram {
+            let element = self.render_diagram(block.lines.start, "diagram-preview", theme, cx);
+            Some((block.lines, element))
+        } else {
+            math.map(|block| {
+                let element = self.render_math(block.lines.start, "math-preview", theme, cx);
+                (block.lines, element)
+            })
+        };
+        match preview {
+            // A preview fades with its block, as an island would.
+            Some((lines, element)) => div()
+                .child(text)
+                .child(
+                    div()
+                        .when(self.block_dimmed(&lines), |d| d.opacity(DIMMED))
+                        .child(element),
+                )
+                .into_any_element(),
+            None => text,
+        }
     }
 
     #[allow(clippy::too_many_lines)]
@@ -3853,7 +3844,13 @@ impl Editor {
             } else {
                 1.6
             }))
-            .when(code, |d| d.px(px(14.)).bg(theme.code_background))
+            .when(code, |d| {
+                d.px(px(14.)).bg(if dimmed {
+                    theme.code_background.opacity(DIMMED)
+                } else {
+                    theme.code_background
+                })
+            })
             .when(
                 matches!(info.kind, LineKind::CodeFence { opening: true }),
                 |d| {
@@ -4693,24 +4690,6 @@ fn fade_outside(runs: Vec<TextRun>, keep: &Range<usize>) -> Vec<TextRun> {
             strike.color = strike.color.map(|c| c.opacity(DIMMED));
         }
     })
-}
-
-fn paragraph_around(analysis: &Analysis, text: &str, offset: usize) -> Range<usize> {
-    let lines = &analysis.lines;
-    let blank = |line: usize| text[lines.range(line)].trim().is_empty();
-    let line = lines.line_of(offset);
-    if blank(line) {
-        return line..line + 1;
-    }
-    let mut start = line;
-    while start > 0 && !blank(start - 1) {
-        start -= 1;
-    }
-    let mut end = line + 1;
-    while end < lines.len() && !blank(end) {
-        end += 1;
-    }
-    start..end
 }
 
 impl EntityInputHandler for Editor {

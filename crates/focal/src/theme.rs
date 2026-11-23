@@ -193,12 +193,15 @@ impl Theme {
         }
     }
 
+    /// Dimmed text and prefixes: bullets, checkboxes, and quote and callout
+    /// bars.
     pub fn faded(self) -> Self {
         Self {
             text: self.text.opacity(DIMMED),
             marker: self.marker.opacity(DIMMED),
             checkbox: self.checkbox.opacity(DIMMED),
             quote_bar: self.quote_bar.opacity(DIMMED),
+            alerts: self.alerts.map(|alert| alert.opacity(DIMMED)),
             ..self
         }
     }
