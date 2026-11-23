@@ -23,7 +23,7 @@ use gpui_kit::{
 
 use crate::editor::{Editor, EditorEvent, Island, IslandKind, PaintedRow, Row};
 use crate::icons::Icon;
-use crate::theme::Theme;
+use crate::theme::{DIMMED, Theme};
 use crate::viewer::ViewedImage;
 use crate::{diagram, math};
 
@@ -381,6 +381,10 @@ impl Editor {
             IslandKind::HtmlTable => self.render_html_table(island.start, theme),
         };
         div()
+            // Focus mode fades a block with the text around it.
+            .when(self.block_dimmed(&(island.start..island.end)), |d| {
+                d.opacity(DIMMED)
+            })
             .relative()
             .child(content)
             .child(

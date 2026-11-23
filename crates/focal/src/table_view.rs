@@ -434,9 +434,7 @@ impl Editor {
 
     /// Whether focus mode dims the table: it is not in the caret's paragraph.
     pub(crate) fn table_dimmed(&self, table: usize) -> bool {
-        let lines = &self.snapshot.analysis.tables[table].lines;
-        self.focus_lines()
-            .is_some_and(|focus| focus.end <= lines.start || lines.end <= focus.start)
+        self.block_dimmed(&self.snapshot.analysis.tables[table].lines)
     }
 
     pub(crate) fn render_table(

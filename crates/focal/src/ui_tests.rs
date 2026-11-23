@@ -950,6 +950,31 @@ fn focus_mode_dims_tables_outside_the_caret_paragraph(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn focus_mode_dims_diagrams_outside_the_caret_paragraph(cx: &mut TestAppContext) {
+    let text = "# Plan\n\nWe ship.\n\n- [ ] Freeze\n\n```mermaid\nflowchart LR\n  Freeze --> Staging --> Release\n```\n";
+    let (window, editor) = open_editor(cx, text);
+    let diagram = 6..10;
+    editor.update(cx, |e, cx| e.move_to(text.find("ship").unwrap(), cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find(("diagram-island", 6usize)).is_some());
+    });
+    editor.read_with(cx, |e, _| {
+        assert!(!e.block_dimmed(&diagram), "not in focus mode");
+    });
+    act(cx, window, |window, cx| window.press("cmd-d", cx));
+    editor.read_with(cx, |e, _| {
+        assert!(e.block_dimmed(&diagram), "faded with the text");
+    });
+    editor.update(cx, |e, cx| e.move_to(text.find("Staging").unwrap(), cx));
+    act(cx, window, |window, _| {
+        assert!(window.try_find(("diagram-preview", 6usize)).is_some());
+    });
+    editor.read_with(cx, |e, _| {
+        assert!(!e.block_dimmed(&diagram), "being written");
+    });
+}
+
+#[gpui_kit::test]
 fn a_larger_text_size_makes_lines_taller(cx: &mut TestAppContext) {
     let (window, editor) = open_editor(cx, "text");
     act(cx, window, |_, _| {});

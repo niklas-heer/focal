@@ -19,6 +19,7 @@ pub mod editing;
 pub mod encoding;
 pub mod export;
 pub mod find;
+pub mod focus;
 pub mod fuzzy;
 pub mod helix;
 pub mod html_inline;
