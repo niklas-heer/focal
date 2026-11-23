@@ -3,10 +3,10 @@
 use objc2::MainThreadMarker;
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSAlertStyle, NSAppearance,
-    NSApplication, NSPasteboard,
+    NSApplication, NSEvent, NSPasteboard, NSScreen,
 };
 use objc2_foundation::{
-    NSBundle, NSFileManager, NSFileManagerItemReplacementOptions, NSString, NSURL,
+    NSBundle, NSFileManager, NSFileManagerItemReplacementOptions, NSNumber, NSString, NSURL,
 };
 
 use crate::settings::Appearance;
@@ -29,6 +29,43 @@ pub fn set_appearance(choice: Appearance) {
     };
     let appearance = name.and_then(|name| NSAppearance::appearanceNamed(&NSString::from_str(name)));
     NSApplication::sharedApplication(mtm).setAppearance(appearance.as_deref());
+}
+
+/// The display (its `CGDirectDisplayID`, GPUI's display id) showing Focal's
+/// key window. There is none while another app is active.
+pub fn key_window_display() -> Option<u64> {
+    let mtm = MainThreadMarker::new()?;
+    let screen = NSApplication::sharedApplication(mtm)
+        .keyWindow()?
+        .screen()?;
+    display_id(&screen)
+}
+
+/// The display under the mouse pointer.
+pub fn pointer_display() -> Option<u64> {
+    let mtm = MainThreadMarker::new()?;
+    let pointer = NSEvent::mouseLocation();
+    NSScreen::screens(mtm)
+        .iter()
+        .find(|screen| {
+            // AppKit's coordinates grow upwards: a screen's top edge belongs
+            // to it, its bottom edge to the screen below (as `NSMouseInRect`).
+            let frame = screen.frame();
+            pointer.x >= frame.origin.x
+                && pointer.x < frame.origin.x + frame.size.width
+                && pointer.y > frame.origin.y
+                && pointer.y <= frame.origin.y + frame.size.height
+        })
+        .and_then(|screen| display_id(&screen))
+}
+
+fn display_id(screen: &NSScreen) -> Option<u64> {
+    let number = screen
+        .deviceDescription()
+        .objectForKey(&NSString::from_str("NSScreenNumber"))?
+        .downcast::<NSNumber>()
+        .ok()?;
+    Some(u64::from(number.unsignedIntValue()))
 }
 
 /// Shows an app-modal alert with one OK button and waits for it. Call it

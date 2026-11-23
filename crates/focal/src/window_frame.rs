@@ -1,9 +1,12 @@
 //! The frame (position and size) of Focal's last resized window, kept as JSON
-//! beside the settings so new windows open where the last one was, and the
-//! fitting that keeps any frame on the screen it opens on.
+//! beside the settings so new windows open where the last one was, the
+//! choice of screen a new window opens on, and the fitting that keeps any
+//! frame on that screen.
 //!
-//! The arithmetic works on plain numbers in points so it can be tested
-//! without a window; the GPUI conversions sit at the bottom.
+//! GPUI places a window relative to the top left of its display, so a frame
+//! means nothing without its display: frames from different displays share
+//! coordinates. The arithmetic works on plain numbers in points so it can be
+//! tested without a window; the GPUI conversions sit at the bottom.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -11,14 +14,41 @@ use std::time::Duration;
 use gpui_kit::{Bounds, Pixels, point, px, size};
 use serde::{Deserialize, Serialize};
 
-/// A window's frame in points, with the origin at the top left of the
-/// main display's visible area, as GPUI reports it.
+/// A window's frame in points, relative to the top left of its display, as
+/// GPUI reports it.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Frame {
     pub x: f32,
     pub y: f32,
     pub width: f32,
     pub height: f32,
+}
+
+/// The saved frame and the display it was on, by the display's UUID (which,
+/// unlike its id, survives reconnecting it). Frames saved before the display
+/// was recorded have none and count as being on the primary display, where
+/// they were reopened then.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Saved {
+    #[serde(flatten)]
+    pub frame: Frame,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
+}
+
+/// A connected display, by its id, and its visible area (less the menu bar
+/// and the Dock), relative to its own top left.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Screen {
+    pub display: u64,
+    pub area: Frame,
+}
+
+/// Where a window is: the display and the frame on it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Place {
+    pub display: u64,
+    pub frame: Frame,
 }
 
 /// The size a window opens at when nothing is remembered.
@@ -50,9 +80,9 @@ impl Frame {
 
 /// Parses a saved frame. Unreadable JSON, a missing field or a frame with
 /// no area gives `None`, so the window falls back to the default placement.
-pub fn parse(json: &str) -> Option<Frame> {
-    let frame: Frame = serde_json::from_str(json).ok()?;
-    (frame.width > 0. && frame.height > 0.).then_some(frame)
+pub fn parse(json: &str) -> Option<Saved> {
+    let saved: Saved = serde_json::from_str(json).ok()?;
+    (saved.frame.width > 0. && saved.frame.height > 0.).then_some(saved)
 }
 
 /// Fits `frame` onto `screen`'s visible area: the size is capped at the
@@ -76,71 +106,87 @@ pub fn fit(frame: Frame, screen: Frame) -> Frame {
     }
 }
 
-/// The screen containing `point`, or `primary` when none does (a display
-/// that is no longer connected, say).
-pub fn screen_at(point: (f32, f32), screens: &[Frame], primary: Frame) -> Frame {
-    screens
-        .iter()
+/// The screen the user is working on: the one showing Focal's key window,
+/// else the one under the pointer (where the terminal that ran `focal`
+/// almost always is), else the primary one. A display that is not among
+/// `screens` (no longer connected) is passed over.
+pub fn active_screen(
+    screens: &[Screen],
+    primary: Screen,
+    key_window: Option<u64>,
+    pointer: Option<u64>,
+) -> Screen {
+    [key_window, pointer]
+        .into_iter()
+        .flatten()
+        .find_map(|display| screens.iter().find(|screen| screen.display == display))
         .copied()
-        .find(|screen| {
-            let (x, y) = point;
-            x >= screen.x
-                && x < screen.x + screen.width
-                && y >= screen.y
-                && y < screen.y + screen.height
-        })
         .unwrap_or(primary)
 }
 
 /// Where a new window opens, already fitted to its screen.
 ///
-/// The first window of a session opens at the remembered origin (or centred
-/// on the primary screen when nothing is remembered). Later windows keep
-/// the cascade: `anchor`, the first window's origin, moved by `step`. The
-/// size is always the remembered one, or the default.
+/// - While the session's first window on the active screen (`anchor`) is
+///   there, later windows step down and right from it by `step`, as on
+///   macOS.
+/// - The session's first window opens at the remembered frame, on its
+///   display, when that display is still connected. `remembered` carries the
+///   id of that display, or `None` when it is gone.
+/// - Otherwise the window is centred on the active screen, the one the user
+///   is working on.
+///
+/// The size is always the remembered one, or the default.
 pub fn placement(
-    remembered: Option<Frame>,
-    anchor: Option<(f32, f32)>,
+    remembered: Option<(Option<u64>, Frame)>,
+    anchor: Option<Place>,
     step: f32,
-    screens: &[Frame],
-    primary: Frame,
-) -> Frame {
-    let (width, height) = remembered.map_or((DEFAULT_WIDTH, DEFAULT_HEIGHT), |frame| {
+    screens: &[Screen],
+    active: Screen,
+) -> Place {
+    let (width, height) = remembered.map_or((DEFAULT_WIDTH, DEFAULT_HEIGHT), |(_, frame)| {
         (frame.width, frame.height)
     });
-    let origin = match (anchor, remembered) {
-        (Some((x, y)), _) => Some((x + step, y + step)),
-        (None, Some(frame)) => Some(frame.origin()),
-        (None, None) => None,
-    };
-    let screen = origin.map_or(primary, |origin| screen_at(origin, screens, primary));
-    let (x, y) = origin.unwrap_or((
-        screen.x + (screen.width - width) / 2.,
-        screen.y + (screen.height - height) / 2.,
-    ));
-    fit(
-        Frame {
-            x,
-            y,
-            width,
-            height,
+    let screen = |display: u64| screens.iter().copied().find(|s| s.display == display);
+    let (screen, origin) = match anchor {
+        Some(anchor) if anchor.display == active.display => {
+            (active, Some((anchor.frame.x + step, anchor.frame.y + step)))
+        }
+        Some(_) => (active, None),
+        None => match remembered.and_then(|(display, frame)| Some((screen(display?)?, frame))) {
+            Some((screen, frame)) => (screen, Some(frame.origin())),
+            None => (active, None),
         },
-        screen,
-    )
+    };
+    let (x, y) = origin.unwrap_or((
+        screen.area.x + (screen.area.width - width) / 2.,
+        screen.area.y + (screen.area.height - height) / 2.,
+    ));
+    Place {
+        display: screen.display,
+        frame: fit(
+            Frame {
+                x,
+                y,
+                width,
+                height,
+            },
+            screen.area,
+        ),
+    }
 }
 
 /// Reads a saved frame from `path`; a missing or unreadable file gives `None`.
-pub fn load_from(path: &Path) -> Option<Frame> {
+pub fn load_from(path: &Path) -> Option<Saved> {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|json| parse(&json))
 }
 
-pub fn save_to(frame: &Frame, path: &Path) -> anyhow::Result<()> {
+pub fn save_to(saved: &Saved, path: &Path) -> anyhow::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let json = serde_json::to_string_pretty(frame)? + "\n";
+    let json = serde_json::to_string_pretty(saved)? + "\n";
     crate::document::write_replacing(path, json.as_bytes())?;
     Ok(())
 }
@@ -156,28 +202,28 @@ fn path() -> Option<PathBuf> {
 }
 
 /// The frame saved by the last session, if any.
-pub fn load() -> Option<Frame> {
+pub fn load() -> Option<Saved> {
     load_from(&path()?)
 }
 
 /// Writes `frame` to the saved location, reporting a failure without
 /// stopping the app.
-pub fn save(frame: &Frame) {
+pub fn save(saved: &Saved) {
     if let Some(path) = path()
-        && let Err(error) = save_to(frame, &path)
+        && let Err(error) = save_to(saved, &path)
     {
         eprintln!("focal: could not save the window frame: {error:#}");
     }
 }
 
-/// Remembers `frame` as the one new windows open at, and writes it after a
+/// Remembers `saved` as the frame new windows open at, and writes it after a
 /// pause, so a drag writes once and never blocks the UI thread.
-pub fn remember(frame: Frame, cx: &mut gpui_kit::App) {
+pub fn remember(saved: Saved, cx: &mut gpui_kit::App) {
     let memory = cx.global_mut::<Memory>();
-    if memory.frame == Some(frame) {
+    if memory.frame.as_ref() == Some(&saved) {
         return;
     }
-    memory.frame = Some(frame);
+    memory.frame = Some(saved);
     memory.generation += 1;
     let generation = memory.generation;
     cx.spawn(async move |cx| {
@@ -185,12 +231,12 @@ pub fn remember(frame: Frame, cx: &mut gpui_kit::App) {
         let latest = cx.update(|cx| {
             let memory = cx.global::<Memory>();
             (memory.generation == generation)
-                .then_some(memory.frame)
+                .then(|| memory.frame.clone())
                 .flatten()
         });
-        if let Some(frame) = latest {
+        if let Some(saved) = latest {
             cx.background_executor()
-                .spawn(async move { save(&frame) })
+                .spawn(async move { save(&saved) })
                 .await;
         }
     })
@@ -200,7 +246,7 @@ pub fn remember(frame: Frame, cx: &mut gpui_kit::App) {
 /// The last frame and the write that is waiting for it, held as a global.
 #[derive(Default)]
 pub struct Memory {
-    pub frame: Option<Frame>,
+    pub frame: Option<Saved>,
     pub generation: u64,
 }
 
@@ -318,55 +364,185 @@ mod tests {
         assert_eq!((frame.width, frame.height), (MIN_WIDTH, MIN_HEIGHT));
     }
 
+    /// The LG ultrawide, the primary display with the menu bar, and the
+    /// laptop's built-in screen beside it. GPUI gives each area relative to
+    /// its own display, so both start near 0, 0.
+    const PRIMARY: Screen = Screen {
+        display: 1,
+        area: Frame {
+            x: 0.,
+            y: 25.,
+            width: 3440.,
+            height: 1415.,
+        },
+    };
+    const BUILT_IN: Screen = Screen {
+        display: 2,
+        area: Frame {
+            x: 0.,
+            y: 0.,
+            width: 1512.,
+            height: 949.,
+        },
+    };
+    const BOTH: [Screen; 2] = [PRIMARY, BUILT_IN];
+
+    fn centred(frame: Frame, screen: Screen) -> bool {
+        let area = screen.area;
+        close(
+            frame.x - area.x,
+            area.x + area.width - frame.x - frame.width,
+        )
+    }
+
     #[test]
-    fn a_placement_on_a_disconnected_screen_moves_to_the_primary_one() {
-        let primary = SMALL;
-        let remembered = Frame {
+    fn the_pointer_picks_the_screen_without_a_key_window() {
+        assert_eq!(active_screen(&BOTH, PRIMARY, None, Some(2)), BUILT_IN);
+        assert_eq!(active_screen(&BOTH, PRIMARY, None, Some(1)), PRIMARY);
+    }
+
+    #[test]
+    fn the_key_window_picks_the_screen_before_the_pointer() {
+        assert_eq!(active_screen(&BOTH, PRIMARY, Some(2), Some(1)), BUILT_IN);
+        assert_eq!(active_screen(&BOTH, PRIMARY, Some(1), Some(2)), PRIMARY);
+    }
+
+    #[test]
+    fn an_unknown_display_falls_back_to_the_next_clue_then_the_primary() {
+        assert_eq!(active_screen(&BOTH, PRIMARY, Some(9), Some(2)), BUILT_IN);
+        assert_eq!(active_screen(&BOTH, PRIMARY, Some(9), None), PRIMARY);
+        assert_eq!(active_screen(&BOTH, PRIMARY, None, None), PRIMARY);
+    }
+
+    #[test]
+    fn without_a_saved_frame_the_window_opens_centred_on_the_active_screen() {
+        // `focal file.md` from a terminal on the built-in screen, the pointer
+        // there, while the LG is the primary display.
+        let active = active_screen(&BOTH, PRIMARY, None, Some(BUILT_IN.display));
+        let place = placement(None, None, 0., &BOTH, active);
+        assert_eq!(place.display, BUILT_IN.display);
+        assert!(on_screen(place.frame, BUILT_IN.area));
+        assert!(centred(place.frame, BUILT_IN));
+        assert!(close(place.frame.width, DEFAULT_WIDTH));
+    }
+
+    #[test]
+    fn a_single_screen_still_centres_the_first_window() {
+        let screen = Screen {
+            display: 7,
+            area: LARGE,
+        };
+        let active = active_screen(&[screen], screen, None, None);
+        let place = placement(None, None, 0., &[screen], active);
+        assert_eq!(place.display, 7);
+        assert_eq!(
+            (place.frame.width, place.frame.height),
+            (DEFAULT_WIDTH, DEFAULT_HEIGHT)
+        );
+        assert!(close(place.frame.x, (1920. - DEFAULT_WIDTH) / 2.));
+        assert!(on_screen(place.frame, LARGE));
+    }
+
+    #[test]
+    fn a_saved_frame_on_a_connected_display_wins_over_the_active_screen() {
+        let saved = Frame {
+            x: 100.,
+            y: 120.,
+            width: 900.,
+            height: 700.,
+        };
+        let place = placement(
+            Some((Some(PRIMARY.display), saved)),
+            None,
+            0.,
+            &BOTH,
+            BUILT_IN,
+        );
+        assert_eq!(
+            place,
+            Place {
+                display: PRIMARY.display,
+                frame: saved,
+            }
+        );
+    }
+
+    #[test]
+    fn a_saved_frame_on_a_disconnected_display_opens_centred_on_the_active_screen() {
+        let saved = Frame {
             x: 3000.,
             y: 200.,
             width: 900.,
             height: 700.,
         };
-        // Only the primary screen is connected: the saved origin is off it.
-        let frame = placement(Some(remembered), None, 0., &[primary], primary);
-        assert_eq!((frame.width, frame.height), (900., 700.));
-        assert!(on_screen(frame, primary));
-    }
-
-    #[test]
-    fn without_a_saved_frame_the_window_is_centred_on_the_primary_screen() {
-        let frame = placement(None, None, 0., &[LARGE], LARGE);
-        assert_eq!((frame.width, frame.height), (DEFAULT_WIDTH, DEFAULT_HEIGHT));
-        assert!(close(frame.x, (1920. - DEFAULT_WIDTH) / 2.));
-        assert!(on_screen(frame, LARGE));
+        // The display it was on is gone; the user works on the built-in one.
+        let place = placement(Some((None, saved)), None, 0., &BOTH, BUILT_IN);
+        assert_eq!(place.display, BUILT_IN.display);
+        assert_eq!((place.frame.width, place.frame.height), (900., 700.));
+        assert!(on_screen(place.frame, BUILT_IN.area));
+        assert!(centred(place.frame, BUILT_IN));
     }
 
     #[test]
     fn later_windows_cascade_from_the_first_one_at_the_remembered_size() {
+        let screen = Screen {
+            display: 1,
+            area: LARGE,
+        };
         let remembered = Frame {
             x: 400.,
             y: 300.,
             width: 1000.,
             height: 700.,
         };
-        let first = placement(Some(remembered), None, 0., &[LARGE], LARGE);
-        assert_eq!(first.origin(), (400., 300.));
-        let anchor = Some(first.origin());
-        let second = placement(Some(remembered), anchor, 24., &[LARGE], LARGE);
-        assert_eq!(second.origin(), (424., 324.));
-        assert_eq!((second.width, second.height), (1000., 700.));
+        let first = placement(Some((Some(1), remembered)), None, 0., &[screen], screen);
+        assert_eq!(first.frame.origin(), (400., 300.));
+        let second = placement(
+            Some((Some(1), remembered)),
+            Some(first),
+            24.,
+            &[screen],
+            screen,
+        );
+        assert_eq!(second.frame.origin(), (424., 324.));
+        assert_eq!((second.frame.width, second.frame.height), (1000., 700.));
+    }
+
+    #[test]
+    fn a_new_window_follows_the_key_window_to_another_screen() {
+        // The session's first window is on the LG; the user now works in a
+        // window on the built-in screen and opens another.
+        let first = placement(None, None, 0., &BOTH, PRIMARY);
+        let active = active_screen(&BOTH, PRIMARY, Some(BUILT_IN.display), None);
+        let next = placement(None, Some(first), 24., &BOTH, active);
+        assert_eq!(next.display, BUILT_IN.display);
+        assert!(on_screen(next.frame, BUILT_IN.area));
+        assert!(centred(next.frame, BUILT_IN));
     }
 
     #[test]
     fn a_cascade_past_the_edge_is_pulled_back_on_screen() {
-        let edge = Frame {
-            x: 1000.,
-            y: 600.,
-            width: 800.,
-            height: 400.,
+        let screen = Screen {
+            display: 1,
+            area: LARGE,
         };
-        let frame = placement(Some(edge), Some((1000., 600.)), 240., &[LARGE], LARGE);
-        assert!(on_screen(frame, LARGE));
+        let edge = Place {
+            display: 1,
+            frame: Frame {
+                x: 1000.,
+                y: 600.,
+                width: 800.,
+                height: 400.,
+            },
+        };
+        let place = placement(
+            Some((Some(1), edge.frame)),
+            Some(edge),
+            240.,
+            &[screen],
+            screen,
+        );
+        assert!(on_screen(place.frame, LARGE));
     }
 
     #[test]
@@ -378,8 +554,19 @@ mod tests {
             width: 900.,
             height: 720.,
         };
-        save_to(&frame, &path).unwrap();
-        assert_eq!(load_from(&path), Some(frame));
+        let saved = Saved {
+            frame,
+            display: Some("0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9".to_owned()),
+        };
+        save_to(&saved, &path).unwrap();
+        assert_eq!(load_from(&path), Some(saved));
+    }
+
+    #[test]
+    fn a_frame_saved_before_displays_were_recorded_still_reads() {
+        let saved = parse(r#"{"x": 1, "y": 2, "width": 300, "height": 400}"#).unwrap();
+        assert_eq!(saved.display, None);
+        assert!(close(saved.frame.width, 300.));
     }
 
     #[test]
@@ -393,17 +580,5 @@ mod tests {
         std::fs::write(&path, "{ broken").unwrap();
         assert_eq!(load_from(&path), None);
         assert_eq!(load_from(&path.with_file_name("missing.json")), None);
-    }
-
-    #[test]
-    fn a_point_picks_the_screen_it_is_on() {
-        let right = Frame {
-            x: 1280.,
-            y: 0.,
-            width: 1920.,
-            height: 1080.,
-        };
-        assert_eq!(screen_at((1500., 100.), &[SMALL, right], SMALL), right);
-        assert_eq!(screen_at((-50., 100.), &[SMALL, right], SMALL), SMALL);
     }
 }

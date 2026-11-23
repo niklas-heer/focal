@@ -6,13 +6,14 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use gpui_kit::{
-    AnyWindowHandle, App, AppContext as _, Global, KeyBinding, PathPromptOptions, TitlebarOptions,
-    WeakEntity, WindowBounds, WindowId, WindowOptions, actions, point, px,
+    AnyWindowHandle, App, AppContext as _, DisplayId, Global, KeyBinding, PathPromptOptions,
+    PlatformDisplay, TitlebarOptions, WeakEntity, WindowBounds, WindowId, WindowOptions, actions,
+    point, px,
 };
 
 use crate::document::Document;
 use crate::instance::{Request, Responder};
-use crate::window_frame::{self, Frame};
+use crate::window_frame::{self, Frame, Place, Saved, Screen};
 use crate::workspace::Workspace;
 
 actions!(focal, [NewWindow, OpenFiles]);
@@ -28,8 +29,9 @@ pub fn bind_keys(cx: &mut App) {
 struct Windows {
     open: Vec<(AnyWindowHandle, WeakEntity<Workspace>)>,
     waiting: HashMap<WindowId, Vec<Responder>>,
-    /// Where the session's first window opened; later windows cascade from it.
-    anchor: Option<(f32, f32)>,
+    /// Where the session's first window on the screen in use opened, and how
+    /// many windows were open then; later windows there cascade from it.
+    anchor: Option<(Place, usize)>,
 }
 
 impl Global for Windows {}
@@ -237,23 +239,31 @@ fn open_window(
         ),
         Content::File(document, _) => document.title(),
     };
-    // Each new window steps down and right from the first, as on macOS, and
-    // every frame is fitted to the screen it opens on.
-    let step = 24. * cx.global::<Windows>().open.len().min(10) as f32;
-    let screens: Vec<Frame> = cx
-        .displays()
-        .iter()
-        .map(|display| window_frame::from_bounds(display.visible_bounds()))
-        .collect();
-    let primary = cx.primary_display().map_or_else(
-        || screens.first().copied().unwrap_or(FALLBACK_SCREEN),
-        |display| window_frame::from_bounds(display.visible_bounds()),
-    );
-    let remembered = cx.global::<window_frame::Memory>().frame;
+    // A new window opens on the screen the user works on. Each new window
+    // there steps down and right from the first, as on macOS, and every
+    // frame is fitted to the screen it opens on.
+    let (screens, active) = screens(cx);
     let anchor = cx.global::<Windows>().anchor;
-    let frame = window_frame::placement(remembered, anchor, step, &screens, primary);
+    let open = cx.global::<Windows>().open.len();
+    let step = 24.
+        * open
+            .saturating_sub(anchor.map_or(0, |(_, opened)| opened))
+            .min(10) as f32;
+    let remembered = cx
+        .global::<window_frame::Memory>()
+        .frame
+        .as_ref()
+        .map(|saved| (remembered_display(saved, cx), saved.frame));
+    let place = window_frame::placement(
+        remembered,
+        anchor.map(|(place, _)| place),
+        step,
+        &screens,
+        active,
+    );
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(window_frame::to_bounds(frame))),
+        window_bounds: Some(WindowBounds::Windowed(window_frame::to_bounds(place.frame))),
+        display_id: Some(DisplayId::new(place.display)),
         titlebar: Some(TitlebarOptions {
             title: Some(title.into()),
             appears_transparent: true,
@@ -267,7 +277,12 @@ fn open_window(
             // after a pause), so the window's size and place outlive it.
             cx.observe_window_bounds(window, |_, window, cx| {
                 if let WindowBounds::Windowed(bounds) = window.window_bounds() {
-                    window_frame::remember(window_frame::from_bounds(bounds), cx);
+                    let display = window
+                        .display(cx)
+                        .and_then(|display| display.uuid().ok())
+                        .map(|uuid| uuid.to_string());
+                    let frame = window_frame::from_bounds(bounds);
+                    window_frame::remember(Saved { frame, display }, cx);
                 }
             })
             .detach();
@@ -280,9 +295,67 @@ fn open_window(
         workspace
     })?;
     let windows = cx.global_mut::<Windows>();
-    windows.anchor.get_or_insert((frame.x, frame.y));
+    // A window on another screen than the anchor's starts a new cascade.
+    if anchor.is_none_or(|(anchor, _)| anchor.display != place.display) {
+        windows.anchor = Some((place, open));
+    }
     windows.open.push((handle, workspace.downgrade()));
     Ok((handle, workspace))
+}
+
+/// The connected screens, and the one the user works on: the one with
+/// Focal's key window, else the one under the pointer, else the primary one.
+fn screens(cx: &App) -> (Vec<Screen>, Screen) {
+    let screen = |display: &dyn PlatformDisplay| Screen {
+        display: display.id().into(),
+        area: window_frame::from_bounds(display.visible_bounds()),
+    };
+    let screens: Vec<Screen> = cx
+        .displays()
+        .iter()
+        .map(|display| screen(display.as_ref()))
+        .collect();
+    let primary = cx.primary_display().map_or_else(
+        || {
+            screens.first().copied().unwrap_or(Screen {
+                display: 0,
+                area: FALLBACK_SCREEN,
+            })
+        },
+        |display| screen(display.as_ref()),
+    );
+    let active = window_frame::active_screen(
+        &screens,
+        primary,
+        crate::mac::key_window_display(),
+        crate::mac::pointer_display(),
+    );
+    (screens, active)
+}
+
+/// The display a window without a place of its own (Settings, About) opens
+/// on: the one the user works on.
+pub fn active_display(cx: &App) -> Option<DisplayId> {
+    let (screens, active) = screens(cx);
+    (!screens.is_empty()).then(|| DisplayId::new(active.display))
+}
+
+/// The id of the connected display a saved frame was on, or `None` when it
+/// is no longer connected. A frame saved without its display was reopened on
+/// the primary one, so it stays there.
+fn remembered_display(saved: &Saved, cx: &App) -> Option<u64> {
+    match &saved.display {
+        None => cx.primary_display().map(|display| display.id().into()),
+        Some(uuid) => cx
+            .displays()
+            .iter()
+            .find(|display| {
+                display
+                    .uuid()
+                    .is_ok_and(|candidate| candidate.to_string().eq_ignore_ascii_case(uuid))
+            })
+            .map(|display| display.id().into()),
+    }
 }
 
 /// Used only when the platform reports no display at all.
