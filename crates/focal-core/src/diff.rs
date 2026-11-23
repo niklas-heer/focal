@@ -48,8 +48,8 @@ fn changes_with(old: &str, new: &str, deadline: Option<Instant>) -> Changes {
         config.deadline(deadline);
     }
     let lines = config.diff_lines(old, new);
-    let old_starts = starts(lines.old_slices());
-    let new_starts = starts(lines.new_slices());
+    let old_starts = starts(lines.iter_old_slices());
+    let new_starts = starts(lines.iter_new_slices());
     let mut hunk: Option<Range<usize>> = None;
     for op in lines.ops() {
         let (old_lines, new_lines) = (op.old_range(), op.new_range());
@@ -86,10 +86,9 @@ fn changes_with(old: &str, new: &str, deadline: Option<Instant>) -> Changes {
 }
 
 /// Where each slice starts, and the end after the last.
-fn starts(slices: &[&str]) -> Vec<usize> {
+fn starts<'a>(slices: impl Iterator<Item = &'a str>) -> Vec<usize> {
     let mut at = 0;
-    let mut starts = Vec::with_capacity(slices.len() + 1);
-    starts.push(0);
+    let mut starts = vec![0];
     for slice in slices {
         at += slice.len();
         starts.push(at);
