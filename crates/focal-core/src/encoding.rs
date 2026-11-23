@@ -131,7 +131,7 @@ fn utf16(bytes: &[u8], unit: fn([u8; 2]) -> u16) -> Option<String> {
     if !bytes.len().is_multiple_of(2) {
         return None;
     }
-    let units = bytes.chunks_exact(2).map(|pair| unit([pair[0], pair[1]]));
+    let units = bytes.as_chunks::<2>().0.iter().map(|&pair| unit(pair));
     char::decode_utf16(units)
         .collect::<Result<String, _>>()
         .ok()
